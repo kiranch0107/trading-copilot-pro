@@ -2,21 +2,53 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import ta
+import os
+import requests
+import time
 
 st.set_page_config(page_title="Trading Copilot ELITE", layout="wide")
 
 st.title("🤖 Trading Copilot ELITE")
-st.caption("Full trading + options + alert system")
+st.caption("Full trading + options + real-time Telegram alerts")
 
 query = st.chat_input("Enter ticker (TSLA, NVDA, AAPL)")
 
-# ✅ FULL WATCHLIST
+# ✅ WATCHLIST
 WATCHLIST = ["TSLA","NVDA","AAPL","MSFT","AMZN","META","AMD","SPY","QQQ",
              "INTC","NFLX","BABA","CSCO","GOOGL"]
 
 # ✅ PERFORMANCE MODE
 FAST_MODE = True
 SCAN_LIST = WATCHLIST[:10] if FAST_MODE else WATCHLIST
+
+# ✅ TELEGRAM (SECURE)
+SENT_ALERTS = {}
+COOLDOWN = 600  # 10 minutes
+
+
+def send_telegram_alert(ticker, message):
+    TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+    CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
+    if not TOKEN or not CHAT_ID:
+        return
+
+    now = time.time()
+
+    # ✅ prevent spam
+    if ticker in SENT_ALERTS and (now - SENT_ALERTS[ticker]) < COOLDOWN:
+        return
+
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+
+    try:
+        requests.post(url, data={
+            "chat_id": CHAT_ID,
+            "text": message
+        })
+        SENT_ALERTS[ticker] = now
+    except:
+        pass
 
 
 # ✅ DATA FETCH
@@ -46,7 +78,7 @@ def compute(df):
     return df
 
 
-# ✅ OPTIONS ENGINE (FINAL ELITE VERSION)
+# ✅ OPTIONS ENGINE
 def get_option_data(ticker, price, trend, strength):
     try:
         stock = yf.Ticker(ticker)
@@ -58,10 +90,10 @@ def get_option_data(ticker, price, trend, strength):
         for expiry in expiries:
             try:
                 chain = stock.option_chain(expiry)
-                opts = chain.calls if trend == "Bullish" else chain.puts
+                opts = chain.calls if trend=="Bullish" else chain.puts
                 opts = opts.fillna(0)
 
-                # ✅ ITM vs ATM logic
+                # ✅ ITM vs ATM
                 if strength == "Strong":
                     opts = opts[(opts['strike'] < price) if trend=="Bullish"
                                 else (opts['strike'] > price)]
@@ -74,10 +106,10 @@ def get_option_data(ticker, price, trend, strength):
                 opts['spread'] = opts['ask'] - opts['bid']
                 opts['mid'] = (opts['ask'] + opts['bid']) / 2
 
-                # ✅ STRICT FILTER (10%)
+                # ✅ strict (10%)
                 strict = opts[(opts['mid'] > 0) & (opts['spread']/opts['mid'] <= 0.10)]
 
-                # ✅ FALLBACK (15%)
+                # ✅ fallback (15%)
                 if strict.empty:
                     strict = opts[(opts['mid'] > 0) & (opts['spread']/opts['mid'] <= 0.15)]
 
@@ -88,32 +120,23 @@ def get_option_data(ticker, price, trend, strength):
                 top = strict.sort_values(by="liq", ascending=False).iloc[0]
 
                 if top['liq'] > best_score:
-                    best_score = top['liq']
                     best = (top, expiry)
+                    best_score = top['liq']
 
             except:
                 continue
 
         if best is None:
-            return "⚠️ No suitable options found"
+            return "⚠️ No suitable options"
 
         row, expiry = best
-
-        quality = "✅ Tight" if (row['spread']/row['mid']) <= 0.10 else "⚠️ Acceptable"
-
-        return (
-            f"{'CALL' if trend=='Bullish' else 'PUT'} ({strength})\n"
-            f"Strike: {row['strike']} | Exp: {expiry}\n"
-            f"Price: ${round(row['lastPrice'],2)}\n"
-            f"Vol: {int(row['volume'])} | OI: {int(row['openInterest'])}\n"
-            f"Spread: {round(row['spread'],2)} {quality}"
-        )
+        return f"{'CALL' if trend=='Bullish' else 'PUT'} ({strength}) | Strike {row['strike']} | Exp {expiry}"
 
     except:
-        return "⚠️ Options temporarily unavailable"
+        return "⚠️ Option data unavailable"
 
 
-# ✅ ANALYSIS ENGINE
+# ✅ ANALYSIS
 def analyze(df, ticker):
     latest = df.iloc[-1]
 
@@ -125,7 +148,7 @@ def analyze(df, ticker):
     signal = latest['Signal']
     atr = latest['ATR']
 
-    # ✅ Trend
+    # ✅ trend
     if price > ema20 > ema50:
         trend = "Bullish"
     elif price < ema20 < ema50:
@@ -133,13 +156,11 @@ def analyze(df, ticker):
     else:
         return None
 
-    # ✅ Strength
     strength = "Strong" if (rsi > 60 and macd > signal) else "Normal"
 
     breakout_high = df['High'].tail(5).max()
     breakout_low = df['Low'].tail(5).min()
 
-    # ✅ Entry logic
     if trend == "Bullish":
         entry = max(ema20, breakout_high)
         stop = price - atr
@@ -188,30 +209,39 @@ def scalp(df):
         return "No clear scalp"
 
 
-# ✅ ALERT SYSTEM
+# ✅ ALERT ENGINE
 alerts = []
+
 for t in SCAN_LIST:
     df = get_data(t)
     if df is None:
         continue
+
     df = compute(df)
     r = analyze(df, t)
 
     if r and r["high_quality"]:
         alerts.append(r)
 
+        msg = (
+            f"🚨 TRADE ALERT\n"
+            f"{r['ticker']} → {r['trend']} ({r['strength']})\n"
+            f"RR: {round(r['rr'],2)}\n"
+            f"Entry: {round(r['entry'],2)}"
+        )
+
+        send_telegram_alert(t, msg)
+
+
 if alerts:
     st.subheader("🚨 HIGH QUALITY ALERTS")
     for a in alerts:
-        st.success(
-            f"{a['ticker']} → {a['trend']} ({a['strength']}) | "
-            f"RR: {round(a['rr'],2)} | Entry: {round(a['entry'],2)}"
-        )
+        st.success(f"{a['ticker']} → {a['trend']} | RR {round(a['rr'],2)}")
 else:
     st.info("No high-quality setups right now")
 
 
-# ✅ SINGLE STOCK ANALYSIS
+# ✅ SINGLE STOCK VIEW
 if query:
     ticker = query.strip().upper()
 
