@@ -2,7 +2,7 @@ name: Trading Scanner
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # runs every 5 minutes
+    - cron: '*/30 * * * *'   # runs every 30 minutes
   workflow_dispatch:         # allows manual run
 
 jobs:
