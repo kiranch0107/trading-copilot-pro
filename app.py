@@ -5,11 +5,13 @@ import ta
 import os
 import requests
 import time
+from datetime import datetime
+import pytz
 
 st.set_page_config(page_title="Trading Copilot ELITE", layout="wide")
 
 st.title("🤖 Trading Copilot ELITE")
-st.caption("Full trading + options + real-time Telegram alerts")
+st.caption("Full trading + options + real-time alerts")
 
 query = st.chat_input("Enter ticker (TSLA, NVDA, AAPL)")
 
@@ -21,11 +23,29 @@ WATCHLIST = ["TSLA","NVDA","AAPL","MSFT","AMZN","META","AMD","SPY","QQQ",
 FAST_MODE = True
 SCAN_LIST = WATCHLIST[:10] if FAST_MODE else WATCHLIST
 
-# ✅ TELEGRAM (SECURE)
+# ✅ TELEGRAM ALERT CONTROL
 SENT_ALERTS = {}
 COOLDOWN = 600  # 10 minutes
 
 
+# ✅ MARKET HOURS CHECK
+def is_market_open():
+    try:
+        tz = pytz.timezone("America/New_York")
+        now = datetime.now(tz)
+
+        if now.weekday() >= 5:  # Weekend
+            return False
+
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+
+        return market_open <= now <= market_close
+    except:
+        return False
+
+
+# ✅ TELEGRAM SENDER
 def send_telegram_alert(ticker, message):
     TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
     CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -35,7 +55,7 @@ def send_telegram_alert(ticker, message):
 
     now = time.time()
 
-    # ✅ prevent spam
+    # ✅ prevent duplicate alerts
     if ticker in SENT_ALERTS and (now - SENT_ALERTS[ticker]) < COOLDOWN:
         return
 
@@ -49,6 +69,13 @@ def send_telegram_alert(ticker, message):
         SENT_ALERTS[ticker] = now
     except:
         pass
+
+
+# ✅ UI MARKET STATUS
+if is_market_open():
+    st.success("🟢 Market is OPEN — alerts active")
+else:
+    st.warning("🔴 Market is CLOSED — alerts paused")
 
 
 # ✅ DATA FETCH
@@ -93,7 +120,6 @@ def get_option_data(ticker, price, trend, strength):
                 opts = chain.calls if trend=="Bullish" else chain.puts
                 opts = opts.fillna(0)
 
-                # ✅ ITM vs ATM
                 if strength == "Strong":
                     opts = opts[(opts['strike'] < price) if trend=="Bullish"
                                 else (opts['strike'] > price)]
@@ -106,10 +132,8 @@ def get_option_data(ticker, price, trend, strength):
                 opts['spread'] = opts['ask'] - opts['bid']
                 opts['mid'] = (opts['ask'] + opts['bid']) / 2
 
-                # ✅ strict (10%)
                 strict = opts[(opts['mid'] > 0) & (opts['spread']/opts['mid'] <= 0.10)]
 
-                # ✅ fallback (15%)
                 if strict.empty:
                     strict = opts[(opts['mid'] > 0) & (opts['spread']/opts['mid'] <= 0.15)]
 
@@ -130,7 +154,14 @@ def get_option_data(ticker, price, trend, strength):
             return "⚠️ No suitable options"
 
         row, expiry = best
-        return f"{'CALL' if trend=='Bullish' else 'PUT'} ({strength}) | Strike {row['strike']} | Exp {expiry}"
+
+        return (
+            f"{'CALL' if trend=='Bullish' else 'PUT'} ({strength})\n"
+            f"Strike: {row['strike']} | Exp: {expiry}\n"
+            f"Price: ${round(row['lastPrice'],2)}\n"
+            f"Vol: {int(row['volume'])} | OI: {int(row['openInterest'])}\n"
+            f"Spread: {round(row['spread'],2)} ✅"
+        )
 
     except:
         return "⚠️ Option data unavailable"
@@ -148,7 +179,6 @@ def analyze(df, ticker):
     signal = latest['Signal']
     atr = latest['ATR']
 
-    # ✅ trend
     if price > ema20 > ema50:
         trend = "Bullish"
     elif price < ema20 < ema50:
@@ -209,30 +239,32 @@ def scalp(df):
         return "No clear scalp"
 
 
-# ✅ ALERT ENGINE
+# ✅ ALERT LOOP (ONLY DURING MARKET HOURS)
 alerts = []
 
-for t in SCAN_LIST:
-    df = get_data(t)
-    if df is None:
-        continue
+if is_market_open():
+    for t in SCAN_LIST:
+        df = get_data(t)
+        if df is None:
+            continue
 
-    df = compute(df)
-    r = analyze(df, t)
+        df = compute(df)
+        r = analyze(df, t)
 
-    if r and r["high_quality"]:
-        alerts.append(r)
+        if r and r["high_quality"]:
+            alerts.append(r)
 
-        msg = (
-            f"🚨 TRADE ALERT\n"
-            f"{r['ticker']} → {r['trend']} ({r['strength']})\n"
-            f"RR: {round(r['rr'],2)}\n"
-            f"Entry: {round(r['entry'],2)}"
-        )
+            msg = (
+                f"🚨 TRADE ALERT\n"
+                f"{r['ticker']} → {r['trend']} ({r['strength']})\n"
+                f"RR: {round(r['rr'],2)}\n"
+                f"Entry: {round(r['entry'],2)}"
+            )
 
-        send_telegram_alert(t, msg)
+            send_telegram_alert(t, msg)
 
 
+# ✅ DISPLAY ALERTS
 if alerts:
     st.subheader("🚨 HIGH QUALITY ALERTS")
     for a in alerts:
