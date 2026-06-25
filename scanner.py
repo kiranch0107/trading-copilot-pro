@@ -10,7 +10,7 @@ WATCHLIST = ["TSLA","NVDA","AAPL","MSFT","AMZN","META","AMD","SPY","QQQ",
              "INTC","NFLX","BABA","CSCO","GOOGL"]
 
 
-# ✅ MARKET HOURS
+# ✅ MARKET HOURS CHECK
 def is_market_open():
     tz = pytz.timezone("America/New_York")
     now = datetime.now(tz)
@@ -40,7 +40,7 @@ def send_alert(message):
         pass
 
 
-# ✅ DATA
+# ✅ GET DATA
 def get_data(ticker):
     df = yf.download(ticker, period="3mo", interval="1d")
     if df.empty:
@@ -79,6 +79,7 @@ def analyze(df, ticker):
     signal = latest['Signal']
     atr = latest['ATR']
 
+    # ✅ TREND
     if price > ema20 > ema50:
         trend = "Bullish"
     elif price < ema20 < ema50:
@@ -102,6 +103,7 @@ def analyze(df, ticker):
 
     rr = abs(target - entry) / abs(entry - stop)
 
+    # ✅ HIGH QUALITY ONLY
     if rr < 2 or strength != "Strong":
         return None
 
@@ -113,10 +115,10 @@ def analyze(df, ticker):
     }
 
 
-# ✅ MAIN EXECUTION (NO LOOP)
+# ✅ RUN SCAN
 def run():
     if not is_market_open():
-        print("Market closed — skipping scan")
+        print("Market closed — skipping")
         return
 
     for t in WATCHLIST:
