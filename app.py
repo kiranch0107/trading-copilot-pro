@@ -2,18 +2,17 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import ta
+from datetime import datetime
 
 st.set_page_config(page_title="Trading Copilot PRO", layout="wide")
 
 st.title("🤖 Trading Copilot PRO")
 st.caption("AI-powered stock, options & intraday assistant")
 
-st.info("👋 Enter ticker OR use auto scanner below")
+st.info("👋 Enter ticker to analyze (e.g., TSLA, NVDA, AAPL)")
 
-query = st.chat_input("Enter ticker (TSLA, NVDA, AAPL)")
+query = st.chat_input("Enter ticker")
 
-# ✅ STOCK LIST
-STOCKS = ["TSLA", "NVDA", "AAPL", "MSFT", "AMZN", "META", "AMD", "SPY", "QQQ"]
 
 # ✅ FETCH DATA
 def get_data(ticker, period="3mo", interval="1d"):
@@ -27,7 +26,8 @@ def get_data(ticker, period="3mo", interval="1d"):
 
     return df
 
-# ✅ INDICATORS
+
+# ✅ COMPUTE INDICATORS
 def compute(df):
     close = df['Close']
     high = df['High']
@@ -45,8 +45,40 @@ def compute(df):
 
     return df
 
+
+# ✅ GET OPTION PRICE
+def get_option_data(ticker, price, trend):
+    try:
+        stock = yf.Ticker(ticker)
+        expiries = stock.options
+
+        if not expiries:
+            return "No options data"
+
+        expiry = expiries[0]  # nearest expiry
+
+        chain = stock.option_chain(expiry)
+
+        if trend == "Bullish":
+            calls = chain.calls
+            strike = min(calls['strike'], key=lambda x: abs(x - price))
+            option_row = calls[calls['strike'] == strike].iloc[0]
+
+        else:
+            puts = chain.puts
+            strike = min(puts['strike'], key=lambda x: abs(x - price))
+            option_row = puts[puts['strike'] == strike].iloc[0]
+
+        last_price = option_row['lastPrice']
+
+        return f"Strike: {strike} | Expiry: {expiry} | Price: ${round(last_price,2)}"
+
+    except:
+        return "Option data unavailable"
+
+
 # ✅ ANALYSIS
-def analyze(df):
+def analyze(df, ticker):
     latest = df.iloc[-1]
 
     price = latest['Close']
@@ -74,46 +106,38 @@ def analyze(df):
 
     score = max(0, min(score, 100))
 
-    # ✅ trade levels
     entry = ema20
     stop = price - atr if trend == "Bullish" else price + atr
-    target = price + atr*2 if trend == "Bullish" else price - atr*2
+    target = price + atr * 2 if trend == "Bullish" else price - atr * 2
 
-    # ✅ IV proxy
+    # ✅ VOLATILITY
     iv = atr / price
+    vol = "High" if iv > 0.04 else "Normal" if iv > 0.02 else "Low"
 
-    if iv > 0.04:
-        vol = "High Volatility"
-    elif iv > 0.02:
-        vol = "Normal Volatility"
-    else:
-        vol = "Low Volatility"
+    # ✅ OPTIONS + REAL DATA
+    if trend in ["Bullish", "Bearish"]:
+        option_data = get_option_data(ticker, price, trend)
 
-    # ✅ OPTIONS LOGIC (RESTORED + IMPROVED)
-    if trend == "Bullish":
-        if iv > 0.04:
-            option = f"🔥 Bull Call Spread → Buy {round(price)}C / Sell {round(price*1.05)}C"
+        if trend == "Bullish":
+            strategy = "CALL" if iv < 0.04 else "Bull Call Spread"
         else:
-            option = f"✅ CALL | Strike: {round(price)} | Delta ~0.55 | Exp: 2–3 weeks"
+            strategy = "PUT" if iv < 0.04 else "Bear Put Spread"
 
-    elif trend == "Bearish":
-        if iv > 0.04:
-            option = f"🔥 Bear Put Spread → Buy {round(price)}P / Sell {round(price*0.95)}P"
-        else:
-            option = f"✅ PUT | Strike: {round(price)} | Delta ~0.55 | Exp: 2–3 weeks"
+        option = f"{strategy} → {option_data}"
     else:
-        option = "⚠️ No strong options setup"
+        option = "No strong options setup"
 
     return {
+        "price": price,
         "trend": trend,
         "score": score,
         "entry": entry,
         "stop": stop,
         "target": target,
-        "iv": iv,
-        "vol": vol,
-        "option": option
+        "option": option,
+        "vol": vol
     }
+
 
 # ✅ SCALPING
 def scalp(df):
@@ -125,39 +149,14 @@ def scalp(df):
     low = df['Low'].tail(10).min()
 
     if price > high and rsi > 55:
-        return f"⚡ Bullish breakout scalp → Entry {round(price,2)}"
+        return f"⚡ Bullish Breakout → {round(price,2)}"
     elif price < low and rsi < 45:
-        return f"⚡ Bearish breakdown scalp → Entry {round(price,2)}"
+        return f"⚡ Bearish Breakdown → {round(price,2)}"
     else:
         return "No clear scalp setup"
 
-# ✅ AUTO SCANNER
-def scan_market():
-    results = []
 
-    for ticker in STOCKS:
-        df = get_data(ticker)
-        if df is None:
-            continue
-
-        df = compute(df)
-        r = analyze(df)
-
-        if r["score"] >= 70:
-            results.append({
-                "ticker": ticker,
-                "trend": r["trend"],
-                "score": r["score"]
-            })
-
-    return sorted(results, key=lambda x: x["score"], reverse=True)[:5]
-
-# ✅ SHOW SCANNER
-st.subheader("🔥 Top Trade Opportunities")
-for r in scan_market():
-    st.write(f"✅ {r['ticker']} | {r['trend']} | Score: {r['score']}%")
-
-# ✅ USER INPUT ANALYSIS
+# ✅ RUN
 if query:
     ticker = query.strip().upper()
 
@@ -168,14 +167,17 @@ if query:
         st.error("Invalid ticker")
     else:
         df = compute(df)
-        r = analyze(df)
-
         intraday = compute(intraday)
+
+        r = analyze(df, ticker)
+
+        # ✅ SHOW TICKER CLEARLY
+        st.subheader(f"📊 {ticker} Analysis")
 
         col1, col2 = st.columns(2)
 
         with col1:
-            st.subheader("📊 Swing Trade")
+            st.write("### 💼 Swing Trade")
             st.write(f"Trend: {r['trend']}")
             st.write(f"Entry: {round(r['entry'],2)}")
             st.write(f"Stop: {round(r['stop'],2)}")
@@ -183,11 +185,11 @@ if query:
             st.write(f"Confidence: {r['score']}%")
 
         with col2:
-            st.subheader("🧠 Options Strategy")
+            st.write("### 🧠 Options")
             st.write(r["option"])
             st.write(f"Volatility: {r['vol']}")
 
-            st.subheader("⚡ Intraday Scalp")
+            st.write("### ⚡ Intraday Scalp")
             st.write(scalp(intraday))
 
         st.warning("⚠️ Not financial advice")
