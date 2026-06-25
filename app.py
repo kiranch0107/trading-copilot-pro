@@ -11,15 +11,17 @@ st.caption("Professional-grade trading + options system")
 query = st.chat_input("Enter ticker")
 
 
+# ✅ FETCH DATA
 def get_data(ticker, period="3mo", interval="1d"):
     df = yf.download(ticker, period=period, interval=interval)
-    if df.empty:
+    if df is None or df.empty:
         return None
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return df
 
 
+# ✅ INDICATORS
 def compute(df):
     df['EMA20'] = ta.trend.ema_indicator(df['Close'], 20)
     df['EMA50'] = ta.trend.ema_indicator(df['Close'], 50)
@@ -36,54 +38,72 @@ def compute(df):
     return df
 
 
-# ✅ OPTIONS IMPROVED (ITM vs ATM)
+# ✅ ROBUST OPTIONS FETCH (FIXED)
 def get_option_data(ticker, price, trend, strength):
     try:
         stock = yf.Ticker(ticker)
-        expiries = stock.options[:3]
+        expiries = stock.options
+
+        if not expiries or len(expiries) == 0:
+            return "⚠️ No options data available"
+
+        expiries = expiries[:3]  # scan first 3 expiries
 
         best = None
         best_score = 0
 
         for expiry in expiries:
-            chain = stock.option_chain(expiry)
-            options = chain.calls if trend == "Bullish" else chain.puts
+            try:
+                chain = stock.option_chain(expiry)
+                options = chain.calls if trend == "Bullish" else chain.puts
 
-            options = options.fillna(0)
+                if options is None or options.empty:
+                    continue
 
-            # ✅ Strong trend → ITM
-            if strength == "Strong":
+                options = options.fillna(0)
+
+                # ✅ Strike selection logic
+                if strength == "Strong":
+                    options = options[
+                        (options['strike'] < price) if trend=="Bullish"
+                        else (options['strike'] > price)
+                    ]
+                else:
+                    options = options[
+                        (options['strike'] > price*0.95) &
+                        (options['strike'] < price*1.05)
+                    ]
+
+                if options.empty:
+                    continue
+
+                # ✅ Spread logic
+                options['spread'] = options['ask'] - options['bid']
+                options['mid'] = (options['ask'] + options['bid']) / 2
+
                 options = options[
-                    (options['strike'] < price) if trend=="Bullish"
-                    else (options['strike'] > price)
-                ]
-            else:
-                options = options[
-                    (options['strike'] > price*0.95) &
-                    (options['strike'] < price*1.05)
+                    (options['mid'] > 0) &
+                    (options['spread'] > 0) &
+                    ((options['spread'] / options['mid']) <= 0.10)
                 ]
 
-            options['spread'] = options['ask'] - options['bid']
-            options['mid'] = (options['ask'] + options['bid']) / 2
+                if options.empty:
+                    continue
 
-            options = options[
-                (options['mid'] > 0) &
-                (options['spread']/options['mid'] <= 0.10)
-            ]
+                # ✅ Liquidity score
+                options['liq'] = options['volume'] + options['openInterest']
 
-            if options.empty:
-                continue
+                top = options.sort_values(by="liq", ascending=False).iloc[0]
 
-            options['liq'] = options['volume'] + options['openInterest']
+                if top['liq'] > best_score:
+                    best_score = top['liq']
+                    best = (top, expiry)
 
-            top = options.sort_values(by="liq", ascending=False).iloc[0]
-
-            if top['liq'] > best_score:
-                best_score = top['liq']
-                best = (top, expiry)
+            except:
+                continue  # ✅ skip bad expiry instead of crashing
 
         if best is None:
-            return "No good options"
+            return "⚠️ No high-quality contracts found (low liquidity or wide spreads)"
 
         row, expiry = best
 
@@ -91,13 +111,15 @@ def get_option_data(ticker, price, trend, strength):
             f"{'CALL' if trend=='Bullish' else 'PUT'} ({strength})\n"
             f"Strike: {row['strike']} | Exp: {expiry}\n"
             f"Price: ${round(row['lastPrice'],2)}\n"
-            f"Spread: {round(row['spread'],2)}"
+            f"Vol: {int(row['volume'])} | OI: {int(row['openInterest'])}\n"
+            f"Spread: {round(row['spread'],2)} ✅"
         )
 
-    except:
-        return "Options error"
+    except Exception as e:
+        return f"⚠️ Options temporarily unavailable"
 
 
+# ✅ ANALYSIS
 def analyze(df, ticker):
     latest = df.iloc[-1]
 
@@ -109,7 +131,6 @@ def analyze(df, ticker):
     signal = latest['Signal']
     atr = latest['ATR']
 
-    # ✅ Trend strength
     if price > ema20 > ema50:
         trend = "Bullish"
     elif price < ema20 < ema50:
@@ -117,9 +138,9 @@ def analyze(df, ticker):
     else:
         return None
 
-    strength = "Strong" if rsi > 60 and macd > signal else "Normal"
+    strength = "Strong" if (rsi > 60 and macd > signal) else "Normal"
 
-    # ✅ ENTRY LOGIC (IMPROVED)
+    # ✅ Entry logic
     breakout = df['High'].tail(5).max()
 
     if trend == "Bullish":
@@ -149,6 +170,7 @@ def analyze(df, ticker):
     }
 
 
+# ✅ SCALPING
 def scalp(df):
     latest = df.iloc[-1]
     price = latest['Close']
@@ -200,3 +222,5 @@ if query:
 
             st.write("Intraday")
             st.write(scalp(intraday))
+
+        st.warning("Not financial advice")
