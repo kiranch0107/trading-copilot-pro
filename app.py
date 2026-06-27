@@ -400,61 +400,126 @@ def check_regime_alignment(daily_trend: str, spy_regime: dict) -> tuple[bool, st
 
 
 # ─────────────────────────────────────────────
-# OPTIONS ENGINE  (cached 5 min)
+# OPTIONS ENGINE  (cached 15 min — options data
+#                  is slow-moving; longer TTL
+#                  dramatically cuts API calls)
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=300, show_spinner=False)
+_OPT_RETRY_ATTEMPTS = 3      # max retries per expiry on rate-limit
+_OPT_RETRY_DELAY    = 2.0    # seconds between retries (doubles each attempt)
+_OPT_EXPIRY_DELAY   = 0.4    # polite pause between expiry fetches
+_OPT_MAX_EXPIRIES   = 3      # only check 3 nearest valid expiries
+
+
+def _fetch_chain_with_retry(stock, expiry: str):
+    """Fetch one option chain with exponential back-off on rate limits."""
+    delay = _OPT_RETRY_DELAY
+    for attempt in range(_OPT_RETRY_ATTEMPTS):
+        try:
+            return stock.option_chain(expiry)
+        except Exception as e:
+            msg = str(e).lower()
+            if "too many requests" in msg or "rate limit" in msg or "429" in msg:
+                if attempt < _OPT_RETRY_ATTEMPTS - 1:
+                    time.sleep(delay)
+                    delay *= 2        # exponential back-off: 2s → 4s → 8s
+                    continue
+            raise   # re-raise non-rate-limit errors immediately
+    return None     # all retries exhausted
+
+
+@st.cache_data(ttl=900, show_spinner=False)   # 15-min cache
 def get_option_data(ticker: str, price: float, trend: str, strength: str) -> dict:
     try:
         stock    = yf.Ticker(ticker)
-        expiries = stock.options
+
+        # Fetching .options itself can also rate-limit — wrap it
+        try:
+            expiries = stock.options
+        except Exception as e:
+            if "too many requests" in str(e).lower() or "429" in str(e):
+                time.sleep(3)
+                expiries = stock.options   # one retry
+            else:
+                raise
+
         if not expiries:
             return {"error": "No option chain available"}
+
         today      = pd.Timestamp.today().normalize()
         best       = None
         best_score = 0
-        for expiry in expiries[:4]:
+        checked    = 0
+
+        for expiry in expiries:
+            if checked >= _OPT_MAX_EXPIRIES:
+                break
+
             dte = (pd.Timestamp(expiry) - today).days
             if dte < MIN_DTE:
                 continue
+
+            checked += 1
+
             try:
-                chain = stock.option_chain(expiry)
-                opts  = chain.calls if trend == "Bullish" else chain.puts
-                opts  = opts.fillna(0)
+                time.sleep(_OPT_EXPIRY_DELAY)    # polite pause before each fetch
+                chain = _fetch_chain_with_retry(stock, expiry)
+                if chain is None:
+                    continue
+
+                opts = chain.calls if trend == "Bullish" else chain.puts
+                opts = opts.fillna(0)
+
                 if strength == "Strong":
                     opts = opts[(opts["strike"] <= price*1.02) if trend=="Bullish"
                                 else (opts["strike"] >= price*0.98)]
                 else:
                     opts = opts[(opts["strike"] >= price*0.95) & (opts["strike"] <= price*1.05)]
+
                 if opts.empty:
                     continue
+
                 opts           = opts.copy()
                 opts["spread"] = opts["ask"] - opts["bid"]
                 opts["mid"]    = (opts["ask"] + opts["bid"]) / 2
+
                 valid = opts[(opts["mid"] > 0) & (opts["spread"]/opts["mid"] <= 0.15)]
                 valid = valid[(valid["volume"] > 0) | (valid["openInterest"] > 0)]
+
                 if valid.empty:
                     continue
+
+                valid = valid.copy()
                 valid["liq"] = valid["volume"] + valid["openInterest"]
                 top = valid.sort_values("liq", ascending=False).iloc[0]
+
                 if top["liq"] > best_score:
                     best       = (top, expiry, dte)
                     best_score = top["liq"]
+
             except Exception:
-                continue
+                continue   # skip this expiry, try next
+
         if best is None:
             return {"error": "No liquid options found"}
+
         row, expiry, dte = best
         return {
-            "label": "CALL" if trend=="Bullish" else "PUT",
-            "strike": round(float(row["strike"]),2),
-            "expiry": expiry, "mid": round(float(row["mid"]),2),
-            "last_price": round(float(row["lastPrice"]),2),
-            "volume": int(row["volume"]), "oi": int(row["openInterest"]),
-            "spread": round(float(row["spread"]),2),
-            "dte": dte, "is_budget": row["mid"] <= BUDGET_MAX,
+            "label":      "CALL" if trend=="Bullish" else "PUT",
+            "strike":     round(float(row["strike"]), 2),
+            "expiry":     expiry,
+            "mid":        round(float(row["mid"]), 2),
+            "last_price": round(float(row["lastPrice"]), 2),
+            "volume":     int(row["volume"]),
+            "oi":         int(row["openInterest"]),
+            "spread":     round(float(row["spread"]), 2),
+            "dte":        dte,
+            "is_budget":  row["mid"] <= BUDGET_MAX,
         }
     except Exception as e:
-        return {"error": f"Option data unavailable ({e})"}
+        msg = str(e)
+        if "too many requests" in msg.lower() or "429" in msg:
+            return {"error": "Rate limited by Yahoo Finance — options will load on next refresh (cached 15 min)"}
+        return {"error": f"Option data unavailable ({msg})"}
 
 
 # ─────────────────────────────────────────────
