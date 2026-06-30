@@ -1193,29 +1193,58 @@ with TAB_STOCK:
 
                     def chk(ok): return "✅" if ok else "❌"
 
-                    st.markdown("**Why no signal fired (current values vs requirement):**")
-                    st.caption(
-                        f"{chk(trend_stack_bull or trend_stack_bear)} Trend stack — "
-                        f"Price ${latest_price:.2f} / EMA20 ${ema20_v:.2f} / EMA50 ${ema50_v:.2f} "
-                        f"(need clean stack: Price>EMA20>EMA50 or reverse)"
+                    # Determine which direction the EMA stack implies,
+                    # so every downstream condition is evaluated against
+                    # THAT direction — not a loose "either direction" check
+                    # (that was the bug: MACD showed ✅ even when it was
+                    #  bearish while the EMA stack was bullish)
+                    if trend_stack_bull:
+                        implied = "Bullish"
+                        macd_aligned  = macd_bull
+                        rsi_in_band   = rsi_bull_ok
+                        macd_label    = f"need MACD > Signal for Bullish (MACD {macd_v:.3f} {'>' if macd_bull else '<'} Signal {sig_v:.3f})"
+                        rsi_label     = f"need RSI 30–75 for Bullish (RSI {rsi_v:.1f})"
+                    elif trend_stack_bear:
+                        implied = "Bearish"
+                        macd_aligned  = macd_bear
+                        rsi_in_band   = rsi_bear_ok
+                        macd_label    = f"need MACD < Signal for Bearish (MACD {macd_v:.3f} {'<' if macd_bear else '>'} Signal {sig_v:.3f})"
+                        rsi_label     = f"need RSI 25–70 for Bearish (RSI {rsi_v:.1f})"
+                    else:
+                        implied = None
+                        macd_aligned  = False
+                        rsi_in_band   = False
+                        macd_label    = f"MACD {macd_v:.3f} vs Signal {sig_v:.3f} — EMA stack must align first"
+                        rsi_label     = f"RSI {rsi_v:.1f} — EMA stack must align first"
+
+                    all_base_ok = (trend_stack_bull or trend_stack_bear) and macd_aligned and rsi_in_band and vol_floor_ok
+
+                    st.markdown(
+                        f"**Why no signal fired — implied direction: "
+                        f"{'🟢 ' + implied if implied else '⚪ Mixed/No trend'} "
+                        f"({'all base conditions met — check 4 filters above' if all_base_ok else 'base condition(s) failed below'})**"
                     )
                     st.caption(
-                        f"{chk(macd_bull or macd_bear)} MACD momentum — "
-                        f"MACD {macd_v:.3f} vs Signal {sig_v:.3f} "
-                        f"(need MACD on the same side as trend direction)"
+                        f"{chk(trend_stack_bull or trend_stack_bear)} "
+                        f"Trend stack — Price ${latest_price:.2f} / EMA20 ${ema20_v:.2f} / EMA50 ${ema50_v:.2f} "
+                        f"({'✓ ' + implied + ' stack' if implied else '✗ no clean stack — price is between EMAs or EMAs crossed'})"
                     )
                     st.caption(
-                        f"{chk(rsi_bull_ok or rsi_bear_ok)} RSI band — "
-                        f"RSI {rsi_v:.1f} (need 30–75 for bullish, 25–70 for bearish)"
+                        f"{chk(macd_aligned)} MACD momentum — {macd_label}"
+                    )
+                    st.caption(
+                        f"{chk(rsi_in_band)} RSI band — {rsi_label}"
                     )
                     st.caption(
                         f"{chk(vol_floor_ok)} Volume floor — "
                         f"{vol_ratio:.2f}× the 20-day average (need ≥ 0.70×)"
                     )
                     st.caption(
-                        "Note: ALL FOUR must align on the same day for a signal — "
-                        "this is common even in a healthy trend if momentum or volume "
-                        "hasn't caught up yet. Check back as new daily bars form."
+                        "All four base conditions must align in the same direction "
+                        "on the same day. The most common miss for swing setups is "
+                        "MACD lagging the EMA stack — the trend has resumed but "
+                        "momentum confirmation hasn't crossed yet. Usually resolves "
+                        "within 1–3 daily bars."
                     )
                 else:
                     n_pass  = r["filters_pass"]
