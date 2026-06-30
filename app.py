@@ -951,6 +951,137 @@ st.header("Journal Stats")
 stats = journal_stats(journal)
 st.write(stats)
 
+# --- Admin test runner (paste into your Streamlit app) ---
+import json
+from datetime import datetime
+import io
+import base64
+
+def run_tests_and_build_report():
+    report = {"meta": {"timestamp": datetime.utcnow().isoformat() + "Z"}, "single_lookup": [], "scans": [], "edge_cases": [], "dte_check": None, "alerts_file": None}
+    # Single lookups
+    for t in ["SPY", "AAPL", "TSLA"]:
+        try:
+            df, err = get_data_with_error(t, period="3mo", interval="1d")
+            entry = {"ticker": t, "data_error": err}
+            if df is not None:
+                last_key = str(df.index[-1])
+                dfc = compute_cached(t, last_key, df)
+                weekly = get_weekly_trend(t)
+                spy_regime = get_spy_regime()
+                entry["signal"] = generate_swing_signal(t, dfc, weekly, spy_regime)
+        except Exception as e:
+            entry["exception"] = str(e)
+        report["single_lookup"].append(entry)
+
+    # Scans: fast and full
+    for mode in (True, False):
+        try:
+            scan_list = WATCHLIST[:5] if mode else WATCHLIST
+            results, debug = scan_watchlist(scan_list)
+            report["scans"].append({"fast_mode": mode, "scan_list": scan_list, "results_count": len(results), "debug": debug})
+        except Exception as e:
+            report["scans"].append({"fast_mode": mode, "error": str(e)})
+
+    # Edge case: insufficient history
+    orig_min_rows = MIN_ROWS
+    try:
+        globals()["MIN_ROWS"] = 500
+        res, debug = scan_watchlist(WATCHLIST)
+        report["edge_cases"].append({"test": "insufficient_history", "MIN_ROWS": 500, "results_count": len(res), "debug_sample": debug[:8]})
+    except Exception as e:
+        report["edge_cases"].append({"test": "insufficient_history", "error": str(e)})
+    finally:
+        globals()["MIN_ROWS"] = orig_min_rows
+
+    # Edge case: earnings blackout
+    orig_earn = EARNINGS_DAYS
+    try:
+        globals()["EARNINGS_DAYS"] = 30
+        lk = {}
+        try:
+            df, err = get_data_with_error("AAPL")
+            lk["data_error"] = err
+            if df is not None:
+                last_key = str(df.index[-1])
+                dfc = compute_cached("AAPL", last_key, df)
+                weekly = get_weekly_trend("AAPL")
+                spy_regime = get_spy_regime()
+                lk["signal"] = generate_swing_signal("AAPL", dfc, weekly, spy_regime)
+        except Exception as e:
+            lk["exception"] = str(e)
+        report["edge_cases"].append({"test": "earnings_blackout", "EARNINGS_DAYS": 30, "lookup": lk})
+    finally:
+        globals()["EARNINGS_DAYS"] = orig_earn
+
+    # Edge case: budget forcing no option
+    orig_budget = BUDGET_MAX
+    try:
+        globals()["BUDGET_MAX"] = 0.01
+        lk = {}
+        try:
+            df, err = get_data_with_error("AAPL")
+            lk["data_error"] = err
+            if df is not None:
+                last_key = str(df.index[-1])
+                dfc = compute_cached("AAPL", last_key, df)
+                weekly = get_weekly_trend("AAPL")
+                spy_regime = get_spy_regime()
+                lk["signal"] = generate_swing_signal("AAPL", dfc, weekly, spy_regime)
+        except Exception as e:
+            lk["exception"] = str(e)
+        report["edge_cases"].append({"test": "budget_no_option", "BUDGET_MAX": 0.01, "lookup": lk})
+    finally:
+        globals()["BUDGET_MAX"] = orig_budget
+
+    # DTE check for SPY
+    try:
+        chain = get_full_chain_data("SPY")
+        dtes = []
+        if "expiries" in chain:
+            for e in chain["expiries"]:
+                expiry = e["expiry"]
+                try:
+                    exp_dt = pd.to_datetime(expiry).date()
+                except Exception:
+                    try:
+                        exp_dt = datetime.strptime(str(expiry), "%Y-%m-%d").date()
+                    except Exception:
+                        continue
+                dtes.append((expiry, int((exp_dt - datetime.now().date()).days)))
+        report["dte_check"] = {"dtes": dtes, "min_allowed": MIN_DTE, "max_allowed": MAX_DTE}
+    except Exception as e:
+        report["dte_check"] = {"error": str(e)}
+
+    # Alerts snapshot
+    try:
+        if ALERT_LOG_FILE.exists():
+            report["alerts_file"] = json.loads(ALERT_LOG_FILE.read_text())
+        else:
+            report["alerts_file"] = []
+    except Exception as e:
+        report["alerts_file_error"] = str(e)
+
+    # Save report
+    out_path = Path("test_report.json")
+    out_path.write_text(json.dumps(report, indent=2, default=str))
+    return report, str(out_path)
+
+# UI: admin button
+if st.sidebar.button("Run automated tests (admin)"):
+    with st.spinner("Running automated tests..."):
+        report, path = run_tests_and_build_report()
+    st.success(f"Tests complete — report saved to {path}")
+    st.subheader("Summary")
+    st.write({"single_lookup_count": len(report["single_lookup"]), "scans": [s["results_count"] if "results_count" in s else None for s in report["scans"]]})
+    st.subheader("Raw report (truncated)")
+    st.code(json.dumps(report, indent=2)[:4000])
+    # provide download link
+    b = base64.b64encode(json.dumps(report, indent=2).encode()).decode()
+    href = f'<a href="data:application/json;base64,{b}" download="test_report.json">Download test_report.json</a>'
+    st.markdown(href, unsafe_allow_html=True)
+# --- end admin test runner ---
+
 # ---------------------------
 # End of file
 # ---------------------------
