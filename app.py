@@ -43,8 +43,7 @@ st.caption("Swing · Options · Alerts · Journal · ADX · Multi-TF · Earnings
 # ─────────────────────────────────────────────
 WATCHLIST = [
     "TSLA","NVDA","AAPL","MSFT","AMZN",
-    "META","AMD","SPY","QQQ","INTC",
-    "NFLX","BABA","CSCO","GOOGL"
+    "META","SPY"
 ]
 FAST_MODE       = True
 SCAN_LIST       = WATCHLIST[:10] if FAST_MODE else WATCHLIST
