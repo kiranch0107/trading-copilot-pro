@@ -46,6 +46,7 @@ st.markdown(
     .filter-pass  { background:#022c22; border-left:3px solid #22c55e; padding:6px 10px; border-radius:5px; margin:3px 0; font-size:0.85em; }
     .filter-fail  { background:#2b0d0d; border-left:3px solid #ef4444; padding:6px 10px; border-radius:5px; margin:3px 0; font-size:0.85em; }
     .filter-warn  { background:#2b2000; border-left:3px solid #f59e0b; padding:6px 10px; border-radius:5px; margin:3px 0; font-size:0.85em; }
+    .scan-debug { font-size:0.9em; color:#cbd5e1; background:#0b1220; padding:8px; border-radius:6px; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -62,7 +63,9 @@ WATCHLIST = [
     "META", "SPY"
 ]
 
-FAST_MODE = True
+# Sidebar control for fast vs full scan
+st.sidebar.header("Scan Mode")
+FAST_MODE = st.sidebar.checkbox("Fast mode (scan first 5 only)", value=False)
 SCAN_LIST = WATCHLIST[:5] if FAST_MODE else WATCHLIST
 
 st.sidebar.header("Scan Settings")
@@ -303,6 +306,14 @@ def check_weekly_alignment(daily_trend: str, weekly_trend: Optional[str]) -> Tup
 # ---------------------------
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def get_next_earnings(ticker: str) -> Optional[str]:
+    """
+    Robust earnings fetch:
+    Handles cases where Yahoo returns:
+      - a single timestamp
+      - a numpy array
+      - a list/tuple/Series
+      - None
+    """
     if _rate_limit_breaker.is_tripped():
         logger.info("Skipping earnings fetch for %s because rate-limit breaker is tripped", ticker)
         return None
@@ -315,6 +326,7 @@ def get_next_earnings(ticker: str) -> Optional[str]:
         if cal is None:
             return None
 
+        # Extract raw value
         if isinstance(cal, dict):
             raw = cal.get("Earnings Date")
         else:
@@ -325,6 +337,7 @@ def get_next_earnings(ticker: str) -> Optional[str]:
         if raw is None:
             return None
 
+        # Normalize containers
         if isinstance(raw, (list, tuple, pd.Series)):
             raw = raw[0]
         if isinstance(raw, np.ndarray):
@@ -482,14 +495,23 @@ def get_option_data(stock: str, price: float, trend: str, strength: str) -> dict
             exp_dt = pd.to_datetime(expiry).date()
         except Exception:
             # fallback: assume expiry is already date-like string
-            exp_dt = datetime.strptime(str(expiry), "%Y-%m-%d").date()
+            try:
+                exp_dt = datetime.strptime(str(expiry), "%Y-%m-%d").date()
+            except Exception:
+                # If expiry parsing fails, skip this expiry
+                continue
 
         dte_val = (exp_dt - datetime.now().date()).days
-        side_df["dte"] = int(max(0, dte_val))
+        # Use the same DTE for all rows in this expiry (we'll filter by expiry-level DTE)
+        # Clip to non-negative
+        dte_val = max(0, int(dte_val))
 
-        side_df = side_df[(side_df["dte"] >= MIN_DTE) & (side_df["dte"] <= MAX_DTE)]
-        if side_df.empty:
+        # Keep only expiries between MIN_DTE and MAX_DTE
+        if not (MIN_DTE <= dte_val <= MAX_DTE):
             continue
+
+        # annotate dte column for completeness (same value for all rows)
+        side_df["dte"] = dte_val
 
         side_df = side_df.dropna(subset=["mid", "spread"])
 
@@ -501,10 +523,14 @@ def get_option_data(stock: str, price: float, trend: str, strength: str) -> dict
 
         side_df["score"] += (BUDGET_MAX - side_df["mid"]).clip(lower=-10, upper=10)
 
-        top = side_df.sort_values("score", ascending=False).iloc[0]
+        # pick top contract for this expiry
+        try:
+            top = side_df.sort_values("score", ascending=False).iloc[0]
+        except Exception:
+            continue
 
         if top["score"] > best_score:
-            best = (top, expiry, int(top["dte"]))
+            best = (top, expiry, dte_val)
             best_score = top["score"]
 
     if best is None:
@@ -741,17 +767,20 @@ def generate_swing_signal(
     }
 
 # ---------------------------
-# Watchlist scan
+# Watchlist scan (with compact debug)
 # ---------------------------
 def scan_watchlist(tickers: list):
     spy_regime = get_spy_regime()
     data_map = batch_get_data(tickers, period="3mo", interval="1d")
     weekly_map = prefetch_weekly_for_tickers(tickers)
     results = []
+    debug = []
     for t in tickers:
+        reason = []
         df = data_map.get(t)
         if df is None:
-            st.info(f"No data for {t} or not enough history")
+            reason.append("No data / insufficient history")
+            debug.append((t, "SKIPPED", reason))
             continue
         last_key = str(df.index[-1])
         dfc = compute_cached(t, last_key, df)
@@ -759,6 +788,10 @@ def scan_watchlist(tickers: list):
         signal = generate_swing_signal(t, dfc, weekly_trend, spy_regime)
 
         if signal["direction"] == "NONE":
+            # collect reasons from filters
+            failed = [f"{k}:{v[1]}" for k, v in signal["filters"].items() if not v[0]]
+            reason.extend(failed or ["Neutral trend"])
+            debug.append((t, "NO_SIGNAL", reason))
             continue
 
         opt = signal["options"]
@@ -779,7 +812,11 @@ def scan_watchlist(tickers: list):
                 signal["filters"],
             )
             results.append((t, trend, price, opt))
-    return results
+            debug.append((t, "ALERT_LOGGED", [f"Opt:{opt.get('label')} exp:{opt.get('expiry')} dte:{opt.get('dte')}"]))
+        else:
+            reason.append("No suitable option or RR too low")
+            debug.append((t, "NO_OPTION", reason))
+    return results, debug
 
 # ---------------------------
 # Single-ticker lookup
@@ -886,7 +923,7 @@ if st.sidebar.button("Lookup ticker"):
 st.sidebar.header("Actions")
 if st.sidebar.button("Run scan now"):
     with st.spinner("Scanning..."):
-        res = scan_watchlist(SCAN_LIST)
+        res, debug = scan_watchlist(SCAN_LIST)
         st.success(f"Scan complete — {len(res)} alerts logged")
         for r in res:
             t, trend, price, opt = r
@@ -894,6 +931,10 @@ if st.sidebar.button("Run scan now"):
                 f"Alert: {t} {trend} ${price:.2f} — "
                 f"Option: {opt.get('label')} {opt.get('strike')} exp {opt.get('expiry')} mid {opt.get('mid')}"
             )
+        # compact debug expander
+        with st.expander("Scan debug (why tickers were skipped)"):
+            for t, status, reasons in debug:
+                st.markdown(f"<div class='scan-debug'><strong>{t}</strong> — {status} — {', '.join(reasons)}</div>", unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
 st.sidebar.header("Alerts & Journal")
