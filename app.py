@@ -523,6 +523,165 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str) -> dic
 
 
 # ─────────────────────────────────────────────
+# UNUSUAL OPTIONS ACTIVITY ENGINE
+# ─────────────────────────────────────────────
+# Two signals combined (yfinance has no historical avg-volume-per-contract,
+# so we approximate "unusual" using the two metrics that ARE available):
+#   1. Volume / Open Interest ratio  → high = fresh same-day positioning
+#      (OI updates overnight, so Vol >> OI means new contracts opened today,
+#       not just existing positions trading hands)
+#   2. Volume / that contract's own recent average volume (proxy: today's
+#      volume vs the median volume across the rest of the same expiry's
+#      chain) → flags single strikes trading far above their peers
+UA_VOL_OI_RATIO_MIN   = 2.0     # Volume >= 2x Open Interest
+UA_VOL_OI_RATIO_HIGH  = 4.0     # Volume >= 4x Open Interest → "Extreme"
+UA_PEER_MULTIPLE_MIN  = 3.0     # Volume >= 3x the median volume of peer strikes
+UA_MIN_VOLUME         = 100     # ignore noise — require some minimum contracts traded
+UA_MAX_EXPIRIES       = 3       # scan same number of expiries as the options engine
+
+
+def _score_unusual_contract(row: pd.Series, peer_median_vol: float) -> dict:
+    """Score a single option contract row for unusual activity."""
+    volume = float(row.get("volume", 0) or 0)
+    oi     = float(row.get("openInterest", 0) or 0)
+
+    if volume < UA_MIN_VOLUME:
+        return {"unusual": False}
+
+    vol_oi_ratio = volume / oi if oi > 0 else float("inf") if volume > 0 else 0
+    peer_ratio   = volume / peer_median_vol if peer_median_vol > 0 else 0
+
+    vol_oi_flag  = vol_oi_ratio >= UA_VOL_OI_RATIO_MIN
+    peer_flag    = peer_ratio   >= UA_PEER_MULTIPLE_MIN
+
+    if not (vol_oi_flag or peer_flag):
+        return {"unusual": False}
+
+    # Severity tiering
+    if vol_oi_ratio >= UA_VOL_OI_RATIO_HIGH and peer_flag:
+        severity = "Extreme"
+    elif vol_oi_flag and peer_flag:
+        severity = "High"
+    else:
+        severity = "Moderate"
+
+    reasons = []
+    if vol_oi_flag:
+        reasons.append(f"Vol {int(volume):,} is {vol_oi_ratio:.1f}x Open Interest ({int(oi):,})")
+    if peer_flag:
+        reasons.append(f"Vol is {peer_ratio:.1f}x the chain's median strike volume")
+
+    return {
+        "unusual":      True,
+        "severity":     severity,
+        "vol_oi_ratio": round(vol_oi_ratio, 1) if vol_oi_ratio != float("inf") else None,
+        "peer_ratio":   round(peer_ratio, 1),
+        "reasons":      reasons,
+        "volume":       int(volume),
+        "oi":           int(oi),
+    }
+
+
+@st.cache_data(ttl=900, show_spinner=False)   # 15-min cache, matches options engine
+def scan_unusual_activity(ticker: str) -> dict:
+    """
+    Scans the option chain (calls + puts, nearest expiries) for unusual
+    activity using Volume/OI ratio + Volume vs peer-strike-median.
+    Returns a dict with a flat list of flagged contracts, sorted by severity.
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        try:
+            expiries = stock.options
+        except Exception as e:
+            if "too many requests" in str(e).lower() or "429" in str(e):
+                time.sleep(3)
+                expiries = stock.options
+            else:
+                raise
+
+        if not expiries:
+            return {"error": "No option chain available", "flagged": []}
+
+        flagged   = []
+        today     = pd.Timestamp.today().normalize()
+        checked   = 0
+
+        for expiry in expiries:
+            if checked >= UA_MAX_EXPIRIES:
+                break
+            dte = (pd.Timestamp(expiry) - today).days
+            if dte < 0:
+                continue
+            checked += 1
+
+            try:
+                time.sleep(_OPT_EXPIRY_DELAY)
+                chain = _fetch_chain_with_retry(stock, expiry)
+                if chain is None:
+                    continue
+
+                for label, opts in (("CALL", chain.calls), ("PUT", chain.puts)):
+                    opts = opts.fillna(0)
+                    if opts.empty:
+                        continue
+
+                    peer_median_vol = float(opts["volume"].median())
+
+                    for _, row in opts.iterrows():
+                        score = _score_unusual_contract(row, peer_median_vol)
+                        if score.get("unusual"):
+                            flagged.append({
+                                "ticker":      ticker,
+                                "type":        label,
+                                "strike":      round(float(row["strike"]), 2),
+                                "expiry":      expiry,
+                                "dte":         dte,
+                                "last_price":  round(float(row.get("lastPrice", 0) or 0), 2),
+                                "severity":    score["severity"],
+                                "vol_oi_ratio":score["vol_oi_ratio"],
+                                "peer_ratio":  score["peer_ratio"],
+                                "reasons":     score["reasons"],
+                                "volume":      score["volume"],
+                                "oi":          score["oi"],
+                            })
+            except Exception:
+                continue
+
+        sev_rank = {"Extreme": 3, "High": 2, "Moderate": 1}
+        flagged.sort(key=lambda x: (sev_rank.get(x["severity"], 0), x["volume"]), reverse=True)
+
+        return {"flagged": flagged, "expiries_checked": checked}
+
+    except Exception as e:
+        msg = str(e)
+        if "too many requests" in msg.lower() or "429" in msg:
+            return {"error": "Rate limited by Yahoo Finance — try again shortly (cached 15 min)", "flagged": []}
+        return {"error": f"Unusual activity scan failed ({msg})", "flagged": []}
+
+
+def check_pick_unusual_activity(ticker: str, opt: dict) -> dict | None:
+    """
+    Cross-references our already-fetched option pick (from get_option_data)
+    against the unusual-activity scan, so the Options tab can show a badge
+    without an extra fetch.
+    """
+    if not opt or "error" in opt:
+        return None
+
+    ua = scan_unusual_activity(ticker)
+    if "error" in ua or not ua.get("flagged"):
+        return None
+
+    for f in ua["flagged"]:
+        if (f["type"] == opt["label"]
+                and abs(f["strike"] - opt["strike"]) < 0.01
+                and f["expiry"] == opt["expiry"]):
+            return f
+    return None
+
+
+# ─────────────────────────────────────────────
 # TRADE ANALYSIS  — all 4 filters woven in
 # ─────────────────────────────────────────────
 def analyze(df: pd.DataFrame, ticker: str,
@@ -711,9 +870,10 @@ st.divider()
 # ─────────────────────────────────────────────
 # TOP-LEVEL TABS
 # ─────────────────────────────────────────────
-TAB_SCAN, TAB_STOCK, TAB_ALERTS, TAB_JOURNAL = st.tabs([
+TAB_SCAN, TAB_STOCK, TAB_UNUSUAL, TAB_ALERTS, TAB_JOURNAL = st.tabs([
     "📡 Watchlist Scan",
     "🔍 Stock Analysis",
+    "🌊 Unusual Activity",
     "🔔 Alert History",
     "📓 Trade Journal",
 ])
@@ -895,6 +1055,16 @@ with TAB_STOCK:
                         if not r["all_pass"]:
                             st.warning("⚠️ Not all signal filters pass — trade at your own discretion.")
 
+                        # ── Unusual activity badge on our own pick ──
+                        ua_hit = check_pick_unusual_activity(ticker, opt)
+                        if ua_hit:
+                            sev_emoji = {"Extreme":"🔴","High":"🟠","Moderate":"🟡"}.get(ua_hit["severity"],"⚪")
+                            st.markdown(f"### {sev_emoji} Unusual Activity Detected — {ua_hit['severity']}")
+                            for reason in ua_hit["reasons"]:
+                                st.caption(f"• {reason}")
+                        else:
+                            st.caption("🌊 No unusual activity flagged on this contract — see Unusual Activity tab for full chain scan.")
+
             with stab4:
                 if intraday is None or len(intraday) < 20:
                     st.warning("Not enough intraday data.")
@@ -937,7 +1107,95 @@ with TAB_STOCK:
 
 
 # ═══════════════════════════════════════════════
-# TAB 3 — ALERT HISTORY
+# TAB 3 — UNUSUAL OPTIONS ACTIVITY
+# ═══════════════════════════════════════════════
+with TAB_UNUSUAL:
+    st.subheader("🌊 Unusual Options Activity Scanner")
+    st.caption(
+        "Flags contracts where Volume far exceeds Open Interest (fresh same-day "
+        "positioning) or Volume far exceeds peer strikes in the same chain. "
+        "Built from yfinance data only — no paid options-flow feed."
+    )
+
+    ua_col1, ua_col2 = st.columns([2, 1])
+    with ua_col1:
+        ua_ticker_input = st.text_input(
+            "Ticker to scan", placeholder="TSLA", key="ua_ticker_input"
+        )
+    with ua_col2:
+        ua_scan_watchlist = st.checkbox(
+            "Scan full watchlist instead", key="ua_scan_watchlist"
+        )
+
+    st.divider()
+
+    def render_unusual_table(flagged: list, ticker_label: str = ""):
+        if not flagged:
+            st.info(f"No unusual activity detected{f' for {ticker_label}' if ticker_label else ''}.")
+            return
+        for f in flagged:
+            sev_emoji = {"Extreme": "🔴", "High": "🟠", "Moderate": "🟡"}.get(f["severity"], "⚪")
+            type_emoji = "📈" if f["type"] == "CALL" else "📉"
+            with st.container(border=True):
+                u1, u2, u3, u4, u5 = st.columns([1, 1, 1.2, 1, 1.5])
+                u1.markdown(f"**{f['ticker']}** {type_emoji} {f['type']}")
+                u2.markdown(f"Strike **${f['strike']}**")
+                u3.markdown(f"Exp {f['expiry']} ({f['dte']}d)")
+                u4.markdown(f"{sev_emoji} **{f['severity']}**")
+                u5.markdown(f"Vol **{f['volume']:,}** / OI {f['oi']:,}")
+                for reason in f["reasons"]:
+                    st.caption(f"• {reason}")
+
+    if ua_scan_watchlist:
+        st.markdown(f"### Scanning {len(SCAN_LIST)} watchlist tickers…")
+        all_flagged = []
+        progress = st.progress(0, text="Starting scan…")
+        for i, t in enumerate(SCAN_LIST):
+            progress.progress((i + 1) / len(SCAN_LIST), text=f"Scanning {t}…")
+            result = scan_unusual_activity(t)
+            if "error" not in result:
+                all_flagged.extend(result.get("flagged", []))
+        progress.empty()
+
+        sev_rank = {"Extreme": 3, "High": 2, "Moderate": 1}
+        all_flagged.sort(key=lambda x: (sev_rank.get(x["severity"], 0), x["volume"]), reverse=True)
+
+        wc1, wc2, wc3 = st.columns(3)
+        wc1.metric("Total Flagged", len(all_flagged))
+        wc2.metric("Extreme", sum(1 for f in all_flagged if f["severity"] == "Extreme"))
+        wc3.metric("Tickers Affected", len(set(f["ticker"] for f in all_flagged)))
+        st.divider()
+        render_unusual_table(all_flagged)
+
+    elif ua_ticker_input:
+        ticker_ua = ua_ticker_input.strip().upper()
+        with st.spinner(f"Scanning {ticker_ua} option chain…"):
+            result = scan_unusual_activity(ticker_ua)
+
+        if "error" in result:
+            st.error(f"⚠️ {result['error']}")
+        else:
+            flagged = result.get("flagged", [])
+            fc1, fc2, fc3 = st.columns(3)
+            fc1.metric("Flagged Contracts", len(flagged))
+            fc2.metric("Extreme", sum(1 for f in flagged if f["severity"] == "Extreme"))
+            fc3.metric("Expiries Checked", result.get("expiries_checked", 0))
+            st.divider()
+            render_unusual_table(flagged, ticker_ua)
+    else:
+        st.info("Enter a ticker above, or check the box to scan your full watchlist.")
+
+    st.divider()
+    st.markdown("**How severity is scored**")
+    st.caption(f"🟡 Moderate — Vol ≥ {UA_VOL_OI_RATIO_MIN}x OI **or** ≥ {UA_PEER_MULTIPLE_MIN}x peer median volume")
+    st.caption("🟠 High — both conditions met simultaneously")
+    st.caption(f"🔴 Extreme — Vol ≥ {UA_VOL_OI_RATIO_HIGH}x OI **and** ≥ {UA_PEER_MULTIPLE_MIN}x peer median volume")
+    st.caption(f"Contracts with fewer than {UA_MIN_VOLUME} contracts traded are ignored as noise.")
+    st.caption("⚠️ Not financial advice. This is a heuristic screen, not confirmed institutional options flow.")
+
+
+# ═══════════════════════════════════════════════
+# TAB 4 — ALERT HISTORY
 # ═══════════════════════════════════════════════
 with TAB_ALERTS:
     st.subheader("🔔 Alert History")
@@ -998,7 +1256,7 @@ with TAB_ALERTS:
 
 
 # ═══════════════════════════════════════════════
-# TAB 4 — TRADE JOURNAL
+# TAB 5 — TRADE JOURNAL
 # ═══════════════════════════════════════════════
 with TAB_JOURNAL:
     st.subheader("📓 Trade Journal — Auto Win/Loss Tracker")
