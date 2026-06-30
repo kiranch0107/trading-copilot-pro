@@ -951,19 +951,76 @@ st.header("Journal Stats")
 stats = journal_stats(journal)
 st.write(stats)
 
-# --- Admin test runner (paste into your Streamlit app) ---
+# --- Admin test runner (safe JSON serialization) ---
 import json
-from datetime import datetime
+from datetime import datetime, date
 import io
 import base64
+import numpy as np
+import pandas as pd
+from pathlib import Path
+
+def make_json_serializable(obj):
+    """Recursively convert numpy/pandas types to native Python types for JSON dumping."""
+    # Primitive native types
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+
+    # Numpy scalar types
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    if isinstance(obj, (np.str_,)):
+        return str(obj)
+
+    # Datetime / date / pandas Timestamp
+    if isinstance(obj, (datetime, date, pd.Timestamp)):
+        return obj.isoformat()
+
+    # Numpy arrays and pandas Series -> lists
+    if isinstance(obj, (np.ndarray,)):
+        try:
+            return obj.tolist()
+        except Exception:
+            return [make_json_serializable(x) for x in obj]
+
+    if isinstance(obj, pd.Series):
+        return [make_json_serializable(x) for x in obj.tolist()]
+
+    # Pandas DataFrame -> list of dicts (if small) or string summary
+    if isinstance(obj, pd.DataFrame):
+        try:
+            return obj.to_dict(orient="records")
+        except Exception:
+            return str(obj)
+
+    # Dicts and lists: recurse
+    if isinstance(obj, dict):
+        return {str(k): make_json_serializable(v) for k, v in obj.items()}
+
+    if isinstance(obj, (list, tuple, set)):
+        return [make_json_serializable(v) for v in obj]
+
+    # Fallback: try to convert via .item() for numpy scalars, else str()
+    try:
+        if hasattr(obj, "item"):
+            return make_json_serializable(obj.item())
+    except Exception:
+        pass
+
+    return str(obj)
 
 def run_tests_and_build_report():
-    report = {"meta": {"timestamp": datetime.utcnow().isoformat() + "Z"}, "single_lookup": [], "scans": [], "edge_cases": [], "dte_check": None, "alerts_file": None}
+    report = {"meta": {"timestamp": datetime.now().astimezone().isoformat()}, "single_lookup": [], "scans": [], "edge_cases": [], "dte_check": None, "alerts_file": None}
     # Single lookups
     for t in ["SPY", "AAPL", "TSLA"]:
+        entry = {"ticker": t}
         try:
             df, err = get_data_with_error(t, period="3mo", interval="1d")
-            entry = {"ticker": t, "data_error": err}
+            entry["data_error"] = err
             if df is not None:
                 last_key = str(df.index[-1])
                 dfc = compute_cached(t, last_key, df)
@@ -979,12 +1036,12 @@ def run_tests_and_build_report():
         try:
             scan_list = WATCHLIST[:5] if mode else WATCHLIST
             results, debug = scan_watchlist(scan_list)
-            report["scans"].append({"fast_mode": mode, "scan_list": scan_list, "results_count": len(results), "debug": debug})
+            report["scans"].append({"fast_mode": bool(mode), "scan_list": list(scan_list), "results_count": len(results), "debug": debug})
         except Exception as e:
-            report["scans"].append({"fast_mode": mode, "error": str(e)})
+            report["scans"].append({"fast_mode": bool(mode), "error": str(e)})
 
     # Edge case: insufficient history
-    orig_min_rows = MIN_ROWS
+    orig_min_rows = globals().get("MIN_ROWS", None)
     try:
         globals()["MIN_ROWS"] = 500
         res, debug = scan_watchlist(WATCHLIST)
@@ -992,10 +1049,11 @@ def run_tests_and_build_report():
     except Exception as e:
         report["edge_cases"].append({"test": "insufficient_history", "error": str(e)})
     finally:
-        globals()["MIN_ROWS"] = orig_min_rows
+        if orig_min_rows is not None:
+            globals()["MIN_ROWS"] = orig_min_rows
 
     # Edge case: earnings blackout
-    orig_earn = EARNINGS_DAYS
+    orig_earn = globals().get("EARNINGS_DAYS", None)
     try:
         globals()["EARNINGS_DAYS"] = 30
         lk = {}
@@ -1012,10 +1070,11 @@ def run_tests_and_build_report():
             lk["exception"] = str(e)
         report["edge_cases"].append({"test": "earnings_blackout", "EARNINGS_DAYS": 30, "lookup": lk})
     finally:
-        globals()["EARNINGS_DAYS"] = orig_earn
+        if orig_earn is not None:
+            globals()["EARNINGS_DAYS"] = orig_earn
 
     # Edge case: budget forcing no option
-    orig_budget = BUDGET_MAX
+    orig_budget = globals().get("BUDGET_MAX", None)
     try:
         globals()["BUDGET_MAX"] = 0.01
         lk = {}
@@ -1032,15 +1091,16 @@ def run_tests_and_build_report():
             lk["exception"] = str(e)
         report["edge_cases"].append({"test": "budget_no_option", "BUDGET_MAX": 0.01, "lookup": lk})
     finally:
-        globals()["BUDGET_MAX"] = orig_budget
+        if orig_budget is not None:
+            globals()["BUDGET_MAX"] = orig_budget
 
     # DTE check for SPY
     try:
         chain = get_full_chain_data("SPY")
         dtes = []
-        if "expiries" in chain:
+        if isinstance(chain, dict) and "expiries" in chain:
             for e in chain["expiries"]:
-                expiry = e["expiry"]
+                expiry = e.get("expiry")
                 try:
                     exp_dt = pd.to_datetime(expiry).date()
                 except Exception:
@@ -1062,10 +1122,11 @@ def run_tests_and_build_report():
     except Exception as e:
         report["alerts_file_error"] = str(e)
 
-    # Save report
+    # Make JSON serializable and save report
+    serializable_report = make_json_serializable(report)
     out_path = Path("test_report.json")
-    out_path.write_text(json.dumps(report, indent=2, default=str))
-    return report, str(out_path)
+    out_path.write_text(json.dumps(serializable_report, indent=2))
+    return serializable_report, str(out_path)
 
 # UI: admin button
 if st.sidebar.button("Run automated tests (admin)"):
@@ -1073,7 +1134,7 @@ if st.sidebar.button("Run automated tests (admin)"):
         report, path = run_tests_and_build_report()
     st.success(f"Tests complete — report saved to {path}")
     st.subheader("Summary")
-    st.write({"single_lookup_count": len(report["single_lookup"]), "scans": [s["results_count"] if "results_count" in s else None for s in report["scans"]]})
+    st.write({"single_lookup_count": len(report.get("single_lookup", [])), "scans": [s.get("results_count") for s in report.get("scans", [])]})
     st.subheader("Raw report (truncated)")
     st.code(json.dumps(report, indent=2)[:4000])
     # provide download link
