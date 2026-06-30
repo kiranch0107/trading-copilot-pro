@@ -1,6 +1,10 @@
 # trading_copilot_elite.py
-# Single-file Streamlit app with rate-limit circuit breaker, robust earnings handling,
-# batched fetch resilience, cached compute, and a single-ticker lookup panel.
+# Single-file Streamlit app with:
+#  - Rate-limit circuit breaker (tuned)
+#  - Batched weekly prefetch and longer TTLs for slow-changing data
+#  - Batched data fetch for watchlist
+#  - Cached compute to avoid duplicate indicator work
+#  - Option-chain fetches gated behind filter pass
 # Paste into your environment and run with `streamlit run trading_copilot_elite.py`
 
 import streamlit as st
@@ -126,7 +130,7 @@ class RateLimiter:
 _rate_limiter = RateLimiter(min_gap=0.35)
 
 # ---------------------------
-# Rate limit circuit breaker
+# Rate limit circuit breaker (tuned)
 # ---------------------------
 class RateLimitCircuitBreaker:
     """
@@ -134,7 +138,7 @@ class RateLimitCircuitBreaker:
     within a short window exceeds a threshold, the breaker trips and
     suppresses non-essential yfinance calls for `cooldown_seconds`.
     """
-    def __init__(self, window_seconds: int = 60, threshold: int = 3, cooldown_seconds: int = 180):
+    def __init__(self, window_seconds: int = 120, threshold: int = 4, cooldown_seconds: int = 300):
         self.window_seconds = window_seconds
         self.threshold = threshold
         self.cooldown_seconds = cooldown_seconds
@@ -156,7 +160,7 @@ class RateLimitCircuitBreaker:
         with self._lock:
             return time.time() < self._tripped_until
 
-_rate_limit_breaker = RateLimitCircuitBreaker(window_seconds=60, threshold=3, cooldown_seconds=180)
+_rate_limit_breaker = RateLimitCircuitBreaker(window_seconds=120, threshold=4, cooldown_seconds=300)
 
 # ---------------------------
 # YFinance helpers with retry/backoff
@@ -331,11 +335,11 @@ def check_adx(df: pd.DataFrame) -> Tuple[bool, float]:
     return adx_val >= ADX_MIN, round(adx_val, 1)
 
 # ---------------------------
-# Weekly trend (multi-timeframe)
+# Weekly trend (multi-timeframe) - longer TTL and batch prefetch below
 # ---------------------------
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=6*3600, show_spinner=False)
 def get_weekly_trend(ticker: str) -> Optional[str]:
-    # Respect circuit breaker
+    # This function remains available for single-ticker lookups, but scans use the batched prefetch.
     if _rate_limit_breaker.is_tripped():
         logger.info("Skipping weekly trend for %s due to rate-limit breaker", ticker)
         return None
@@ -374,9 +378,77 @@ def check_weekly_alignment(daily_trend: str, weekly_trend: Optional[str]) -> Tup
     return False, f"Daily {daily_trend} vs Weekly {weekly_trend} — misaligned"
 
 # ---------------------------
-# Earnings blackout (robust parsing, breaker-aware)
+# Batched weekly prefetch for scans (new)
 # ---------------------------
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=6*3600, show_spinner=False)
+def prefetch_weekly_for_tickers(tickers: list[str]) -> dict:
+    """
+    Batch-download weekly bars for multiple tickers and compute weekly EMA alignment.
+    Returns dict[ticker] -> 'Bullish'|'Bearish'|None
+    """
+    if not tickers:
+        return {}
+    # Respect breaker
+    if _rate_limit_breaker.is_tripped():
+        return {t: None for t in tickers}
+
+    try:
+        _rate_limiter.wait()
+        df = yf.download(tickers, period="2y", interval="1wk", progress=False, group_by='ticker')
+    except Exception as e:
+        logger.warning("Batch weekly fetch failed: %s", e)
+        return {t: None for t in tickers}
+
+    result = {}
+    if isinstance(df.columns, pd.MultiIndex):
+        for t in tickers:
+            try:
+                sub = df[t].dropna(subset=["Close"])
+                if len(sub) < 20:
+                    result[t] = None
+                    continue
+                sub["EMA10w"] = ta.trend.ema_indicator(sub["Close"], window=10)
+                sub["EMA20w"] = ta.trend.ema_indicator(sub["Close"], window=20)
+                sub = sub.dropna(subset=["EMA10w","EMA20w"])
+                if sub.empty:
+                    result[t] = None
+                    continue
+                price = float(sub["Close"].iloc[-1])
+                ema10w = float(sub["EMA10w"].iloc[-1])
+                ema20w = float(sub["EMA20w"].iloc[-1])
+                if price > ema10w > ema20w:
+                    result[t] = "Bullish"
+                elif price < ema10w < ema20w:
+                    result[t] = "Bearish"
+                else:
+                    result[t] = None
+            except Exception:
+                result[t] = None
+    else:
+        # single-ticker case
+        t = tickers[0]
+        try:
+            sub = df.dropna(subset=["Close"])
+            sub["EMA10w"] = ta.trend.ema_indicator(sub["Close"], window=10)
+            sub["EMA20w"] = ta.trend.ema_indicator(sub["Close"], window=20)
+            sub = sub.dropna(subset=["EMA10w","EMA20w"])
+            price = float(sub["Close"].iloc[-1])
+            ema10w = float(sub["EMA10w"].iloc[-1])
+            ema20w = float(sub["EMA20w"].iloc[-1])
+            if price > ema10w > ema20w:
+                result[t] = "Bullish"
+            elif price < ema10w < ema20w:
+                result[t] = "Bearish"
+            else:
+                result[t] = None
+        except Exception:
+            result[t] = None
+    return result
+
+# ---------------------------
+# Earnings blackout (robust parsing, longer TTL)
+# ---------------------------
+@st.cache_data(ttl=6*3600, show_spinner=False)
 def get_next_earnings(ticker: str) -> Optional[str]:
     """
     Robust earnings fetch:
@@ -748,11 +820,12 @@ def is_market_open() -> bool:
         return False
 
 # ---------------------------
-# Watchlist scan (keeps previous behavior)
+# Watchlist scan (uses batched weekly prefetch and gates option fetch)
 # ---------------------------
 def scan_watchlist(tickers: list[str]):
     spy_regime = get_spy_regime()
     data_map = batch_get_data(tickers, period="3mo", interval="1d")
+    weekly_map = prefetch_weekly_for_tickers(tickers)   # batch weekly prefetch
     results = []
     for t in tickers:
         df = data_map.get(t)
@@ -766,7 +839,7 @@ def scan_watchlist(tickers: list[str]):
         ema50 = float(dfc["EMA50"].iloc[-1])
         trend = "Bullish" if price > ema20 > ema50 else "Bearish" if price < ema20 < ema50 else "Neutral"
         adx_ok, adx_val = check_adx(dfc)
-        weekly = get_weekly_trend(t)
+        weekly = weekly_map.get(t)   # use batch result
         weekly_ok, weekly_reason = check_weekly_alignment(trend, weekly)
         earnings_ok, earnings_reason = check_earnings_blackout(t)
         regime_ok, regime_reason = check_regime_alignment(trend, spy_regime)
@@ -777,6 +850,7 @@ def scan_watchlist(tickers: list[str]):
             "regime": (regime_ok, regime_reason),
         }
         if all(v[0] for v in filters.values()):
+            # Only now fetch option chain / pick contract
             opt = get_option_data(t, price, trend, "Strong")
             rr = None
             entry = price
