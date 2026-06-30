@@ -1,3 +1,14 @@
+You’re clear: here’s a full, ready‑to‑paste single‑file app with:
+
+• Your original Swing · Options · Alerts · Journal · ADX · Multi-TF · Earnings Guard · Regime Filter framing
+• Fixed get_next_earnings (no more 'numpy.ndarray' object is not callable)
+• Options‑aware swing signal generator (daily + weekly, ATR, long & short, only when everything aligns)
+• Min DTE = 0, Max DTE = 30 enforced via sidebar and in the options engine
+• Simple, user‑friendly UI: watchlist scan + single‑ticker lookup
+
+
+Paste this as app.py or trading_copilot_elite.py and run with streamlit run app.py.
+
 # trading_copilot_elite.py
 # Single-file Streamlit app with:
 #  - Rate-limit circuit breaker (tuned)
@@ -5,7 +16,6 @@
 #  - Batched data fetch for watchlist
 #  - Cached compute to avoid duplicate indicator work
 #  - Option-chain fetches gated behind filter pass
-# Paste into your environment and run with `streamlit run trading_copilot_elite.py`
 
 import streamlit as st
 import yfinance as yf
@@ -20,6 +30,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 import pytz
+import numpy as np
 from typing import Optional, Tuple, Dict
 
 # ---------------------------
@@ -55,7 +66,7 @@ st.title("🤖 Trading Copilot ELITE")
 st.caption("Swing · Options · Alerts · Journal · ADX · Multi-TF · Earnings Guard · Regime Filter")
 
 # ---------------------------
-# CONFIG (exposed in sidebar for quick tuning)
+# CONFIG
 # ---------------------------
 WATCHLIST = [
     "TSLA", "NVDA", "AAPL", "MSFT", "AMZN",
@@ -65,13 +76,12 @@ WATCHLIST = [
 FAST_MODE = True
 SCAN_LIST = WATCHLIST[:5] if FAST_MODE else WATCHLIST
 
-# Tunables (expose in sidebar)
 st.sidebar.header("Scan Settings")
 ADX_MIN = st.sidebar.number_input("ADX minimum", value=25, min_value=1, max_value=100)
 EARNINGS_DAYS = st.sidebar.number_input("Earnings blackout days", value=3, min_value=0, max_value=30)
 BUDGET_MAX = st.sidebar.number_input("Budget max (option mid)", value=2.00, min_value=0.01, step=0.1)
-# For swing trades, use more meaningful DTE; you said “you pick”, so we bias toward swing:
-MIN_DTE = st.sidebar.number_input("Min DTE for options", value=30, min_value=7)
+MIN_DTE = st.sidebar.number_input("Min DTE for options", value=0, min_value=0, max_value=30)
+MAX_DTE = st.sidebar.number_input("Max DTE for options", value=30, min_value=0, max_value=30)
 MIN_RR = st.sidebar.number_input("Min Reward/Risk", value=1.5, min_value=0.1)
 MIN_ROWS = st.sidebar.number_input("Min history bars", value=50, min_value=10)
 VOLUME_MULT = st.sidebar.number_input("Volume multiplier", value=1.0, min_value=0.1)
@@ -225,13 +235,8 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
     df["ADX"] = ta.trend.adx(df["High"], df["Low"], df["Close"], window=14)
     return df.dropna(subset=["EMA20", "EMA50", "MACD", "Signal", "RSI", "ATR", "ADX"])
 
-# Cached compute keyed by ticker + last index to avoid recomputing on reruns
 @st.cache_data(ttl=600, show_spinner=False)
 def compute_cached(ticker: str, df_serialized_key: str, df: pd.DataFrame) -> pd.DataFrame:
-    """
-    df_serialized_key should change when the underlying data changes (e.g., last timestamp).
-    We pass the DataFrame to compute but use the key for cache identity.
-    """
     return compute(df)
 
 # ---------------------------
@@ -242,11 +247,10 @@ def check_adx(df: pd.DataFrame) -> Tuple[bool, float]:
     return adx_val >= ADX_MIN, round(adx_val, 1)
 
 # ---------------------------
-# Weekly trend (multi-timeframe) - longer TTL and batch prefetch below
+# Weekly trend
 # ---------------------------
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def get_weekly_trend(ticker: str) -> Optional[str]:
-    # Single-ticker weekly trend (used in lookup panel)
     if _rate_limit_breaker.is_tripped():
         logger.info("Skipping weekly trend for %s due to rate-limit breaker", ticker)
         return None
@@ -306,16 +310,17 @@ def check_weekly_alignment(daily_trend: str, weekly_trend: Optional[str]) -> Tup
     return False, f"Daily {daily_trend} vs weekly {weekly_trend} — misaligned"
 
 # ---------------------------
-# Earnings blackout (robust parsing, longer TTL)
+# FIXED: Earnings blackout (robust parsing)
 # ---------------------------
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def get_next_earnings(ticker: str) -> Optional[str]:
     """
     Robust earnings fetch:
-      - Respects the circuit breaker (suppresses calls when YF is rate-limited).
-      - Catches YFRateLimitError and records it in the breaker.
-      - Normalizes returned date using pd.to_datetime.
-      - Returns None on any parse/fetch failure.
+    Handles cases where Yahoo returns:
+      - a single timestamp
+      - a numpy array
+      - a list/tuple/Series
+      - None
     """
     if _rate_limit_breaker.is_tripped():
         logger.info("Skipping earnings fetch for %s because rate-limit breaker is tripped", ticker)
@@ -325,19 +330,28 @@ def get_next_earnings(ticker: str) -> Optional[str]:
         _rate_limiter.wait()
         t = yf.Ticker(ticker)
         cal = t.calendar
+
         if cal is None:
             return None
+
         if isinstance(cal, dict):
-            val = cal.get("Earnings Date")
+            raw = cal.get("Earnings Date")
         else:
-            # DataFrame-like
             if "Earnings Date" not in cal.index:
                 return None
-            val = cal.loc["Earnings Date"].values[0]
-        if val is None:
+            raw = cal.loc["Earnings Date"].values[0]
+
+        if raw is None:
             return None
-        dt = pd.to_datetime(val).date()
+
+        if isinstance(raw, (list, tuple, pd.Series)):
+            raw = raw[0]
+        if isinstance(raw, np.ndarray):
+            raw = raw.item()
+
+        dt = pd.to_datetime(raw).date()
         return dt.strftime("%Y-%m-%d")
+
     except Exception as e:
         if _is_rate_limit_error(e):
             _rate_limit_breaker.record_rate_limit()
@@ -418,7 +432,7 @@ def check_regime_alignment(daily_trend: str, spy_regime: dict) -> Tuple[bool, st
     return True, f"Regime aligned: {daily_trend} in {regime} market ✓"
 
 # ---------------------------
-# Options engine (shared chain cache)
+# Options engine (0–30 DTE)
 # ---------------------------
 _OPT_RETRY_ATTEMPTS = 3
 _OPT_RETRY_DELAY = 2.0
@@ -439,8 +453,9 @@ def get_full_chain_data(stock: str) -> dict:
         chain_data = []
         for expiry in expiries:
             time.sleep(_OPT_EXPIRY_DELAY)
-            df_calls = t.option_chain(expiry).calls
-            df_puts = t.option_chain(expiry).puts
+            oc = t.option_chain(expiry)
+            df_calls = oc.calls
+            df_puts = oc.puts
             for df_side in (df_calls, df_puts):
                 if "bid" in df_side.columns and "ask" in df_side.columns:
                     df_side["mid"] = (df_side["bid"] + df_side["ask"]) / 2.0
@@ -453,64 +468,61 @@ def get_full_chain_data(stock: str) -> dict:
         logger.exception("get_full_chain_data failed for %s: %s", stock, e)
         return {"error": str(e)}
 
-def _fetch_chain_with_retry(stock, expiry: str):
-    delay = _OPT_RETRY_DELAY
-    for attempt in range(_OPT_RETRY_ATTEMPTS):
-        try:
-            _rate_limiter.wait()
-            t = yf.Ticker(stock)
-            oc = t.option_chain(expiry)
-            return oc.calls, oc.puts
-        except Exception as e:
-            if _is_rate_limit_error(e):
-                _rate_limit_breaker.record_rate_limit()
-            logger.warning("Option chain fetch error for %s (exp %s, attempt %s): %s", stock, expiry, attempt + 1, e)
-            time.sleep(delay)
-            delay *= 2
-    return None, None
-
 def get_option_data(stock: str, price: float, trend: str, strength: str) -> dict:
-    """
-    Picks a directional CALL/PUT based on trend, budget, liquidity, spread, and DTE.
-    """
     chain = get_full_chain_data(stock)
     if chain.get("error"):
         return {"error": chain.get("error")}
+
     best = None
     best_score = -1e9
+
     for e in chain["expiries"]:
         expiry = e["expiry"]
         df_calls = e["calls"]
         df_puts = e["puts"]
+
         side_df = df_calls if trend == "Bullish" else df_puts
         if side_df is None or side_df.empty:
             continue
+
         side_df = side_df.copy()
+
         if "bid" in side_df.columns and "ask" in side_df.columns:
             side_df["mid"] = (side_df["bid"] + side_df["ask"]) / 2.0
             side_df["spread"] = (side_df["ask"] - side_df["bid"]).abs()
         else:
             continue
+
         if "mid" not in side_df.columns or "spread" not in side_df.columns:
             continue
+
         side_df["dte"] = (pd.to_datetime(expiry) - datetime.now().date()).days
-        side_df = side_df.dropna(subset=["mid", "spread"])
-        side_df = side_df[side_df["dte"] >= MIN_DTE]
+        side_df["dte"] = side_df["dte"].clip(lower=0)
+        side_df = side_df[(side_df["dte"] >= MIN_DTE) & (side_df["dte"] <= MAX_DTE)]
         if side_df.empty:
             continue
-        # Simple scoring: prefer tighter spreads, decent volume, budget-friendly
+
+        side_df = side_df.dropna(subset=["mid", "spread"])
+
         side_df["score"] = 0.0
         side_df["score"] += -side_df["spread"]
+
         if "volume" in side_df.columns:
             side_df["score"] += (side_df["volume"].fillna(0) / 1000.0)
+
         side_df["score"] += (BUDGET_MAX - side_df["mid"]).clip(lower=-10, upper=10)
+
         top = side_df.sort_values("score", ascending=False).iloc[0]
+
         if top["score"] > best_score:
             best = (top, expiry, int(top["dte"]))
             best_score = top["score"]
+
     if best is None:
         return {"error": "No liquid options found"}
+
     row, expiry, dte = best
+
     return {
         "label": "CALL" if trend == "Bullish" else "PUT",
         "strike": round(float(row["strike"]), 2),
@@ -554,7 +566,7 @@ def _score_unusual_contract(row: pd.Series, peer_median_vol: float) -> dict:
     return {"unusual": True, "severity": severity, "reasons": "; ".join(reasons)}
 
 # ---------------------------
-# Alerts and journal
+# Alerts & journal
 # ---------------------------
 def log_alert(ticker, trend, strength, entry, stop, target, rr, price, filters_passed: dict) -> None:
     alerts = load_alerts()
@@ -637,7 +649,7 @@ def journal_stats(journal: list) -> dict:
     }
 
 # ---------------------------
-# Telegram (optional)
+# Telegram
 # ---------------------------
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -654,7 +666,7 @@ def send_telegram_alert(ticker: str, message: str) -> None:
         logger.exception("Telegram send failed: %s", e)
 
 # ---------------------------
-# NEW: Swing signal generator (options-aware, daily+weekly, ATR-based)
+# Swing signal generator (options-aware)
 # ---------------------------
 def generate_swing_signal(
     ticker: str,
@@ -662,23 +674,11 @@ def generate_swing_signal(
     weekly_trend: Optional[str],
     spy_regime: dict,
 ) -> dict:
-    """
-    High-probability swing signal generator:
-      - Daily EMA20/EMA50 trend (Bullish/Bearish/Neutral)
-      - ADX strength filter
-      - Weekly trend alignment
-      - Earnings blackout
-      - SPY regime alignment
-      - ATR-based entry/stop/target
-      - Directional CALL/PUT via options engine
-    Returns a structured signal dict.
-    """
     price = float(dfc["Close"].iloc[-1])
     ema20 = float(dfc["EMA20"].iloc[-1])
     ema50 = float(dfc["EMA50"].iloc[-1])
     atr = float(dfc["ATR"].iloc[-1])
 
-    # Daily trend
     if price > ema20 > ema50:
         trend = "Bullish"
     elif price < ema20 < ema50:
@@ -698,7 +698,6 @@ def generate_swing_signal(
         "regime": (regime_ok, regime_reason),
     }
 
-    # Only when everything aligns AND trend is not Neutral
     if trend == "Neutral" or not all(v[0] for v in filters.values()):
         return {
             "ticker": ticker,
@@ -713,7 +712,6 @@ def generate_swing_signal(
             "reasoning": [v[1] for k, v in filters.items() if not v[0]],
         }
 
-    # ATR-based swing levels (you asked for ATR)
     entry = price
     if trend == "Bullish":
         stop = price - atr
@@ -721,21 +719,12 @@ def generate_swing_signal(
     else:
         stop = price + atr
         target = price - 2 * atr
-    try:
-        rr = round(abs(target - entry) / max(1e-6, abs(entry - stop)), 2)
-    except Exception:
-        rr = None
+    rr = round(abs(target - entry) / max(1e-6, abs(entry - stop)), 2)
 
-    # Options-aware: pick directional CALL/PUT
     opt = get_option_data(ticker, price, trend, "Strong")
-    if opt.get("error"):
-        options_info = None
-    else:
-        options_info = opt
+    options_info = None if opt.get("error") else opt
 
-    # Simple confidence: all filters pass + SPY regime not Unknown
     confidence = "High"
-
     reasoning = [
         f"Daily trend: {trend}",
         f"Weekly: {weekly_trend or 'Unknown'} — {weekly_reason}",
@@ -763,7 +752,7 @@ def generate_swing_signal(
     }
 
 # ---------------------------
-# Watchlist scan (now uses generate_swing_signal)
+# Watchlist scan
 # ---------------------------
 def scan_watchlist(tickers: list):
     spy_regime = get_spy_regime()
@@ -781,7 +770,6 @@ def scan_watchlist(tickers: list):
         signal = generate_swing_signal(t, dfc, weekly_trend, spy_regime)
 
         if signal["direction"] == "NONE":
-            logger.info("No swing signal for %s: %s", t, {k: v[1] for k, v in signal["filters"].items() if not v[0]})
             continue
 
         opt = signal["options"]
@@ -805,7 +793,7 @@ def scan_watchlist(tickers: list):
     return results
 
 # ---------------------------
-# Single-ticker lookup panel (now shows swing signal)
+# Single-ticker lookup
 # ---------------------------
 st.sidebar.header("Single Ticker Lookup")
 lookup_ticker = st.sidebar.text_input("Ticker symbol (e.g., AAPL)", value="", max_chars=10)
@@ -813,9 +801,8 @@ lookup_period = st.sidebar.selectbox("Period", options=["1mo", "3mo", "6mo", "1y
 lookup_interval = st.sidebar.selectbox("Interval", options=["1d", "1wk", "1mo", "1h", "5m"], index=0)
 lookup_strength = st.sidebar.selectbox("Option strength preference", options=["Strong", "Normal"], index=0)
 
-# Show breaker banner if tripped
 if _rate_limit_breaker.is_tripped():
-    st.warning("Yahoo Finance rate limits detected — some checks (earnings, weekly, options) are temporarily paused to avoid further rate limiting.")
+    st.warning("Yahoo Finance rate limits detected — some checks (earnings, weekly, options) are temporarily paused.")
 
 if st.sidebar.button("Lookup ticker"):
     ticker = lookup_ticker.strip().upper()
@@ -831,11 +818,10 @@ if st.sidebar.button("Lookup ticker"):
                 last_key = str(df.index[-1])
                 dfc = compute_cached(ticker, last_key, df)
 
-                # Basic diagnostics
                 st.subheader(f"{ticker} Diagnostics")
                 col1, col2, col3 = st.columns(3)
                 price = float(dfc["Close"].iloc[-1])
-                col1.metric("Last Price", f"${price:.2f}", delta=None)
+                col1.metric("Last Price", f"${price:.2f}")
                 col1.metric("ATR (14)", f"{dfc['ATR'].iloc[-1]:.4f}")
                 col2.metric("EMA20", f"{dfc['EMA20'].iloc[-1]:.2f}")
                 col2.metric("EMA50", f"{dfc['EMA50'].iloc[-1]:.2f}")
@@ -859,7 +845,6 @@ if st.sidebar.button("Lookup ticker"):
                 st.write(f"**SPY regime:** {spy_regime.get('regime')} — {spy_regime.get('reasoning')}")
                 st.write(f"**Regime alignment:** {regime_reason}")
 
-                # Swing signal (options-aware)
                 st.subheader("Swing Signal (Daily + Weekly, Options-aware)")
                 swing_signal = generate_swing_signal(ticker, dfc, weekly, spy_regime)
                 if swing_signal["direction"] == "NONE":
@@ -892,7 +877,6 @@ if st.sidebar.button("Lookup ticker"):
                     else:
                         st.warning("No suitable options contract found for this swing setup.")
 
-                # Manual alert + Telegram
                 col_a, col_b = st.columns(2)
                 if col_a.button("Log manual alert for this ticker"):
                     entry = price
@@ -908,7 +892,7 @@ if st.sidebar.button("Lookup ticker"):
                     st.info("Telegram send attempted (check bot/chat settings).")
 
 # ---------------------------
-# Streamlit main controls
+# Main controls
 # ---------------------------
 st.sidebar.header("Actions")
 if st.sidebar.button("Run scan now"):
