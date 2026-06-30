@@ -1129,22 +1129,62 @@ with TAB_UNUSUAL:
 
     st.divider()
 
-    def render_unusual_table(flagged: list, ticker_label: str = ""):
+    def render_unusual_table(flagged: list, ticker_label: str = "", top_n: int = 5):
         if not flagged:
             st.info(f"No unusual activity detected{f' for {ticker_label}' if ticker_label else ''}.")
             return
+
+        sev_rank = {"Extreme": 3, "High": 2, "Moderate": 1}
+        sev_emoji_map = {"Extreme": "🔴", "High": "🟠", "Moderate": "🟡"}
+
+        # ── Group by ticker ──
+        by_ticker: dict[str, list] = {}
         for f in flagged:
-            sev_emoji = {"Extreme": "🔴", "High": "🟠", "Moderate": "🟡"}.get(f["severity"], "⚪")
-            type_emoji = "📈" if f["type"] == "CALL" else "📉"
-            with st.container(border=True):
-                u1, u2, u3, u4, u5 = st.columns([1, 1, 1.2, 1, 1.5])
-                u1.markdown(f"**{f['ticker']}** {type_emoji} {f['type']}")
-                u2.markdown(f"Strike **${f['strike']}**")
-                u3.markdown(f"Exp {f['expiry']} ({f['dte']}d)")
-                u4.markdown(f"{sev_emoji} **{f['severity']}**")
-                u5.markdown(f"Vol **{f['volume']:,}** / OI {f['oi']:,}")
-                for reason in f["reasons"]:
-                    st.caption(f"• {reason}")
+            by_ticker.setdefault(f["ticker"], []).append(f)
+
+        # Order tickers by their single highest-severity / highest-volume contract
+        def ticker_sort_key(t):
+            best = max(by_ticker[t], key=lambda x: (sev_rank.get(x["severity"], 0), x["volume"]))
+            return (sev_rank.get(best["severity"], 0), best["volume"])
+
+        ordered_tickers = sorted(by_ticker.keys(), key=ticker_sort_key, reverse=True)
+
+        for t in ordered_tickers:
+            contracts = sorted(
+                by_ticker[t],
+                key=lambda x: (sev_rank.get(x["severity"], 0), x["volume"]),
+                reverse=True
+            )
+            total_count = len(contracts)
+            top_contracts = contracts[:top_n]
+
+            extreme_n = sum(1 for c in contracts if c["severity"] == "Extreme")
+            high_n    = sum(1 for c in contracts if c["severity"] == "High")
+
+            header = f"**{t}** — {total_count} flagged"
+            if total_count > top_n:
+                header += f" (showing top {top_n})"
+            badges = " ".join(filter(None, [
+                f"🔴 x{extreme_n}" if extreme_n else "",
+                f"🟠 x{high_n}" if high_n else "",
+            ]))
+
+            st.markdown(f"### {header}  {badges}")
+
+            for f in top_contracts:
+                sev_emoji  = sev_emoji_map.get(f["severity"], "⚪")
+                type_emoji = "📈" if f["type"] == "CALL" else "📉"
+                with st.container(border=True):
+                    u1, u2, u3, u4, u5 = st.columns([1, 1, 1.2, 1, 1.5])
+                    u1.markdown(f"{type_emoji} **{f['type']}**")
+                    u2.markdown(f"Strike **${f['strike']}**")
+                    u3.markdown(f"Exp {f['expiry']} ({f['dte']}d)")
+                    u4.markdown(f"{sev_emoji} **{f['severity']}**")
+                    u5.markdown(f"Vol **{f['volume']:,}** / OI {f['oi']:,}")
+                    for reason in f["reasons"]:
+                        st.caption(f"• {reason}")
+
+            st.divider()
 
     if ua_scan_watchlist:
         st.markdown(f"### Scanning {len(SCAN_LIST)} watchlist tickers…")
