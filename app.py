@@ -7,6 +7,7 @@ import json
 import requests
 import time
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pytz
 
 # ─────────────────────────────────────────────
@@ -62,7 +63,6 @@ SPY_REGIME      = True    # 4. Only trade in confirmed macro regime
 
 ALERT_LOG_FILE  = "alert_history.json"
 JOURNAL_FILE    = "trade_journal.json"
-SENT_ALERTS: dict[str, float] = {}
 
 
 # ─────────────────────────────────────────────
@@ -184,19 +184,20 @@ def is_market_open() -> bool:
 # TELEGRAM
 # ─────────────────────────────────────────────
 def send_telegram_alert(ticker: str, message: str) -> None:
+    """
+    Sends a Telegram alert. Deduplication/cooldown is handled upstream by
+    log_alert() (file-based, persists across Streamlit reruns) — no in-memory
+    dict here since that would reset to empty on every script rerun anyway.
+    """
     TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN")
     CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
     if not TOKEN or not CHAT_ID:
-        return
-    now = time.time()
-    if ticker in SENT_ALERTS and (now - SENT_ALERTS[ticker]) < COOLDOWN:
         return
     try:
         requests.post(
             f"https://api.telegram.org/bot{TOKEN}/sendMessage",
             data={"chat_id": CHAT_ID, "text": message}, timeout=5
         )
-        SENT_ALERTS[ticker] = now
     except Exception:
         pass
 
@@ -403,6 +404,14 @@ def check_regime_alignment(daily_trend: str, spy_regime: dict) -> tuple[bool, st
 # OPTIONS ENGINE  (cached 15 min — options data
 #                  is slow-moving; longer TTL
 #                  dramatically cuts API calls)
+#
+# PERFORMANCE FIX: a single shared fetch function
+# (`get_full_chain_data`) now does ONE pass over the
+# option chain per ticker. Both the "best contract pick"
+# logic and the "unusual activity scan" logic read from
+# this same cached result — previously each one called
+# stock.option_chain() independently, doubling network
+# calls for every high-quality alert.
 # ─────────────────────────────────────────────
 _OPT_RETRY_ATTEMPTS = 3      # max retries per expiry on rate-limit
 _OPT_RETRY_DELAY    = 2.0    # seconds between retries (doubles each attempt)
@@ -427,30 +436,43 @@ def _fetch_chain_with_retry(stock, expiry: str):
     return None     # all retries exhausted
 
 
-@st.cache_data(ttl=900, show_spinner=False)   # 15-min cache
-def get_option_data(ticker: str, price: float, trend: str, strength: str) -> dict:
-    try:
-        stock    = yf.Ticker(ticker)
+@st.cache_data(ttl=900, show_spinner=False)   # 15-min cache — ONE fetch serves everything below
+def get_full_chain_data(ticker: str) -> dict:
+    """
+    Single source of truth for option chain data on a ticker.
+    Fetches up to _OPT_MAX_EXPIRIES nearest valid (DTE >= MIN_DTE) expiries
+    ONCE, and returns raw calls/puts DataFrames per expiry so downstream
+    functions (best-pick selection, unusual-activity scan) never re-fetch.
 
-        # Fetching .options itself can also rate-limit — wrap it
+    Returns:
+        {
+          "error": str | None,
+          "expiries": [
+              {"expiry": str, "dte": int, "calls": DataFrame, "puts": DataFrame},
+              ...
+          ]
+        }
+    """
+    try:
+        stock = yf.Ticker(ticker)
+
         try:
-            expiries = stock.options
+            all_expiries = stock.options
         except Exception as e:
             if "too many requests" in str(e).lower() or "429" in str(e):
                 time.sleep(3)
-                expiries = stock.options   # one retry
+                all_expiries = stock.options   # one retry
             else:
                 raise
 
-        if not expiries:
-            return {"error": "No option chain available"}
+        if not all_expiries:
+            return {"error": "No option chain available", "expiries": []}
 
-        today      = pd.Timestamp.today().normalize()
-        best       = None
-        best_score = 0
-        checked    = 0
+        today   = pd.Timestamp.today().normalize()
+        result  = []
+        checked = 0
 
-        for expiry in expiries:
+        for expiry in all_expiries:
             if checked >= _OPT_MAX_EXPIRIES:
                 break
 
@@ -466,60 +488,89 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str) -> dic
                 if chain is None:
                     continue
 
-                opts = chain.calls if trend == "Bullish" else chain.puts
-                opts = opts.fillna(0)
-
-                if strength == "Strong":
-                    opts = opts[(opts["strike"] <= price*1.02) if trend=="Bullish"
-                                else (opts["strike"] >= price*0.98)]
-                else:
-                    opts = opts[(opts["strike"] >= price*0.95) & (opts["strike"] <= price*1.05)]
-
-                if opts.empty:
-                    continue
-
-                opts           = opts.copy()
-                opts["spread"] = opts["ask"] - opts["bid"]
-                opts["mid"]    = (opts["ask"] + opts["bid"]) / 2
-
-                valid = opts[(opts["mid"] > 0) & (opts["spread"]/opts["mid"] <= 0.15)]
-                valid = valid[(valid["volume"] > 0) | (valid["openInterest"] > 0)]
-
-                if valid.empty:
-                    continue
-
-                valid = valid.copy()
-                valid["liq"] = valid["volume"] + valid["openInterest"]
-                top = valid.sort_values("liq", ascending=False).iloc[0]
-
-                if top["liq"] > best_score:
-                    best       = (top, expiry, dte)
-                    best_score = top["liq"]
-
+                result.append({
+                    "expiry": expiry,
+                    "dte":    dte,
+                    "calls":  chain.calls.fillna(0),
+                    "puts":   chain.puts.fillna(0),
+                })
             except Exception:
                 continue   # skip this expiry, try next
 
-        if best is None:
-            return {"error": "No liquid options found"}
+        if not result:
+            return {"error": "No valid expiries found (all below MIN_DTE or fetch failed)", "expiries": []}
 
-        row, expiry, dte = best
-        return {
-            "label":      "CALL" if trend=="Bullish" else "PUT",
-            "strike":     round(float(row["strike"]), 2),
-            "expiry":     expiry,
-            "mid":        round(float(row["mid"]), 2),
-            "last_price": round(float(row["lastPrice"]), 2),
-            "volume":     int(row["volume"]),
-            "oi":         int(row["openInterest"]),
-            "spread":     round(float(row["spread"]), 2),
-            "dte":        dte,
-            "is_budget":  row["mid"] <= BUDGET_MAX,
-        }
+        return {"error": None, "expiries": result}
+
     except Exception as e:
         msg = str(e)
         if "too many requests" in msg.lower() or "429" in msg:
-            return {"error": "Rate limited by Yahoo Finance — options will load on next refresh (cached 15 min)"}
-        return {"error": f"Option data unavailable ({msg})"}
+            return {"error": "Rate limited by Yahoo Finance — try again shortly (cached 15 min)", "expiries": []}
+        return {"error": f"Option chain fetch failed ({msg})", "expiries": []}
+
+
+def get_option_data(ticker: str, price: float, trend: str, strength: str) -> dict:
+    """
+    Picks the best liquid contract from the SHARED chain cache
+    (get_full_chain_data) — does not fetch anything itself.
+    """
+    chain_data = get_full_chain_data(ticker)
+    if chain_data["error"]:
+        return {"error": chain_data["error"]}
+
+    best       = None
+    best_score = 0
+
+    for entry in chain_data["expiries"]:
+        expiry, dte = entry["expiry"], entry["dte"]
+        opts = entry["calls"] if trend == "Bullish" else entry["puts"]
+
+        if opts.empty:
+            continue
+
+        if strength == "Strong":
+            opts = opts[(opts["strike"] <= price*1.02) if trend=="Bullish"
+                        else (opts["strike"] >= price*0.98)]
+        else:
+            opts = opts[(opts["strike"] >= price*0.95) & (opts["strike"] <= price*1.05)]
+
+        if opts.empty:
+            continue
+
+        opts           = opts.copy()
+        opts["spread"] = opts["ask"] - opts["bid"]
+        opts["mid"]    = (opts["ask"] + opts["bid"]) / 2
+
+        valid = opts[(opts["mid"] > 0) & (opts["spread"]/opts["mid"] <= 0.15)]
+        valid = valid[(valid["volume"] > 0) | (valid["openInterest"] > 0)]
+
+        if valid.empty:
+            continue
+
+        valid = valid.copy()
+        valid["liq"] = valid["volume"] + valid["openInterest"]
+        top = valid.sort_values("liq", ascending=False).iloc[0]
+
+        if top["liq"] > best_score:
+            best       = (top, expiry, dte)
+            best_score = top["liq"]
+
+    if best is None:
+        return {"error": "No liquid options found"}
+
+    row, expiry, dte = best
+    return {
+        "label":      "CALL" if trend=="Bullish" else "PUT",
+        "strike":     round(float(row["strike"]), 2),
+        "expiry":     expiry,
+        "mid":        round(float(row["mid"]), 2),
+        "last_price": round(float(row["lastPrice"]), 2),
+        "volume":     int(row["volume"]),
+        "oi":         int(row["openInterest"]),
+        "spread":     round(float(row["spread"]), 2),
+        "dte":        dte,
+        "is_budget":  row["mid"] <= BUDGET_MAX,
+    }
 
 
 # ─────────────────────────────────────────────
@@ -537,7 +588,8 @@ UA_VOL_OI_RATIO_MIN   = 2.0     # Volume >= 2x Open Interest
 UA_VOL_OI_RATIO_HIGH  = 4.0     # Volume >= 4x Open Interest → "Extreme"
 UA_PEER_MULTIPLE_MIN  = 3.0     # Volume >= 3x the median volume of peer strikes
 UA_MIN_VOLUME         = 100     # ignore noise — require some minimum contracts traded
-UA_MAX_EXPIRIES       = 3       # scan same number of expiries as the options engine
+# Note: expiry count is now controlled by _OPT_MAX_EXPIRIES in get_full_chain_data()
+# since both this scan and the options engine share that single fetch.
 
 
 def _score_unusual_contract(row: pd.Series, peer_median_vol: float) -> dict:
@@ -582,82 +634,54 @@ def _score_unusual_contract(row: pd.Series, peer_median_vol: float) -> dict:
     }
 
 
-@st.cache_data(ttl=900, show_spinner=False)   # 15-min cache, matches options engine
 def scan_unusual_activity(ticker: str) -> dict:
     """
     Scans the option chain (calls + puts, nearest expiries) for unusual
     activity using Volume/OI ratio + Volume vs peer-strike-median.
-    Returns a dict with a flat list of flagged contracts, sorted by severity.
+
+    PERFORMANCE FIX: reads from the SHARED get_full_chain_data() cache —
+    no independent network fetch. If get_option_data() already ran for
+    this ticker this session, this call costs nothing extra.
     """
-    try:
-        stock = yf.Ticker(ticker)
-        try:
-            expiries = stock.options
-        except Exception as e:
-            if "too many requests" in str(e).lower() or "429" in str(e):
-                time.sleep(3)
-                expiries = stock.options
-            else:
-                raise
+    chain_data = get_full_chain_data(ticker)
+    if chain_data["error"]:
+        return {"error": chain_data["error"], "flagged": []}
 
-        if not expiries:
-            return {"error": "No option chain available", "flagged": []}
+    flagged = []
+    checked = 0
 
-        flagged   = []
-        today     = pd.Timestamp.today().normalize()
-        checked   = 0
+    for entry in chain_data["expiries"]:
+        expiry, dte = entry["expiry"], entry["dte"]
+        checked += 1
 
-        for expiry in expiries:
-            if checked >= UA_MAX_EXPIRIES:
-                break
-            dte = (pd.Timestamp(expiry) - today).days
-            if dte < 0:
-                continue
-            checked += 1
-
-            try:
-                time.sleep(_OPT_EXPIRY_DELAY)
-                chain = _fetch_chain_with_retry(stock, expiry)
-                if chain is None:
-                    continue
-
-                for label, opts in (("CALL", chain.calls), ("PUT", chain.puts)):
-                    opts = opts.fillna(0)
-                    if opts.empty:
-                        continue
-
-                    peer_median_vol = float(opts["volume"].median())
-
-                    for _, row in opts.iterrows():
-                        score = _score_unusual_contract(row, peer_median_vol)
-                        if score.get("unusual"):
-                            flagged.append({
-                                "ticker":      ticker,
-                                "type":        label,
-                                "strike":      round(float(row["strike"]), 2),
-                                "expiry":      expiry,
-                                "dte":         dte,
-                                "last_price":  round(float(row.get("lastPrice", 0) or 0), 2),
-                                "severity":    score["severity"],
-                                "vol_oi_ratio":score["vol_oi_ratio"],
-                                "peer_ratio":  score["peer_ratio"],
-                                "reasons":     score["reasons"],
-                                "volume":      score["volume"],
-                                "oi":          score["oi"],
-                            })
-            except Exception:
+        for label, opts in (("CALL", entry["calls"]), ("PUT", entry["puts"])):
+            if opts.empty:
                 continue
 
-        sev_rank = {"Extreme": 3, "High": 2, "Moderate": 1}
-        flagged.sort(key=lambda x: (sev_rank.get(x["severity"], 0), x["volume"]), reverse=True)
+            peer_median_vol = float(opts["volume"].median())
 
-        return {"flagged": flagged, "expiries_checked": checked}
+            for _, row in opts.iterrows():
+                score = _score_unusual_contract(row, peer_median_vol)
+                if score.get("unusual"):
+                    flagged.append({
+                        "ticker":      ticker,
+                        "type":        label,
+                        "strike":      round(float(row["strike"]), 2),
+                        "expiry":      expiry,
+                        "dte":         dte,
+                        "last_price":  round(float(row.get("lastPrice", 0) or 0), 2),
+                        "severity":    score["severity"],
+                        "vol_oi_ratio":score["vol_oi_ratio"],
+                        "peer_ratio":  score["peer_ratio"],
+                        "reasons":     score["reasons"],
+                        "volume":      score["volume"],
+                        "oi":          score["oi"],
+                    })
 
-    except Exception as e:
-        msg = str(e)
-        if "too many requests" in msg.lower() or "429" in msg:
-            return {"error": "Rate limited by Yahoo Finance — try again shortly (cached 15 min)", "flagged": []}
-        return {"error": f"Unusual activity scan failed ({msg})", "flagged": []}
+    sev_rank = {"Extreme": 3, "High": 2, "Moderate": 1}
+    flagged.sort(key=lambda x: (sev_rank.get(x["severity"], 0), x["volume"]), reverse=True)
+
+    return {"flagged": flagged, "expiries_checked": checked}
 
 
 def check_pick_unusual_activity(ticker: str, opt: dict) -> dict | None:
@@ -684,8 +708,8 @@ def check_pick_unusual_activity(ticker: str, opt: dict) -> dict | None:
 # ─────────────────────────────────────────────
 # TRADE ANALYSIS  — all 4 filters woven in
 # ─────────────────────────────────────────────
-def analyze(df: pd.DataFrame, ticker: str,
-            spy_regime: dict | None = None) -> dict | None:
+def _analyze_uncached(df: pd.DataFrame, ticker: str,
+                       spy_regime: dict | None = None) -> dict | None:
 
     latest  = df.iloc[-1]
     price   = float(latest["Close"])
@@ -792,6 +816,26 @@ def analyze(df: pd.DataFrame, ticker: str,
     }
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def analyze(_df: pd.DataFrame, ticker: str, latest_bar_key: str,
+            spy_regime: dict | None = None) -> dict | None:
+    """
+    PERFORMANCE FIX: cached wrapper around _analyze_uncached.
+
+    Streamlit reruns the entire script on every interaction (button click,
+    text input, etc). Without this cache, every rerun would re-trigger the
+    full filter pipeline — weekly trend fetch, earnings fetch, options chain
+    fetch — even if nothing about the underlying data changed.
+
+    Cache key includes `latest_bar_key` (the timestamp of the most recent
+    candle) so the cache correctly invalidates once new daily data arrives,
+    while staying hit during repeated reruns within the same trading day.
+    The leading underscore on `_df` tells Streamlit not to hash the
+    DataFrame itself (expensive) — we hash latest_bar_key instead.
+    """
+    return _analyze_uncached(_df, ticker, spy_regime=spy_regime)
+
+
 # ─────────────────────────────────────────────
 # SCALP ENGINE
 # ─────────────────────────────────────────────
@@ -817,19 +861,47 @@ def scalp(df: pd.DataFrame) -> dict:
 
 # ─────────────────────────────────────────────
 # WATCHLIST SCAN  (cached 5 min)
+#
+# PERFORMANCE FIX: tickers are now fetched + analyzed
+# CONCURRENTLY via ThreadPoolExecutor instead of one
+# at a time. yfinance calls are I/O-bound (waiting on
+# network), so threads give a real speedup here without
+# needing async rewrites. Capped at 4 workers to stay
+# polite to Yahoo Finance's rate limiter.
 # ─────────────────────────────────────────────
+_SCAN_MAX_WORKERS = 4
+
+
+def _scan_one_ticker(ticker: str, spy_regime: dict) -> dict | None:
+    """Fetch + analyze a single ticker. Designed to run inside a thread."""
+    df = get_data(ticker)
+    if df is None:
+        return None
+    df = compute(df)
+    if df.empty:
+        return None
+    latest_bar_key = f"{ticker}_{df.index[-1]}"
+    return analyze(df, ticker, latest_bar_key, spy_regime=spy_regime)
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def run_watchlist_scan(scan_list: tuple) -> list[dict]:
     spy_regime = get_spy_regime()
     results    = []
-    for t in scan_list:
-        df = get_data(t)
-        if df is None:
-            continue
-        df = compute(df)
-        r  = analyze(df, t, spy_regime=spy_regime)
-        if r:
-            results.append(r)
+
+    with ThreadPoolExecutor(max_workers=_SCAN_MAX_WORKERS) as executor:
+        futures = {
+            executor.submit(_scan_one_ticker, t, spy_regime): t
+            for t in scan_list
+        }
+        for future in as_completed(futures):
+            try:
+                r = future.result()
+                if r:
+                    results.append(r)
+            except Exception:
+                continue   # one ticker failing shouldn't kill the whole scan
+
     return results
 
 
@@ -979,7 +1051,8 @@ with TAB_STOCK:
             pc5.metric("Vol vs Avg", f"{vol_now/vol_avg:.2f}×")
 
             st.divider()
-            r = analyze(df, ticker, spy_regime=spy_regime)
+            latest_bar_key = f"{ticker}_{df.index[-1]}"
+            r = analyze(df, ticker, latest_bar_key, spy_regime=spy_regime)
 
             stab1, stab2, stab3, stab4, stab5 = st.tabs([
                 "💼 Swing Trade", "🔬 Signal Filters",
@@ -1312,7 +1385,8 @@ with TAB_JOURNAL:
         m2.metric("Win Rate",      f"{stats['win_rate']}%")
         m3.metric("Wins/Losses",   f"{stats['wins']} / {stats['losses']}")
         m4.metric("Avg Win (R)",   stats["avg_win_r"])
-        m5.metric("Profit Factor", stats["profit_factor"])
+        pf_display = "∞" if stats["profit_factor"] == float("inf") else stats["profit_factor"]
+        m5.metric("Profit Factor", pf_display)
         m6.metric("Total R",       stats["total_r"])
         streak_emoji = "🔥" if stats["streak_type"] == "WIN" else "❄️"
         st.caption(f"{streak_emoji} Current streak: **{stats['streak']} {stats['streak_type']}** in a row")
