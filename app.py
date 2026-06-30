@@ -809,18 +809,36 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
     volume  = float(latest["Volume"])
     vol_avg = float(latest["VOL_AVG20"])
 
-    vol_ok = volume >= vol_avg * VOLUME_MULT
+    # ── SWING-TRADING CALIBRATION ──
+    # Original thresholds (RSI 40-75 bull / Volume >= 1.0x avg) were tuned
+    # for momentum/breakout entries already in motion — which excludes the
+    # classic swing-trade pullback entry (price still trending, RSI cooled
+    # to neutral/oversold-ish, volume not yet confirmed). Widened below to
+    # catch setups EARLIER in the swing without lowering trend-quality bar:
+    #   - RSI bull band: 40-75 → 30-75 (catches pullback buys, not just
+    #     already-extended momentum)
+    #   - RSI bear band: 25-60 → 25-70 (mirrors the bull widening)
+    #   - Volume: removed hard floor, now scored as a strength input instead
+    #     of a binary gate — a quiet-volume day no longer kills an otherwise
+    #     valid EMA+MACD+RSI trend signal, it just can't reach "Strong"
+    vol_ok       = volume >= vol_avg * VOLUME_MULT       # still computed, used for strength scoring
+    vol_soft_ok  = volume >= vol_avg * 0.70               # minimum floor — filters out dead/illiquid days only
 
     # ── Base trend ──
-    if price > ema20 > ema50 and macd > signal and 40 < rsi < 75 and vol_ok:
+    if price > ema20 > ema50 and macd > signal and 30 < rsi < 75 and vol_soft_ok:
         trend = "Bullish"
-    elif price < ema20 < ema50 and macd < signal and 25 < rsi < 60 and vol_ok:
+    elif price < ema20 < ema50 and macd < signal and 25 < rsi < 70 and vol_soft_ok:
         trend = "Bearish"
     else:
         return None
 
+    # "Strong" now requires the FULL original strict bar (extended RSI +
+    # above-average volume) — so high-quality alerts keep the same
+    # standard as before. "Normal" setups are the newly-unlocked pullback
+    # entries: valid trend, just not yet at peak momentum.
     strength = "Strong" if (
-        (rsi > 60 and trend=="Bullish") or (rsi < 40 and trend=="Bearish")
+        ((rsi > 60 and trend=="Bullish") or (rsi < 40 and trend=="Bearish"))
+        and vol_ok
     ) else "Normal"
 
     # ── Run all 4 enhancement filters ──
@@ -1156,13 +1174,49 @@ with TAB_STOCK:
             with stab1:
                 if r is None:
                     st.warning("⚠️ No valid trade setup — base signal conditions not met.")
-                    st.markdown("""
-**Required for a signal:**
-- EMA20 > EMA50 (bullish) or EMA20 < EMA50 (bearish)
-- MACD crossed above/below signal line
-- RSI 40–75 (bull) / 25–60 (bear)
-- Volume ≥ 20-day average
-""")
+
+                    # ── Live diagnostic: show actual values vs what's required ──
+                    ema20_v = float(df["EMA20"].iloc[-1])
+                    ema50_v = float(df["EMA50"].iloc[-1])
+                    macd_v  = float(df["MACD"].iloc[-1])
+                    sig_v   = float(df["Signal"].iloc[-1])
+                    rsi_v   = latest_rsi
+                    vol_ratio = vol_now / vol_avg if vol_avg else 0
+
+                    trend_stack_bull = latest_price > ema20_v > ema50_v
+                    trend_stack_bear = latest_price < ema20_v < ema50_v
+                    macd_bull = macd_v > sig_v
+                    macd_bear = macd_v < sig_v
+                    rsi_bull_ok = 30 < rsi_v < 75
+                    rsi_bear_ok = 25 < rsi_v < 70
+                    vol_floor_ok = vol_ratio >= 0.70
+
+                    def chk(ok): return "✅" if ok else "❌"
+
+                    st.markdown("**Why no signal fired (current values vs requirement):**")
+                    st.caption(
+                        f"{chk(trend_stack_bull or trend_stack_bear)} Trend stack — "
+                        f"Price ${latest_price:.2f} / EMA20 ${ema20_v:.2f} / EMA50 ${ema50_v:.2f} "
+                        f"(need clean stack: Price>EMA20>EMA50 or reverse)"
+                    )
+                    st.caption(
+                        f"{chk(macd_bull or macd_bear)} MACD momentum — "
+                        f"MACD {macd_v:.3f} vs Signal {sig_v:.3f} "
+                        f"(need MACD on the same side as trend direction)"
+                    )
+                    st.caption(
+                        f"{chk(rsi_bull_ok or rsi_bear_ok)} RSI band — "
+                        f"RSI {rsi_v:.1f} (need 30–75 for bullish, 25–70 for bearish)"
+                    )
+                    st.caption(
+                        f"{chk(vol_floor_ok)} Volume floor — "
+                        f"{vol_ratio:.2f}× the 20-day average (need ≥ 0.70×)"
+                    )
+                    st.caption(
+                        "Note: ALL FOUR must align on the same day for a signal — "
+                        "this is common even in a healthy trend if momentum or volume "
+                        "hasn't caught up yet. Check back as new daily bars form."
+                    )
                 else:
                     n_pass  = r["filters_pass"]
                     n_total = r["filters_total"]
