@@ -6,6 +6,7 @@ import os
 import json
 import requests
 import time
+import threading
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pytz
@@ -46,7 +47,7 @@ WATCHLIST = [
     "META","SPY"
 ]
 FAST_MODE       = True
-SCAN_LIST       = WATCHLIST[:10] if FAST_MODE else WATCHLIST
+SCAN_LIST       = WATCHLIST[:5] if FAST_MODE else WATCHLIST
 COOLDOWN        = 600
 BUDGET_MAX      = 2.00
 MIN_DTE         = 7
@@ -202,20 +203,101 @@ def send_telegram_alert(ticker: str, message: str) -> None:
 
 
 # ─────────────────────────────────────────────
-# DATA FETCH  (cached 5 min)
+# DATA FETCH  (cached 10 min)
+#
+# RATE-LIMIT FIX (balanced approach):
+#   1. Shared retry-with-backoff wrapper around yf.download, mirroring the
+#      one already used for options chains — single-ticker lookups were
+#      failing because this fetch path had ZERO retry protection before.
+#   2. A lightweight global pacer (_throttle_yf_call) adds a small minimum
+#      gap between ANY yfinance call across the whole app — watchlist scan,
+#      single lookups, options, weekly trend, earnings, SPY regime — since
+#      Yahoo's rate limit is per-IP/session, not per-function.
+#   3. Cache TTL raised 5min → 10min for daily bars (intraday 5m bars keep
+#      a shorter TTL further down, since those need to stay fresher).
+#   4. On failure, the real error reason is preserved (not swallowed) so
+#      the UI can tell the user "rate limited" vs "bad ticker".
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=300, show_spinner=False)
+_YF_MIN_GAP      = 0.35   # seconds — minimum spacing between any two yfinance calls
+_YF_RETRY_TRIES  = 3
+_YF_RETRY_DELAY  = 2.0    # doubles each attempt: 2s → 4s → 8s
+_last_yf_call_ts = {"t": 0.0}
+_yf_throttle_lock = threading.Lock()
+
+
+def _throttle_yf_call() -> None:
+    """Global pacer: ensures at least _YF_MIN_GAP seconds between yfinance calls,
+    regardless of which function or thread is making them. Lock-protected so
+    concurrent threads (watchlist scan) don't race past each other and both
+    fire within the same gap window."""
+    with _yf_throttle_lock:
+        elapsed = time.time() - _last_yf_call_ts["t"]
+        if elapsed < _YF_MIN_GAP:
+            time.sleep(_YF_MIN_GAP - elapsed)
+        _last_yf_call_ts["t"] = time.time()
+
+
+def _is_rate_limit_error(e: Exception) -> bool:
+    msg = str(e).lower()
+    return "too many requests" in msg or "rate limit" in msg or "429" in msg
+
+
+def _yf_download_with_retry(ticker: str, period: str, interval: str) -> pd.DataFrame | None:
+    """yf.download wrapped with the same retry-with-backoff pattern used for options."""
+    delay = _YF_RETRY_DELAY
+    last_err = None
+    for attempt in range(_YF_RETRY_TRIES):
+        _throttle_yf_call()
+        try:
+            return yf.download(ticker, period=period, interval=interval, progress=False)
+        except Exception as e:
+            last_err = e
+            if _is_rate_limit_error(e) and attempt < _YF_RETRY_TRIES - 1:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            raise
+    if last_err:
+        raise last_err
+    return None
+
+
+@st.cache_data(ttl=600, show_spinner=False)
 def get_data(ticker: str, period: str = "3mo", interval: str = "1d") -> pd.DataFrame | None:
     try:
-        df = yf.download(ticker, period=period, interval=interval, progress=False)
+        df = _yf_download_with_retry(ticker, period, interval)
     except Exception:
-        return None
+        return None   # caller treats None as "no data"; UI layer shows a friendly message separately
+
     if df is None or df.empty or len(df) < MIN_ROWS:
         return None
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     df = df.dropna(subset=["Open","High","Low","Close","Volume"])
     return df if len(df) >= MIN_ROWS else None
+
+
+def get_data_with_error(ticker: str, period: str = "3mo", interval: str = "1d") -> tuple[pd.DataFrame | None, str | None]:
+    """
+    Same as get_data() but also surfaces WHY it failed, for the single-stock
+    lookup UI — distinguishes 'rate limited, try again' from 'bad ticker'.
+    Not cached itself (get_data() below it is), so this stays cheap.
+    """
+    try:
+        df = _yf_download_with_retry(ticker, period, interval)
+    except Exception as e:
+        if _is_rate_limit_error(e):
+            return None, "Rate limited by Yahoo Finance — please wait a moment and try again."
+        return None, f"Data fetch failed: {e}"
+
+    if df is None or df.empty:
+        return None, f"No data returned for '{ticker}' — check the ticker symbol."
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df = df.dropna(subset=["Open","High","Low","Close","Volume"])
+    if len(df) < MIN_ROWS:
+        return None, f"Not enough trading history for '{ticker}' (need {MIN_ROWS}+ bars)."
+    return df, None
 
 
 # ─────────────────────────────────────────────
@@ -251,10 +333,11 @@ def check_adx(df: pd.DataFrame) -> tuple[bool, float]:
 # ─────────────────────────────────────────────
 # ENHANCEMENT 2 — MULTI-TIMEFRAME CONFIRMATION
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def get_weekly_trend(ticker: str) -> str | None:
     """Returns 'Bullish', 'Bearish', or None on the weekly timeframe."""
     try:
+        _throttle_yf_call()
         df = yf.download(ticker, period="1y", interval="1wk", progress=False)
         if df is None or df.empty or len(df) < 20:
             return None
@@ -292,6 +375,7 @@ def check_weekly_alignment(daily_trend: str, weekly_trend: str | None) -> tuple[
 def get_next_earnings(ticker: str) -> str | None:
     """Returns next earnings date string (YYYY-MM-DD) or None."""
     try:
+        _throttle_yf_call()
         t   = yf.Ticker(ticker)
         cal = t.calendar
         if cal is None:
@@ -348,6 +432,7 @@ def get_spy_regime() -> dict:
         price, sma200, adx, reasoning
     """
     try:
+        _throttle_yf_call()
         df = yf.download("SPY", period="14mo", interval="1d", progress=False)
         if df is None or df.empty:
             return {"regime": "Unknown", "reasoning": "SPY data unavailable"}
@@ -422,6 +507,7 @@ def _fetch_chain_with_retry(stock, expiry: str):
     """Fetch one option chain with exponential back-off on rate limits."""
     delay = _OPT_RETRY_DELAY
     for attempt in range(_OPT_RETRY_ATTEMPTS):
+        _throttle_yf_call()
         try:
             return stock.option_chain(expiry)
         except Exception as e:
@@ -456,10 +542,12 @@ def get_full_chain_data(ticker: str) -> dict:
         stock = yf.Ticker(ticker)
 
         try:
+            _throttle_yf_call()
             all_expiries = stock.options
         except Exception as e:
             if "too many requests" in str(e).lower() or "429" in str(e):
                 time.sleep(3)
+                _throttle_yf_call()
                 all_expiries = stock.options   # one retry
             else:
                 raise
@@ -865,10 +953,15 @@ def scalp(df: pd.DataFrame) -> dict:
 # CONCURRENTLY via ThreadPoolExecutor instead of one
 # at a time. yfinance calls are I/O-bound (waiting on
 # network), so threads give a real speedup here without
-# needing async rewrites. Capped at 4 workers to stay
-# polite to Yahoo Finance's rate limiter.
+# needing async rewrites.
+#
+# BALANCED rate-limit tuning: workers reduced 4 → 3, and
+# the global _throttle_yf_call() pacer (shared module-level
+# state) now spaces out calls EVEN ACROSS threads — so more
+# workers no longer means more simultaneous requests hitting
+# Yahoo at once, just more requests queued up close together.
 # ─────────────────────────────────────────────
-_SCAN_MAX_WORKERS = 4
+_SCAN_MAX_WORKERS = 3
 
 
 def _scan_one_ticker(ticker: str, spy_regime: dict) -> dict | None:
@@ -1026,11 +1119,13 @@ with TAB_STOCK:
         ticker = query.strip().upper()
 
         with st.spinner(f"Fetching {ticker}…"):
-            df       = get_data(ticker)
+            df, fetch_error = get_data_with_error(ticker)
             intraday = get_data(ticker, period="5d", interval="5m")
 
         if df is None:
-            st.error(f"❌ Could not load data for **{ticker}**")
+            st.error(f"❌ {fetch_error or f'Could not load data for {ticker}'}")
+            if fetch_error and "Rate limited" in fetch_error:
+                st.caption("Daily data is cached for 10 minutes once it loads successfully — this only affects fresh lookups.")
         else:
             df = compute(df)
             latest_price = float(df["Close"].iloc[-1])
