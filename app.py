@@ -303,14 +303,6 @@ def check_weekly_alignment(daily_trend: str, weekly_trend: Optional[str]) -> Tup
 # ---------------------------
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def get_next_earnings(ticker: str) -> Optional[str]:
-    """
-    Robust earnings fetch:
-    Handles cases where Yahoo returns:
-      - a single timestamp
-      - a numpy array
-      - a list/tuple/Series
-      - None
-    """
     if _rate_limit_breaker.is_tripped():
         logger.info("Skipping earnings fetch for %s because rate-limit breaker is tripped", ticker)
         return None
@@ -421,7 +413,7 @@ def check_regime_alignment(daily_trend: str, spy_regime: dict) -> Tuple[bool, st
     return True, f"Regime aligned: {daily_trend} in {regime} market ✓"
 
 # ---------------------------
-# Options engine (0–30 DTE)
+# Options engine (0–30 DTE, fixed DTE calc)
 # ---------------------------
 _OPT_RETRY_ATTEMPTS = 3
 _OPT_RETRY_DELAY = 2.0
@@ -485,8 +477,16 @@ def get_option_data(stock: str, price: float, trend: str, strength: str) -> dict
         if "mid" not in side_df.columns or "spread" not in side_df.columns:
             continue
 
-        side_df["dte"] = (pd.to_datetime(expiry) - datetime.now().date()).days
-        side_df["dte"] = side_df["dte"].clip(lower=0)
+        # FIXED: scalar expiry → date, then DTE
+        try:
+            exp_dt = pd.to_datetime(expiry).date()
+        except Exception:
+            # fallback: assume expiry is already date-like string
+            exp_dt = datetime.strptime(str(expiry), "%Y-%m-%d").date()
+
+        dte_val = (exp_dt - datetime.now().date()).days
+        side_df["dte"] = int(max(0, dte_val))
+
         side_df = side_df[(side_df["dte"] >= MIN_DTE) & (side_df["dte"] <= MAX_DTE)]
         if side_df.empty:
             continue
