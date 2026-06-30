@@ -1,5 +1,6 @@
 # trading_copilot_elite.py
-# Single-file Streamlit app with added single-ticker lookup panel (search box + diagnostics).
+# Single-file Streamlit app with rate-limit circuit breaker, robust earnings handling,
+# batched fetch resilience, cached compute, and a single-ticker lookup panel.
 # Paste into your environment and run with `streamlit run trading_copilot_elite.py`
 
 import streamlit as st
@@ -12,11 +13,10 @@ import requests
 import time
 import threading
 import logging
-from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 import pytz
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict
 
 # ---------------------------
 # Logging
@@ -120,11 +120,43 @@ class RateLimiter:
             elapsed = time.time() - self._last_ts
             if elapsed < self._min_gap:
                 to_sleep = self._min_gap - elapsed
-                # short sleeps are acceptable; keep them minimal
                 time.sleep(to_sleep)
             self._last_ts = time.time()
 
 _rate_limiter = RateLimiter(min_gap=0.35)
+
+# ---------------------------
+# Rate limit circuit breaker
+# ---------------------------
+class RateLimitCircuitBreaker:
+    """
+    Tracks recent YF rate-limit events. When the number of rate-limit hits
+    within a short window exceeds a threshold, the breaker trips and
+    suppresses non-essential yfinance calls for `cooldown_seconds`.
+    """
+    def __init__(self, window_seconds: int = 60, threshold: int = 3, cooldown_seconds: int = 180):
+        self.window_seconds = window_seconds
+        self.threshold = threshold
+        self.cooldown_seconds = cooldown_seconds
+        self._events = []  # timestamps of recent rate-limit events
+        self._tripped_until = 0.0
+        self._lock = threading.Lock()
+
+    def record_rate_limit(self):
+        now = time.time()
+        with self._lock:
+            self._events.append(now)
+            cutoff = now - self.window_seconds
+            self._events = [t for t in self._events if t >= cutoff]
+            if len(self._events) >= self.threshold:
+                self._tripped_until = now + self.cooldown_seconds
+                logger.warning("RateLimitCircuitBreaker tripped until %s", datetime.fromtimestamp(self._tripped_until))
+
+    def is_tripped(self) -> bool:
+        with self._lock:
+            return time.time() < self._tripped_until
+
+_rate_limit_breaker = RateLimitCircuitBreaker(window_seconds=60, threshold=3, cooldown_seconds=180)
 
 # ---------------------------
 # YFinance helpers with retry/backoff
@@ -134,7 +166,7 @@ _YF_RETRY_DELAY = 2.0
 
 def _is_rate_limit_error(e: Exception) -> bool:
     msg = str(e).lower()
-    return "too many requests" in msg or "rate limit" in msg or "429" in msg
+    return "too many requests" in msg or "rate limit" in msg or "429" in msg or "yf ratelimiterror" in msg
 
 def _yf_download_with_retry(ticker: str, period: str, interval: str) -> pd.DataFrame:
     delay = _YF_RETRY_DELAY
@@ -146,11 +178,13 @@ def _yf_download_with_retry(ticker: str, period: str, interval: str) -> pd.DataF
             return df
         except Exception as e:
             last_err = e
-            if _is_rate_limit_error(e) and attempt < _YF_RETRY_TRIES - 1:
-                logger.warning("Rate limited on yf.download(%s). Backing off %ss", ticker, delay)
-                time.sleep(delay)
-                delay *= 2
-                continue
+            if _is_rate_limit_error(e):
+                logger.warning("Rate limited on yf.download(%s). Attempt %s/%s", ticker, attempt+1, _YF_RETRY_TRIES)
+                _rate_limit_breaker.record_rate_limit()
+                if attempt < _YF_RETRY_TRIES - 1:
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
             logger.exception("yf.download failed for %s: %s", ticker, e)
             raise
     if last_err:
@@ -161,6 +195,10 @@ def get_data_with_error(ticker: str, period: str = "3mo", interval: str = "1d") 
     """
     Fetch data and return (df, error_message). This surfaces why a fetch failed.
     """
+    # If breaker is tripped, avoid calling yfinance for non-essential fetches
+    if _rate_limit_breaker.is_tripped():
+        return None, "Skipped due to Yahoo Finance rate-limit cooldown"
+
     try:
         df = _yf_download_with_retry(ticker, period, interval)
     except Exception as e:
@@ -186,33 +224,64 @@ def get_data(ticker: str, period: str = "3mo", interval: str = "1d") -> Optional
     return df
 
 # ---------------------------
-# Batched fetch for multiple tickers (watchlist)
+# Batched fetch for multiple tickers (watchlist) with breaker and fallback
 # ---------------------------
 @st.cache_data(ttl=300, show_spinner=False)
 def batch_get_data(tickers: list[str], period: str = "3mo", interval: str = "1d") -> Dict[str, pd.DataFrame]:
     """
-    Fetch daily bars for multiple tickers in a single yf.download call when possible.
-    Returns dict[ticker] -> DataFrame (only for tickers with valid data).
+    Batched fetch with:
+      - early filtering of obviously invalid tickers (leading $ or non-alphanumeric)
+      - circuit-breaker check to avoid batch calls when YF is rate-limited
+      - fallback to per-ticker fetch for resilience
     """
     if not tickers:
         return {}
-    _rate_limiter.wait()
-    try:
-        df = yf.download(tickers, period=period, interval=interval, progress=False, group_by='ticker')
-    except Exception as e:
-        logger.exception("Batch yf.download failed: %s", e)
-        # Fall back to per-ticker fetch to maximize resilience
+    # quick filter: skip tickers that look like indices or invalid symbols
+    cleaned = []
+    for t in tickers:
+        tstr = str(t).strip()
+        if not tstr:
+            continue
+        if tstr.startswith("$") or " " in tstr or "/" in tstr:
+            logger.info("Skipping suspicious ticker format: %s", tstr)
+            continue
+        cleaned.append(tstr.upper())
+
+    if not cleaned:
+        return {}
+
+    # If breaker is tripped, avoid a batch call and fall back to per-ticker fetch
+    if _rate_limit_breaker.is_tripped():
+        logger.info("Rate-limit breaker tripped: using per-ticker fallback for %s", cleaned)
         result = {}
-        for t in tickers:
+        for t in cleaned:
+            d, _ = get_data_with_error(t, period, interval)
+            if d is not None:
+                result[t] = d
+        return result
+
+    # Try a single batched download
+    try:
+        _rate_limiter.wait()
+        df = yf.download(cleaned, period=period, interval=interval, progress=False, group_by='ticker')
+    except Exception as e:
+        msg = str(e).lower()
+        if _is_rate_limit_error(e):
+            logger.warning("Batch yf.download rate-limited: %s", e)
+            _rate_limit_breaker.record_rate_limit()
+        else:
+            logger.exception("Batch yf.download failed: %s", e)
+        # fallback to per-ticker fetch
+        result = {}
+        for t in cleaned:
             d, _ = get_data_with_error(t, period, interval)
             if d is not None:
                 result[t] = d
         return result
 
     result = {}
-    # If group_by='ticker', columns are nested per ticker
     if isinstance(df.columns, pd.MultiIndex):
-        for t in tickers:
+        for t in cleaned:
             try:
                 sub = df[t].dropna(subset=["Open","High","Low","Close","Volume"], how="any")
                 if len(sub) >= MIN_ROWS:
@@ -220,11 +289,10 @@ def batch_get_data(tickers: list[str], period: str = "3mo", interval: str = "1d"
             except Exception:
                 continue
     else:
-        # Single-ticker result (when only one ticker requested)
-        if len(tickers) == 1:
+        if len(cleaned) == 1:
             sub = df.dropna(subset=["Open","High","Low","Close","Volume"], how="any")
             if len(sub) >= MIN_ROWS:
-                result[tickers[0]] = sub
+                result[cleaned[0]] = sub
     return result
 
 # ---------------------------
@@ -267,6 +335,10 @@ def check_adx(df: pd.DataFrame) -> Tuple[bool, float]:
 # ---------------------------
 @st.cache_data(ttl=900, show_spinner=False)
 def get_weekly_trend(ticker: str) -> Optional[str]:
+    # Respect circuit breaker
+    if _rate_limit_breaker.is_tripped():
+        logger.info("Skipping weekly trend for %s due to rate-limit breaker", ticker)
+        return None
     try:
         _rate_limiter.wait()
         df = yf.download(ticker, period="1y", interval="1wk", progress=False)
@@ -287,6 +359,10 @@ def get_weekly_trend(ticker: str) -> Optional[str]:
             return "Bearish"
         return None
     except Exception as e:
+        if _is_rate_limit_error(e):
+            _rate_limit_breaker.record_rate_limit()
+            logger.warning("Rate limit while fetching weekly trend for %s", ticker)
+            return None
         logger.exception("get_weekly_trend failed for %s: %s", ticker, e)
         return None
 
@@ -298,29 +374,37 @@ def check_weekly_alignment(daily_trend: str, weekly_trend: Optional[str]) -> Tup
     return False, f"Daily {daily_trend} vs Weekly {weekly_trend} — misaligned"
 
 # ---------------------------
-# Earnings blackout (robust parsing)
+# Earnings blackout (robust parsing, breaker-aware)
 # ---------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_next_earnings(ticker: str) -> Optional[str]:
+    """
+    Robust earnings fetch:
+      - Respects the circuit breaker (suppresses calls when YF is rate-limited).
+      - Catches YFRateLimitError and records it in the breaker.
+      - Normalizes returned date using pd.to_datetime.
+      - Returns None on any parse/fetch failure.
+    """
+    if _rate_limit_breaker.is_tripped():
+        logger.info("Skipping earnings fetch for %s because rate-limit breaker is tripped", ticker)
+        return None
+
     try:
         _rate_limiter.wait()
         t = yf.Ticker(ticker)
         cal = t.calendar
         if cal is None:
             return None
-        # Normalize to a single timestamp using pandas
         if isinstance(cal, dict):
             date_val = cal.get("Earnings Date")
             if isinstance(date_val, (list, tuple)):
                 date_val = date_val[0]
             ts = pd.to_datetime(date_val, errors="coerce")
         elif isinstance(cal, pd.DataFrame):
-            # try to find a column named like "Earnings Date"
             if "Earnings Date" in cal.columns:
                 val = cal["Earnings Date"].iloc[0]
                 ts = pd.to_datetime(val, errors="coerce")
             else:
-                # fallback: take first cell that looks like a date
                 first = cal.iloc[0].dropna().iloc[0] if not cal.empty else None
                 ts = pd.to_datetime(first, errors="coerce")
         else:
@@ -329,6 +413,11 @@ def get_next_earnings(ticker: str) -> Optional[str]:
             return None
         return str(ts.date())
     except Exception as e:
+        msg = str(e).lower()
+        if _is_rate_limit_error(e):
+            logger.warning("YF rate limit detected while fetching earnings for %s: %s", ticker, e)
+            _rate_limit_breaker.record_rate_limit()
+            return None
         logger.exception("get_next_earnings failed for %s: %s", ticker, e)
         return None
 
@@ -382,6 +471,10 @@ def get_spy_regime() -> dict:
             reasoning = f"SPY ${price:.0f} near 200-SMA ${sma200:.0f} — choppy (ADX {adx_val:.0f})"
         return {"regime": regime, "price": round(price,2), "sma200": round(sma200,2), "adx": round(adx_val,1), "reasoning": reasoning}
     except Exception as e:
+        if _is_rate_limit_error(e):
+            _rate_limit_breaker.record_rate_limit()
+            logger.warning("Rate limit while fetching SPY regime")
+            return {"regime": "Unknown", "reasoning": "Rate limited"}
         logger.exception("get_spy_regime failed: %s", e)
         return {"regime": "Unknown", "reasoning": str(e)}
 
@@ -411,13 +504,14 @@ def _fetch_chain_with_retry(stock, expiry: str):
             return stock.option_chain(expiry)
         except Exception as e:
             msg = str(e).lower()
-            if "too many requests" in msg or "rate limit" in msg or "429" in msg:
+            if _is_rate_limit_error(e):
+                logger.warning("Rate limited fetching option chain %s %s; attempt %s", getattr(stock, "ticker", "unknown"), expiry, attempt+1)
+                _rate_limit_breaker.record_rate_limit()
                 if attempt < _OPT_RETRY_ATTEMPTS - 1:
-                    logger.warning("Rate limited fetching option chain %s %s; backing off %ss", stock.ticker, expiry, delay)
                     time.sleep(delay)
                     delay *= 2
                     continue
-            logger.exception("Option chain fetch failed for %s expiry %s: %s", stock.ticker, expiry, e)
+            logger.exception("Option chain fetch failed for %s expiry %s: %s", getattr(stock, "ticker", "unknown"), expiry, e)
             raise
     return None
 
@@ -429,6 +523,10 @@ def get_full_chain_data(ticker: str, min_dte: int = MIN_DTE, max_expiries: int =
         try:
             all_expiries = stock.options
         except Exception as e:
+            if _is_rate_limit_error(e):
+                _rate_limit_breaker.record_rate_limit()
+                logger.warning("Rate limited listing expiries for %s", ticker)
+                return {"error": "Rate limited when listing expiries", "expiries": []}
             logger.exception("Failed to get options list for %s: %s", ticker, e)
             return {"error": f"Failed to list expiries: {e}", "expiries": []}
         if not all_expiries:
@@ -461,6 +559,9 @@ def get_full_chain_data(ticker: str, min_dte: int = MIN_DTE, max_expiries: int =
             return {"error": "No valid expiries found (all below MIN_DTE or fetch failed)", "expiries": []}
         return {"error": None, "expiries": result}
     except Exception as e:
+        if _is_rate_limit_error(e):
+            _rate_limit_breaker.record_rate_limit()
+            return {"error": "Rate limited by Yahoo Finance — try again shortly (cached 15 min)", "expiries": []}
         logger.exception("get_full_chain_data failed for %s: %s", ticker, e)
         return {"error": f"Option chain fetch failed ({e})", "expiries": []}
 
@@ -490,7 +591,6 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str) -> dic
             continue
         valid = valid.copy()
         valid["liq"] = valid["volume"] + valid["openInterest"]
-        # small scoring tweak: prefer tighter spread and higher liquidity
         valid["score"] = valid["liq"] / (1 + (valid["spread"] / (valid["mid"] + 1e-6)))
         top = valid.sort_values("score", ascending=False).iloc[0]
         if top["score"] > best_score:
@@ -513,7 +613,7 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str) -> dic
     }
 
 # ---------------------------
-# Unusual activity scoring (kept similar but robust)
+# Unusual activity scoring
 # ---------------------------
 UA_VOL_OI_RATIO_MIN = 2.0
 UA_VOL_OI_RATIO_HIGH = 4.0
@@ -701,6 +801,11 @@ lookup_ticker = st.sidebar.text_input("Ticker symbol (e.g., AAPL)", value="", ma
 lookup_period = st.sidebar.selectbox("Period", options=["1mo","3mo","6mo","1y","2y"], index=1)
 lookup_interval = st.sidebar.selectbox("Interval", options=["1d","1wk","1mo","1h","5m"], index=0)
 lookup_strength = st.sidebar.selectbox("Option strength preference", options=["Strong","Normal"], index=0)
+
+# Show breaker banner if tripped
+if _rate_limit_breaker.is_tripped():
+    st.warning("Yahoo Finance rate limits detected — some checks (earnings, weekly, options) are temporarily paused to avoid further rate limiting.")
+
 if st.sidebar.button("Lookup ticker"):
     ticker = lookup_ticker.strip().upper()
     if not ticker:
@@ -760,12 +865,10 @@ if st.sidebar.button("Lookup ticker"):
                     for e in chain["expiries"]:
                         df_calls = e["calls"]
                         df_puts = e["puts"]
-                        # compute peer median volumes per expiry for calls and puts
                         for side_df, side in ((df_calls, "CALL"), (df_puts, "PUT")):
                             if side_df.empty:
                                 continue
                             peer_med = side_df["volume"].median() if "volume" in side_df.columns else 0
-                            # look at top volume strikes
                             top = side_df.sort_values("volume", ascending=False).head(5)
                             for _, r in top.iterrows():
                                 score = _score_unusual_contract(r, peer_med)
@@ -786,7 +889,6 @@ if st.sidebar.button("Lookup ticker"):
                 st.write("Actions")
                 col_a, col_b = st.columns(2)
                 if col_a.button("Log alert for this ticker"):
-                    # simple alert log using ATR stop/target
                     entry = price
                     stop = price - dfc["ATR"].iloc[-1] if trend == "Bullish" else price + dfc["ATR"].iloc[-1]
                     target = price + 2 * dfc["ATR"].iloc[-1] if trend == "Bullish" else price - 2 * dfc["ATR"].iloc[-1]
