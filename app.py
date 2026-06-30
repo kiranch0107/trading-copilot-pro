@@ -1,14 +1,3 @@
-You’re clear: here’s a full, ready‑to‑paste single‑file app with:
-
-• Your original Swing · Options · Alerts · Journal · ADX · Multi-TF · Earnings Guard · Regime Filter framing
-• Fixed get_next_earnings (no more 'numpy.ndarray' object is not callable)
-• Options‑aware swing signal generator (daily + weekly, ATR, long & short, only when everything aligns)
-• Min DTE = 0, Max DTE = 30 enforced via sidebar and in the options engine
-• Simple, user‑friendly UI: watchlist scan + single‑ticker lookup
-
-
-Paste this as app.py or trading_copilot_elite.py and run with streamlit run app.py.
-
 # trading_copilot_elite.py
 # Single-file Streamlit app with:
 #  - Rate-limit circuit breaker (tuned)
