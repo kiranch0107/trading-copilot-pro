@@ -1,13 +1,6 @@
 # trading_copilot_elite.py
-# Single-file patched version of the original Streamlit app.
-# Improvements included:
-#  - Encapsulated rate limiter
-#  - Batched yf.download for watchlist scans
-#  - Cached compute() wrapper to avoid duplicate indicator work
-#  - Structured logging and clearer error propagation
-#  - Safer earnings parsing with pd.to_datetime
-#  - Minor option-pick scoring improvement and cache-key hygiene
-# Paste this file into your environment and run with `streamlit run trading_copilot_elite.py`
+# Single-file Streamlit app with added single-ticker lookup panel (search box + diagnostics).
+# Paste into your environment and run with `streamlit run trading_copilot_elite.py`
 
 import streamlit as st
 import yfinance as yf
@@ -655,7 +648,7 @@ def is_market_open() -> bool:
         return False
 
 # ---------------------------
-# UI: Simple watchlist scan using batched fetch + cached compute
+# Watchlist scan (keeps previous behavior)
 # ---------------------------
 def scan_watchlist(tickers: list[str]):
     spy_regime = get_spy_regime()
@@ -666,10 +659,8 @@ def scan_watchlist(tickers: list[str]):
         if df is None:
             st.info(f"No data for {t} or not enough history")
             continue
-        # Use last index as cache key so compute_cached invalidates when new bar arrives
         last_key = str(df.index[-1])
         dfc = compute_cached(t, last_key, df)
-        # Basic trend detection example
         price = float(dfc["Close"].iloc[-1])
         ema20 = float(dfc["EMA20"].iloc[-1])
         ema50 = float(dfc["EMA50"].iloc[-1])
@@ -685,9 +676,7 @@ def scan_watchlist(tickers: list[str]):
             "earnings": (earnings_ok, earnings_reason),
             "regime": (regime_ok, regime_reason),
         }
-        # Example: only log alerts that pass all filters
         if all(v[0] for v in filters.values()):
-            # pick option contract (best available)
             opt = get_option_data(t, price, trend, "Strong")
             rr = None
             entry = price
@@ -705,7 +694,113 @@ def scan_watchlist(tickers: list[str]):
     return results
 
 # ---------------------------
-# Streamlit main
+# Single-ticker lookup panel
+# ---------------------------
+st.sidebar.header("Single Ticker Lookup")
+lookup_ticker = st.sidebar.text_input("Ticker symbol (e.g., AAPL)", value="", max_chars=10)
+lookup_period = st.sidebar.selectbox("Period", options=["1mo","3mo","6mo","1y","2y"], index=1)
+lookup_interval = st.sidebar.selectbox("Interval", options=["1d","1wk","1mo","1h","5m"], index=0)
+lookup_strength = st.sidebar.selectbox("Option strength preference", options=["Strong","Normal"], index=0)
+if st.sidebar.button("Lookup ticker"):
+    ticker = lookup_ticker.strip().upper()
+    if not ticker:
+        st.sidebar.error("Enter a ticker symbol first.")
+    else:
+        with st.spinner(f"Fetching data for {ticker}..."):
+            df, err = get_data_with_error(ticker, period=lookup_period, interval=lookup_interval)
+            if err:
+                st.error(f"Data error: {err}")
+            else:
+                st.success(f"Data fetched: {len(df)} bars")
+                last_key = str(df.index[-1])
+                dfc = compute_cached(ticker, last_key, df)
+                # Basic diagnostics
+                st.subheader(f"{ticker} Diagnostics")
+                col1, col2, col3 = st.columns(3)
+                price = float(dfc["Close"].iloc[-1])
+                col1.metric("Last Price", f"${price:.2f}", delta=None)
+                col1.metric("ATR (14)", f"{dfc['ATR'].iloc[-1]:.4f}")
+                col2.metric("EMA20", f"{dfc['EMA20'].iloc[-1]:.2f}")
+                col2.metric("EMA50", f"{dfc['EMA50'].iloc[-1]:.2f}")
+                adx_ok, adx_val = check_adx(dfc)
+                col3.metric("ADX", f"{adx_val}", delta="OK" if adx_ok else "Low")
+                # Trend and alignment
+                ema20 = float(dfc["EMA20"].iloc[-1])
+                ema50 = float(dfc["EMA50"].iloc[-1])
+                trend = "Bullish" if price > ema20 > ema50 else "Bearish" if price < ema20 < ema50 else "Neutral"
+                st.write(f"**Daily trend:** {trend}")
+                weekly = get_weekly_trend(ticker)
+                weekly_ok, weekly_reason = check_weekly_alignment(trend, weekly)
+                st.write(f"**Weekly alignment:** {weekly or 'Unknown'} — {weekly_reason}")
+                # Earnings
+                earnings_ok, earnings_reason = check_earnings_blackout(ticker)
+                st.write(f"**Earnings check:** {earnings_reason}")
+                # SPY regime
+                spy_regime = get_spy_regime()
+                regime_ok, regime_reason = check_regime_alignment(trend, spy_regime)
+                st.write(f"**SPY regime:** {spy_regime.get('regime')} — {spy_regime.get('reasoning')}")
+                st.write(f"**Regime alignment:** {regime_reason}")
+                # Option pick
+                with st.spinner("Selecting option contract..."):
+                    opt = get_option_data(ticker, price, trend, lookup_strength)
+                    if opt.get("error"):
+                        st.warning(f"Option pick: {opt.get('error')}")
+                    else:
+                        st.write("**Best option contract (scored)**")
+                        st.write(f"Type: {opt.get('label')}  Strike: {opt.get('strike')}  Expiry: {opt.get('expiry')}  Mid: {opt.get('mid')}")
+                        st.write(f"Volume: {opt.get('volume')}  OI: {opt.get('oi')}  Spread: {opt.get('spread')}")
+                        st.write(f"Budget-friendly: {'Yes' if opt.get('is_budget') else 'No'}")
+                # Unusual activity quick scan (uses first expiry if available)
+                chain = get_full_chain_data(ticker)
+                if chain.get("error"):
+                    st.info(f"Options chain: {chain.get('error')}")
+                else:
+                    st.write("**Unusual activity scan (top strikes)**")
+                    ua_rows = []
+                    for e in chain["expiries"]:
+                        df_calls = e["calls"]
+                        df_puts = e["puts"]
+                        # compute peer median volumes per expiry for calls and puts
+                        for side_df, side in ((df_calls, "CALL"), (df_puts, "PUT")):
+                            if side_df.empty:
+                                continue
+                            peer_med = side_df["volume"].median() if "volume" in side_df.columns else 0
+                            # look at top volume strikes
+                            top = side_df.sort_values("volume", ascending=False).head(5)
+                            for _, r in top.iterrows():
+                                score = _score_unusual_contract(r, peer_med)
+                                if score.get("unusual"):
+                                    ua_rows.append({
+                                        "expiry": e["expiry"], "dte": e["dte"], "side": side,
+                                        "strike": r.get("strike"), "vol": int(r.get("volume",0)),
+                                        "oi": int(r.get("openInterest",0)), "severity": score.get("severity"),
+                                        "reasons": score.get("reasons")
+                                    })
+                    if not ua_rows:
+                        st.write("No unusual activity detected (per current heuristics).")
+                    else:
+                        ua_df = pd.DataFrame(ua_rows).sort_values(["severity","vol"], ascending=[False, False])
+                        st.dataframe(ua_df.reset_index(drop=True))
+                # Quick action buttons
+                st.markdown("---")
+                st.write("Actions")
+                col_a, col_b = st.columns(2)
+                if col_a.button("Log alert for this ticker"):
+                    # simple alert log using ATR stop/target
+                    entry = price
+                    stop = price - dfc["ATR"].iloc[-1] if trend == "Bullish" else price + dfc["ATR"].iloc[-1]
+                    target = price + 2 * dfc["ATR"].iloc[-1] if trend == "Bullish" else price - 2 * dfc["ATR"].iloc[-1]
+                    rr = round(abs(target - entry) / max(1e-6, abs(entry - stop)), 2)
+                    filters = {"adx": (adx_ok, f"ADX {adx_val}"), "weekly": (weekly_ok, weekly_reason), "earnings": (earnings_ok, earnings_reason)}
+                    log_alert(ticker, trend, "Manual", entry, stop, target, rr, price, filters)
+                    st.success("Alert logged to alert_history.json")
+                if col_b.button("Send test Telegram message"):
+                    msg = f"Test alert for {ticker} {trend} ${price:.2f}"
+                    send_telegram_alert(ticker, msg)
+                    st.info("Telegram send attempted (check bot/chat settings).")
+
+# ---------------------------
+# Streamlit main controls
 # ---------------------------
 st.sidebar.header("Actions")
 if st.sidebar.button("Run scan now"):
