@@ -197,4 +197,14 @@ if single_ticker:
 
         if stop and target:
             rr = round(abs(target-entry)/abs(entry-stop),2)
-            st.markdown(f"**Trade Idea:** Entry {entry}, Stop {stop},
+            st.markdown(f"**Trade Idea:** Entry {entry}, Stop {stop}, Target {target}, RR {rr}")
+
+        opt_chain = get_option_chain(single_ticker)
+        st.subheader("💹 Option Chain (sample calls)")
+        st.dataframe(opt_chain[["expiry","strike","mid","spread","volume","openInterest"]].head(10))
+
+        # Journal stats display
+        journal = load_journal()
+        stats = journal_stats(journal)
+        if stats:
+            st.subheader("📒
