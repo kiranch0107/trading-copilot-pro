@@ -45,8 +45,8 @@ strategy = st.sidebar.selectbox(
     "Option Scoring Strategy",
     ["sell_premium", "buy_directional", "hedge"],
     format_func=lambda x: {
-        "sell_premium": "Premium Selling",
         "buy_directional": "Directional Buying",
+        "sell_premium": "Premium Selling",
         "hedge": "Hedging"
     }[x]
 )
