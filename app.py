@@ -43,7 +43,7 @@ single_ticker = st.sidebar.text_input("🔍 Lookup single ticker", value="")
 
 strategy = st.sidebar.selectbox(
     "Option Scoring Strategy",
-    ["sell_premium", "buy_directional", "hedge"],
+    ["buy_directional", "sell_premium", "hedge"],
     format_func=lambda x: {
         "buy_directional": "Directional Buying",
         "sell_premium": "Premium Selling",
