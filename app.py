@@ -205,6 +205,4 @@ if single_ticker:
 
         # Journal stats display
         journal = load_journal()
-        stats = journal_stats(journal)
-        if stats:
-            st.subheader("📒
+        stats
