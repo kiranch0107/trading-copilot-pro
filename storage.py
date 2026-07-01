@@ -1,10 +1,13 @@
+# storage.py
 import json
 import time
 from pathlib import Path
 from typing import Any, List, Dict
-from .config import Config
 from datetime import datetime
 import os
+
+# Use top-level import (files must be in the same directory)
+from config import Config
 
 def make_json_serializable(obj: Any) -> Any:
     """Convert common non-serializable types to JSON-friendly types."""
@@ -34,7 +37,6 @@ def make_json_serializable(obj: Any) -> Any:
         return {str(k): make_json_serializable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple, set)):
         return [make_json_serializable(v) for v in obj]
-    # fallback
     try:
         return str(obj)
     except Exception:
@@ -43,14 +45,11 @@ def make_json_serializable(obj: Any) -> Any:
 def atomic_write(path: Path, data: Any) -> None:
     """
     Atomically write JSON-serializable data to path using a temp file and rename.
-    This reduces risk of partial writes or corruption.
     """
     tmp = path.with_suffix(f".tmp.{int(time.time()*1000)}")
     text = json.dumps(make_json_serializable(data), indent=2)
-    # ensure parent exists
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp.write_text(text)
-    # On POSIX, replace is atomic
     tmp.replace(path)
 
 def safe_read_json(path: Path) -> List[Dict]:
@@ -65,16 +64,13 @@ def safe_read_json(path: Path) -> List[Dict]:
         data = json.loads(raw)
         if isinstance(data, list):
             return data
-        # If not a list, return as list-wrapped
         return list(data)
     except json.JSONDecodeError:
-        # backup corrupted file
         ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
         corrupt_path = path.with_suffix(f".corrupt.{ts}")
         try:
             path.replace(corrupt_path)
         except Exception:
-            # fallback: move via os.rename
             try:
                 os.rename(path, corrupt_path)
             except Exception:
