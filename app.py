@@ -5,12 +5,14 @@ import pandas as pd
 import ta
 import numpy as np
 import altair as alt
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import json
 from pathlib import Path
 import time
 import logging
+from math import log, sqrt, exp
+from scipy.stats import norm
 
 # ---------------------------
 # Logging
@@ -41,6 +43,7 @@ single_ticker = st.sidebar.text_input("🔍 Lookup single ticker", value="")
 
 ALERT_LOG_FILE = Path("alert_history.json")
 JOURNAL_FILE = Path("trade_journal.json")
+IV_HISTORY_FILE = Path("iv_history.json")
 
 # ---------------------------
 # Persistence helpers
@@ -54,7 +57,7 @@ def _load(path: Path) -> list:
         logger.exception("Failed to load %s: %s", path, e)
         return []
 
-def _save(path: Path, data: list) -> None:
+def _save(path: Path, data) -> None:
     try:
         path.write_text(json.dumps(data, indent=2))
     except Exception as e:
@@ -64,6 +67,21 @@ def load_alerts(): return _load(ALERT_LOG_FILE)
 def save_alerts(alerts): _save(ALERT_LOG_FILE, alerts)
 def load_journal(): return _load(JOURNAL_FILE)
 def save_journal(journal): _save(JOURNAL_FILE, journal)
+
+def load_iv_history():
+    try:
+        if not IV_HISTORY_FILE.exists():
+            return {}
+        return json.loads(IV_HISTORY_FILE.read_text())
+    except Exception as e:
+        logger.exception("Failed to load IV history: %s", e)
+        return {}
+
+def save_iv_history(data):
+    try:
+        IV_HISTORY_FILE.write_text(json.dumps(data, indent=2))
+    except Exception as e:
+        logger.exception("Failed to save IV history: %s", e)
 
 # ---------------------------
 # Data fetch
@@ -91,7 +109,6 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
     df["RSI"] = ta.momentum.rsi(df["Close"], window=14)
     df["ADX"] = ta.trend.adx(df["High"], df["Low"], df["Close"], window=14)
     df["ATR"] = ta.volatility.average_true_range(df["High"], df["Low"], df["Close"], window=14)
-    # VWAP cumulative (approx for daily series)
     typical = (df["High"] + df["Low"] + df["Close"]) / 3.0
     cum_vol = df["Volume"].cumsum().replace(0, np.nan)
     df["VWAP"] = (typical * df["Volume"]).cumsum() / cum_vol
@@ -131,14 +148,46 @@ def generate_signal(ticker, df):
     }
 
 # ---------------------------
-# Option chain (robust)
+# Black-Scholes Greeks
+# ---------------------------
+def black_scholes_greeks(S, K, T, r, sigma, option_type="call"):
+    """
+    Returns delta, gamma, theta, vega for European option using Black-Scholes.
+    S: spot price
+    K: strike
+    T: time to expiry in years (float)
+    r: risk-free rate (annual)
+    sigma: implied volatility (annual, decimal)
+    option_type: "call" or "put"
+    """
+    try:
+        if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+            return {"delta": np.nan, "gamma": np.nan, "theta": np.nan, "vega": np.nan}
+        d1 = (log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt(T))
+        d2 = d1 - sigma * sqrt(T)
+        if option_type.lower() in ("call", "c"):
+            delta = norm.cdf(d1)
+            theta = -(S * norm.pdf(d1) * sigma) / (2 * sqrt(T)) - r * K * exp(-r * T) * norm.cdf(d2)
+        else:
+            delta = -norm.cdf(-d1)
+            theta = -(S * norm.pdf(d1) * sigma) / (2 * sqrt(T)) + r * K * exp(-r * T) * norm.cdf(-d2)
+        gamma = norm.pdf(d1) / (S * sigma * sqrt(T))
+        vega = S * norm.pdf(d1) * sqrt(T)
+        # theta returned per year; convert to per day if desired by dividing by 365
+        return {"delta": float(delta), "gamma": float(gamma), "theta": float(theta), "vega": float(vega)}
+    except Exception as e:
+        logger.exception("Black-Scholes greeks calculation failed: %s", e)
+        return {"delta": np.nan, "gamma": np.nan, "theta": np.nan, "vega": np.nan}
+
+# ---------------------------
+# Option chain (with IV Rank and Greeks)
 # ---------------------------
 @st.cache_data(ttl=900, show_spinner=False)
-def get_option_chain(ticker):
+def get_option_chain_with_greeks(ticker, risk_free_rate=0.03, iv_history_lookback_days=365):
     """
-    Robust option chain fetch:
-    - Handles yfinance rate errors and returns an empty DataFrame on failure.
-    - Returns combined calls+puts with mid and spread columns where available.
+    Fetch option chain, compute mid/spread, compute IV Rank using stored IV history,
+    compute Greeks per contract using Black-Scholes, and compute a simple option_score.
+    Returns a DataFrame with added columns: mid, spread, impliedVolatility, iv_rank, delta, gamma, theta, vega, option_score.
     """
     try:
         t = yf.Ticker(ticker)
@@ -149,16 +198,15 @@ def get_option_chain(ticker):
             logger.warning("Could not fetch expiries for %s: %s", ticker, e)
             expiries = []
 
-        expiries = expiries[:2]  # limit to first 2 expiries to reduce load
+        expiries = expiries[:4]  # limit to first few expiries to reduce load
         frames = []
         for expiry in expiries:
             try:
                 oc = t.option_chain(expiry)
-                for side_df in (oc.calls, oc.puts):
+                for side_name, side_df in (("CALL", oc.calls), ("PUT", oc.puts)):
                     if side_df is None or side_df.empty:
                         continue
                     df_side = side_df.copy()
-                    # normalize column names
                     df_side = df_side.rename(columns={c: c.strip() if isinstance(c, str) else c for c in df_side.columns})
                     if "bid" in df_side.columns and "ask" in df_side.columns:
                         df_side["mid"] = (df_side["bid"].fillna(0) + df_side["ask"].fillna(0)) / 2.0
@@ -167,22 +215,156 @@ def get_option_chain(ticker):
                         df_side["mid"] = np.nan
                         df_side["spread"] = np.nan
                     df_side["expiry"] = expiry
-                    # add a 'type' column if not present to indicate call/put
-                    if "contractSymbol" in df_side.columns and "type" not in df_side.columns:
-                        # infer type from presence of call/put columns: oc.calls vs oc.puts
-                        df_side["type"] = "CALL" if side_df is oc.calls else "PUT"
+                    df_side["type"] = side_name
                     frames.append(df_side)
-                # small delay to be polite
-                time.sleep(0.15)
+                time.sleep(0.12)
             except Exception as e:
                 logger.warning("Failed to fetch option chain for %s expiry %s: %s", ticker, expiry, e)
                 continue
 
         if not frames:
             return pd.DataFrame()
-        return pd.concat(frames, ignore_index=True, sort=False)
+
+        opt = pd.concat(frames, ignore_index=True, sort=False)
+
+        # Normalize impliedVolatility column name variants
+        iv_col = None
+        for candidate in ["impliedVolatility", "impliedVol", "iv"]:
+            if candidate in opt.columns:
+                iv_col = candidate
+                break
+        if iv_col is None:
+            opt["impliedVolatility"] = np.nan
+        else:
+            opt["impliedVolatility"] = opt[iv_col].astype(float)
+
+        # Compute a per-ticker current IV metric (median of available IVs)
+        ivs = opt["impliedVolatility"].dropna()
+        current_iv = float(ivs.median()) if not ivs.empty else np.nan
+
+        # Load IV history, update with today's current_iv
+        iv_history = load_iv_history()
+        today_str = datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d")
+        ticker_hist = iv_history.get(ticker, [])
+        # Append today's IV if available
+        if not np.isnan(current_iv):
+            # keep only one entry per day
+            if not ticker_hist or ticker_hist[-1].get("date") != today_str:
+                ticker_hist.append({"date": today_str, "iv": current_iv})
+            # trim to lookback
+            cutoff = datetime.now() - timedelta(days=iv_history_lookback_days)
+            ticker_hist = [h for h in ticker_hist if datetime.strptime(h["date"], "%Y-%m-%d") >= cutoff]
+            iv_history[ticker] = ticker_hist
+            save_iv_history(iv_history)
+
+        # Compute iv_min and iv_max from history; fallback to chain min/max
+        hist_ivs = [h["iv"] for h in ticker_hist] if ticker_hist else []
+        if hist_ivs:
+            iv_min, iv_max = min(hist_ivs), max(hist_ivs)
+        else:
+            iv_min, iv_max = (float(ivs.min()) if not ivs.empty else np.nan, float(ivs.max()) if not ivs.empty else np.nan)
+
+        # Compute Greeks and iv_rank per row
+        spot = None
+        try:
+            spot = float(t.history(period="1d")["Close"].iloc[-1])
+        except Exception:
+            # fallback to last underlying price from option chain if present
+            spot = None
+
+        if spot is None:
+            # try yfinance info
+            try:
+                info = t.info or {}
+                spot = float(info.get("regularMarketPrice") or info.get("previousClose") or np.nan)
+            except Exception:
+                spot = np.nan
+
+        # compute per-row greeks and iv_rank and a simple option score
+        rows = []
+        for _, row in opt.iterrows():
+            try:
+                K = float(row.get("strike", np.nan))
+                expiry_str = row.get("expiry")
+                try:
+                    expiry_dt = datetime.strptime(expiry_str, "%Y-%m-%d")
+                except Exception:
+                    # yfinance sometimes returns different formats; try parsing
+                    expiry_dt = pd.to_datetime(expiry_str).to_pydatetime()
+                days_to_expiry = max((expiry_dt - datetime.now()).days, 0)
+                T = max(days_to_expiry / 365.0, 1e-6)
+                iv = float(row.get("impliedVolatility", np.nan)) if not pd.isna(row.get("impliedVolatility", np.nan)) else np.nan
+                # if iv is given as decimal (e.g., 0.25) it's fine; if it's percent (rare), user can adjust
+                # compute iv_rank
+                if not np.isnan(iv) and not np.isnan(iv_min) and not np.isnan(iv_max) and iv_max > iv_min:
+                    iv_rank = float((iv - iv_min) / (iv_max - iv_min))
+                    iv_rank = max(0.0, min(1.0, iv_rank))
+                else:
+                    iv_rank = np.nan
+
+                # choose option type
+                opt_type = row.get("type", "CALL").upper()
+                option_type = "call" if "CALL" in opt_type else "put"
+
+                # risk-free rate
+                r = float(risk_free_rate)
+
+                # compute greeks if spot and iv available
+                if not np.isnan(spot) and not np.isnan(iv):
+                    greeks = black_scholes_greeks(S=spot, K=K, T=T, r=r, sigma=iv, option_type=option_type)
+                else:
+                    greeks = {"delta": np.nan, "gamma": np.nan, "theta": np.nan, "vega": np.nan}
+
+                # liquidity proxies
+                vol = float(row.get("volume", 0) if not pd.isna(row.get("volume", np.nan)) else 0)
+                oi = float(row.get("openInterest", 0) if not pd.isna(row.get("openInterest", np.nan)) else 0)
+                spread = float(row.get("spread", np.nan)) if not pd.isna(row.get("spread", np.nan)) else np.nan
+                mid = float(row.get("mid", np.nan)) if not pd.isna(row.get("mid", np.nan)) else np.nan
+
+                # simple option scoring:
+                # base score from iv_rank (higher better for sellers), liquidity bonus, spread penalty, delta proximity bonus for directional trades
+                score = 0.0
+                if not np.isnan(iv_rank):
+                    score += iv_rank * 30.0  # weight IV rank
+                # liquidity: normalize vol and oi with simple log scaling
+                score += min(20.0, np.log1p(vol) * 2.0) if vol > 0 else 0.0
+                score += min(15.0, np.log1p(oi) * 1.5) if oi > 0 else 0.0
+                if not np.isnan(spread) and spread > 0:
+                    score -= min(10.0, spread * 5.0)  # penalize wide spreads
+                # delta proximity to 0.5 for directional buys/sells (bonus)
+                delta = greeks.get("delta", np.nan)
+                if not np.isnan(delta):
+                    score += max(0.0, (0.5 - abs(delta - 0.5))) * 20.0  # closer to 0.5 gets up to +10
+                # small bonus for mid price > 0
+                if not np.isnan(mid) and mid > 0:
+                    score += min(5.0, mid / max(1.0, spot) * 5.0)
+
+                row_out = row.to_dict()
+                row_out.update({
+                    "impliedVolatility": iv,
+                    "iv_rank": round(iv_rank, 3) if not np.isnan(iv_rank) else np.nan,
+                    "delta": round(greeks.get("delta", np.nan), 4) if greeks.get("delta", np.nan) is not None else np.nan,
+                    "gamma": round(greeks.get("gamma", np.nan), 6) if greeks.get("gamma", np.nan) is not None else np.nan,
+                    "theta": round(greeks.get("theta", np.nan), 6) if greeks.get("theta", np.nan) is not None else np.nan,
+                    "vega": round(greeks.get("vega", np.nan), 4) if greeks.get("vega", np.nan) is not None else np.nan,
+                    "days_to_expiry": int(days_to_expiry),
+                    "option_score": round(score, 3),
+                    "underlying_price": round(spot, 2) if not np.isnan(spot) else np.nan
+                })
+                rows.append(row_out)
+            except Exception as e:
+                logger.exception("Failed to process option row: %s", e)
+                continue
+
+        opt_enhanced = pd.DataFrame(rows)
+        # ensure numeric types
+        for col in ["iv_rank", "delta", "gamma", "theta", "vega", "option_score", "mid", "spread", "volume", "openInterest"]:
+            if col in opt_enhanced.columns:
+                opt_enhanced[col] = pd.to_numeric(opt_enhanced[col], errors="coerce")
+
+        return opt_enhanced
     except Exception as e:
-        logger.exception("get_option_chain top-level failure for %s: %s", ticker, e)
+        logger.exception("get_option_chain_with_greeks top-level failure for %s: %s", ticker, e)
         return pd.DataFrame()
 
 # ---------------------------
@@ -248,9 +430,7 @@ def show_dashboard(results):
         st.info("No signals to display.")
         return
 
-    # Sort by confidence_score descending, then confidence label (High/Medium/Low)
     df = df.sort_values(by=["confidence_score", "confidence"], ascending=[False, True]).reset_index(drop=True)
-
     st.dataframe(df)
 
     chart = alt.Chart(df).mark_bar().encode(
@@ -327,29 +507,18 @@ if single_ticker:
                     log_alert(single_ticker, sig["trend"], entry, stop, target, rr, sig["price"], filters_passed)
                     st.success("Alert logged")
 
-            # Option chain (robust) and sorted by liquidity/confidence proxies
-            opt_chain = get_option_chain(single_ticker)
-            st.subheader("💹 Option Chain (sorted by volume, OI, tight spread)")
+            # Option chain (robust) with IV Rank and Greeks
+            opt_chain = get_option_chain_with_greeks(single_ticker)
+            st.subheader("💹 Option Chain (sorted by option_score)")
             if opt_chain is None or opt_chain.empty:
                 st.info("Option chain not available or failed to fetch for this ticker.")
             else:
-                # Ensure numeric columns exist
-                for col in ["volume", "openInterest", "spread", "mid"]:
-                    if col not in opt_chain.columns:
-                        opt_chain[col] = np.nan
-                # Sort: highest volume, highest OI, lowest spread
-                sort_cols = []
-                if "volume" in opt_chain.columns:
-                    sort_cols.append("volume")
-                if "openInterest" in opt_chain.columns:
-                    sort_cols.append("openInterest")
-                if "spread" in opt_chain.columns:
-                    sort_cols.append("spread")
-                # Build ascending flags: volume desc, OI desc, spread asc
-                ascending = [False if c in ("volume", "openInterest") else True for c in sort_cols]
+                # sort by option_score desc, then iv_rank desc, then volume desc, then spread asc
+                sort_cols = [c for c in ["option_score", "iv_rank", "volume", "openInterest", "spread"] if c in opt_chain.columns]
+                ascending = [False if c in ("option_score", "iv_rank", "volume", "openInterest") else True for c in sort_cols]
                 opt_sorted = opt_chain.sort_values(by=sort_cols, ascending=ascending, na_position="last")
-                display_cols = [c for c in ["expiry", "contractSymbol", "type", "strike", "lastPrice", "mid", "spread", "volume", "openInterest"] if c in opt_sorted.columns]
-                st.dataframe(opt_sorted[display_cols].head(20))
+                display_cols = [c for c in ["expiry", "contractSymbol", "type", "strike", "lastPrice", "mid", "spread", "volume", "openInterest", "impliedVolatility", "iv_rank", "delta", "theta", "vega", "option_score"] if c in opt_sorted.columns]
+                st.dataframe(opt_sorted[display_cols].head(30))
 
             # Journal stats display and quick add
             journal = load_journal()
@@ -386,4 +555,4 @@ else:
 # Footer / tips
 # ---------------------------
 st.markdown("---")
-st.markdown("**Notes:** This app uses yfinance for data and option chains. Option chain fetches can fail or be rate-limited by the provider; the app handles failures gracefully and shows an empty table when unavailable.")
+st.markdown("**Notes:** This app uses yfinance for data and option chains. Option chain fetches can fail or be rate-limited by the provider; the app handles failures gracefully and shows an empty table when unavailable. IV Rank is computed from a local IV history cache (iv_history.json) updated daily; Greeks are model-based Black-Scholes approximations.")
