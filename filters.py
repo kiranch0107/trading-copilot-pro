@@ -1,6 +1,7 @@
+# filters.py
 from typing import Dict, Any, List, Optional
-from .config import Config
 import math
+from config import Config
 
 def _safe_float(v) -> Optional[float]:
     try:
@@ -9,10 +10,6 @@ def _safe_float(v) -> Optional[float]:
         return None
 
 def structured_debug(msg: str, **kwargs) -> Dict[str, Any]:
-    """
-    Return a structured debug entry. Example:
-    {"msg":"adx_check","value":16.7,"min":25,"pass":False}
-    """
     entry = {"msg": msg}
     entry.update(kwargs)
     return entry
@@ -34,19 +31,14 @@ def debug_earnings(days_to_earnings: Any, cfg: Config, debug: List[Dict]) -> boo
         days = int(days_to_earnings)
     except Exception:
         days = 9999
-    ok = not (0 <= days <= cfg.recent_alert_window_minutes)  # reuse window as safe default if needed
+    ok = not (0 <= days <= cfg.recent_alert_window_minutes)
     debug.append(structured_debug("earnings", days=days, blocked=not ok))
     return ok
 
 def candidate_passes_checks(candidate: Dict[str, Any], cfg: Config, debug: Optional[List[Dict]] = None) -> bool:
-    """
-    Validate candidate option dict. Returns True if passes all checks.
-    Adds structured debug entries to debug list.
-    """
     if debug is None:
         debug = []
 
-    # DTE
     try:
         dte = int(candidate.get("dte", 0))
     except Exception:
@@ -60,7 +52,6 @@ def candidate_passes_checks(candidate: Dict[str, Any], cfg: Config, debug: Optio
         debug.append(structured_debug("dte_max", value=dte, max=cfg.max_dte, pass=False))
         return False
 
-    # Liquidity
     vol = int(candidate.get("volume", 0) or 0)
     oi = int(candidate.get("oi", 0) or 0)
     vol_ok = vol >= cfg.min_option_volume
@@ -69,7 +60,6 @@ def candidate_passes_checks(candidate: Dict[str, Any], cfg: Config, debug: Optio
     if not (vol_ok and oi_ok):
         return False
 
-    # Price sanity
     mid = _safe_float(candidate.get("mid", candidate.get("last_price", 0))) or 0.0
     spread = _safe_float(candidate.get("spread", 0)) or 0.0
     if mid <= 0 or math.isnan(mid):
