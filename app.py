@@ -67,7 +67,7 @@ SCAN_LIST = WATCHLIST[:5] if FAST_MODE else WATCHLIST
 ADX_MIN       = st.sidebar.number_input("ADX minimum",             value=25,   min_value=1,    max_value=100)
 EARNINGS_DAYS = int(st.sidebar.number_input("Earnings blackout days", value=3, min_value=0,    max_value=30))
 BUDGET_MAX    = st.sidebar.number_input("Budget max (option mid)",  value=2.00, min_value=0.01, step=0.10)
-MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",  value=7,    min_value=1))
+MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",  value=1,    min_value=1))
 MIN_RR        = st.sidebar.number_input("Min Reward/Risk",          value=1.5,  min_value=0.1,  step=0.1)
 MIN_ROWS      = int(st.sidebar.number_input("Min history bars",     value=50,   min_value=10))
 VOLUME_MULT   = st.sidebar.number_input("Volume multiplier",        value=1.0,  min_value=0.1,  step=0.1)
