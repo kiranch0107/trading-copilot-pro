@@ -1,9 +1,10 @@
+# ui.py
 import streamlit as st
 from typing import List, Dict
-from .config import Config
-from .dedupe import clear_recent_alerts, append_alert_safe, _parse_timestamp  # append_alert_safe imported for type hints only
-from .storage import read_alerts
-from .dedupe import append_alert_safe as dedupe_append
+from config import Config
+from dedupe import clear_recent_alerts  # used for actions
+from storage import read_alerts
+from dedupe import _parse_timestamp
 
 def alerts_ui_panel(cfg: Config, sidebar: bool = True):
     container = st.sidebar if sidebar else st
