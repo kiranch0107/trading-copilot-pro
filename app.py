@@ -167,6 +167,10 @@ def get_option_chain(ticker):
                         df_side["mid"] = np.nan
                         df_side["spread"] = np.nan
                     df_side["expiry"] = expiry
+                    # add a 'type' column if not present to indicate call/put
+                    if "contractSymbol" in df_side.columns and "type" not in df_side.columns:
+                        # infer type from presence of call/put columns: oc.calls vs oc.puts
+                        df_side["type"] = "CALL" if side_df is oc.calls else "PUT"
                     frames.append(df_side)
                 # small delay to be polite
                 time.sleep(0.15)
@@ -205,7 +209,6 @@ def add_journal_trade(alert_id, ticker, trend, entry, stop, target, rr, exit_pri
     journal = load_journal()
     risk = abs(entry - stop) if entry is not None and stop is not None else 1.0
     pnl_r = round((exit_price - entry) / risk, 2) if trend == "Bullish" else round((entry - exit_price) / risk, 2)
-    # remove existing with same id
     journal = [j for j in journal if j.get("id") != alert_id]
     journal.append({
         "id": alert_id,
@@ -236,7 +239,7 @@ def journal_stats(journal: list) -> dict:
     return {"trades": total, "win_rate_%": wr, "avg_win_R": avg_win, "avg_loss_R": avg_loss, "profit_factor": pf}
 
 # ---------------------------
-# Dashboard
+# Dashboard (sorted by confidence)
 # ---------------------------
 def show_dashboard(results):
     st.subheader("📊 Signal Dashboard")
@@ -244,18 +247,22 @@ def show_dashboard(results):
     if df.empty:
         st.info("No signals to display.")
         return
+
+    # Sort by confidence_score descending, then confidence label (High/Medium/Low)
+    df = df.sort_values(by=["confidence_score", "confidence"], ascending=[False, True]).reset_index(drop=True)
+
     st.dataframe(df)
 
     chart = alt.Chart(df).mark_bar().encode(
-        x="ticker",
-        y="confidence_score",
+        x=alt.X("ticker:N", sort=None),
+        y="confidence_score:Q",
         color=alt.condition(alt.datum.trend == "Bullish", alt.value("green"), alt.value("red")),
         tooltip=["ticker", "trend", "confidence_score", "adx", "rsi"]
     ).properties(title="Trend Confidence by Ticker")
     st.altair_chart(chart, use_container_width=True)
 
     rsi_chart = alt.Chart(df).mark_bar().encode(
-        x=alt.X("rsi", bin=alt.Bin(maxbins=10)),
+        x=alt.X("rsi:Q", bin=alt.Bin(maxbins=10)),
         y="count()",
         tooltip=["rsi"]
     ).properties(title="RSI Distribution")
@@ -284,7 +291,7 @@ else:
     st.warning("No signals generated — check settings or watchlist.")
 
 # ---------------------------
-# Single ticker diagnostics & trade suggestion
+# Single ticker diagnostics & trade suggestion (option chain sorted)
 # ---------------------------
 if single_ticker:
     df = get_data(single_ticker)
@@ -315,21 +322,34 @@ if single_ticker:
             if stop is not None and target is not None:
                 rr = round(abs(target - entry) / max(1e-6, abs(entry - stop)), 2)
                 st.markdown(f"**Trade Idea:** Entry **{entry}**, Stop **{stop}**, Target **{target}**, RR **{rr}**")
-                # allow logging alert
                 if st.button(f"Log alert for {single_ticker}"):
                     filters_passed = {"adx": sig["adx"] >= ADX_MIN}
                     log_alert(single_ticker, sig["trend"], entry, stop, target, rr, sig["price"], filters_passed)
                     st.success("Alert logged")
 
-            # Option chain (robust)
+            # Option chain (robust) and sorted by liquidity/confidence proxies
             opt_chain = get_option_chain(single_ticker)
-            st.subheader("💹 Option Chain (sample rows)")
+            st.subheader("💹 Option Chain (sorted by volume, OI, tight spread)")
             if opt_chain is None or opt_chain.empty:
                 st.info("Option chain not available or failed to fetch for this ticker.")
             else:
-                # show top by volume then by mid
-                display_cols = [c for c in ["expiry", "contractSymbol", "strike", "type", "lastPrice", "mid", "spread", "volume", "openInterest"] if c in opt_chain.columns]
-                st.dataframe(opt_chain[display_cols].sort_values(by=["volume", "openInterest"], ascending=False).head(15))
+                # Ensure numeric columns exist
+                for col in ["volume", "openInterest", "spread", "mid"]:
+                    if col not in opt_chain.columns:
+                        opt_chain[col] = np.nan
+                # Sort: highest volume, highest OI, lowest spread
+                sort_cols = []
+                if "volume" in opt_chain.columns:
+                    sort_cols.append("volume")
+                if "openInterest" in opt_chain.columns:
+                    sort_cols.append("openInterest")
+                if "spread" in opt_chain.columns:
+                    sort_cols.append("spread")
+                # Build ascending flags: volume desc, OI desc, spread asc
+                ascending = [False if c in ("volume", "openInterest") else True for c in sort_cols]
+                opt_sorted = opt_chain.sort_values(by=sort_cols, ascending=ascending, na_position="last")
+                display_cols = [c for c in ["expiry", "contractSymbol", "type", "strike", "lastPrice", "mid", "spread", "volume", "openInterest"] if c in opt_sorted.columns]
+                st.dataframe(opt_sorted[display_cols].head(20))
 
             # Journal stats display and quick add
             journal = load_journal()
@@ -358,7 +378,7 @@ alerts = load_alerts()
 if alerts:
     st.sidebar.write(f"Alerts: {len(alerts)}")
     for a in alerts[-10:][::-1]:
-        st.sidebar.markdown(f"- **{a['ticker']}** {a['timestamp']} RR:{a.get('rr')}")
+        st.sidebar.markdown(f"- **{a.get('ticker','?')}** {a.get('timestamp','?')} RR:{a.get('rr','?')}")
 else:
     st.sidebar.write("No alerts logged")
 
