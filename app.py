@@ -55,6 +55,9 @@ ALERT_LOG_FILE = Path("alert_history.json")
 JOURNAL_FILE = Path("trade_journal.json")
 IV_HISTORY_FILE = Path("iv_history.json")
 
+# Clean up ticker input
+single_ticker = single_ticker.strip().upper() if single_ticker else ""
+
 # ---------------------------
 # Persistence helpers
 # ---------------------------
