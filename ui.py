@@ -14,7 +14,11 @@ def get_recent_alerts(cfg: Config) -> List[Dict]:
         parsed = _parse_timestamp(ts) if ts else None
         if parsed:
             # parsed is expected to be timezone-aware UTC
-            if (now - parsed).total_seconds() <= cfg.recent_alert_window_minutes * 60:
+            try:
+                if (now - parsed).total_seconds() <= cfg.recent_alert_window_minutes * 60:
+                    recent.append(a)
+            except Exception:
+                # if any unexpected type appears, include the alert to be safe
                 recent.append(a)
         else:
             # include unparseable timestamps as recent to avoid accidental deletion
