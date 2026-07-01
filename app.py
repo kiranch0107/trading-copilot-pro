@@ -935,7 +935,10 @@ spy_regime  = get_spy_regime()
 
 col_status, col_regime = st.columns([1, 2])
 with col_status:
-    st.success("🟢 Market OPEN") if market_open else st.warning("🔴 Market CLOSED")
+    if market_open:
+        st.success("🟢 Market OPEN")
+    else:
+        st.warning("🔴 Market CLOSED")
 with col_regime:
     regime       = spy_regime.get("regime", "Unknown")
     regime_color = {"Bull": "🟢", "Bear": "🔴", "Neutral": "🟡"}.get(regime, "⚪")
