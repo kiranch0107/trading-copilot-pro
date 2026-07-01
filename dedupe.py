@@ -1,7 +1,9 @@
-from typing import Dict, Optional, List
+# dedupe.py
+from typing import Dict, Optional
 from datetime import datetime, timedelta
-from .storage import read_alerts, write_alerts, write_archive
-from .config import Config
+# top-level imports (files must be in the same directory)
+from storage import read_alerts, write_alerts, write_archive
+from config import Config
 
 def _safe_float(v) -> Optional[float]:
     try:
@@ -13,11 +15,11 @@ def _parse_timestamp(ts: Optional[str]) -> Optional[datetime]:
     if not ts:
         return None
     try:
-        # ISO first
+        # handle ISO with Z or offset
         return datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except Exception:
         try:
-            # fallback to common format
+            # fallback to common format used in your app
             return datetime.strptime(ts, "%Y-%m-%d %H:%M ET")
         except Exception:
             return None
@@ -40,11 +42,11 @@ def append_alert_safe(alert: Dict, cfg: Config) -> bool:
         try:
             if str(a.get("ticker", "")).upper() != ticker:
                 continue
-            # dedupe by id
             if cfg.dedupe_by == "id":
+                # primary: exact id match
                 if a.get("id") and alert_id and a.get("id") == alert_id:
                     return False
-                # fallback to entry+target within window
+                # fallback: entry+target within window
                 a_entry = _safe_float(a.get("entry"))
                 a_target = _safe_float(a.get("target"))
                 ts = _parse_timestamp(a.get("timestamp"))
@@ -54,7 +56,6 @@ def append_alert_safe(alert: Dict, cfg: Config) -> bool:
                             return False
                         if ts is None:
                             return False
-            # dedupe by entry_target
             elif cfg.dedupe_by == "entry_target":
                 a_entry = _safe_float(a.get("entry"))
                 a_target = _safe_float(a.get("target"))
@@ -71,16 +72,12 @@ def append_alert_safe(alert: Dict, cfg: Config) -> bool:
         except Exception:
             continue
 
-    # Not duplicate: append
+    # Not duplicate: append and save
     existing.append(alert)
     write_alerts(cfg, existing)
     return True
 
 def clear_recent_alerts(cfg: Config, archive: bool = False) -> Dict[str, int]:
-    """
-    Remove alerts within recent window. If archive True, write removed to archive file.
-    Returns counts.
-    """
     alerts = read_alerts(cfg)
     now = datetime.utcnow()
     keep = []
@@ -88,7 +85,6 @@ def clear_recent_alerts(cfg: Config, archive: bool = False) -> Dict[str, int]:
     for a in alerts:
         ts = _parse_timestamp(a.get("timestamp"))
         if ts is None:
-            # treat unparseable as recent and remove
             removed.append(a)
         elif (now - ts) <= timedelta(minutes=cfg.recent_alert_window_minutes):
             removed.append(a)
