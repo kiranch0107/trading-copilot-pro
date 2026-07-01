@@ -4,9 +4,8 @@ import yfinance as yf
 import pandas as pd
 import ta
 import numpy as np
-import matplotlib.pyplot as plt
+import altair as alt
 from datetime import datetime
-import pytz
 
 # ---------------------------
 # PAGE CONFIG
@@ -93,18 +92,25 @@ def show_dashboard(results):
     df = pd.DataFrame(results)
     st.dataframe(df)
 
-    # Heatmap of confidence scores
-    fig, ax = plt.subplots(figsize=(8,4))
-    ax.bar(df["ticker"], df["confidence_score"], color=["green" if t=="Bullish" else "red" for t in df["trend"]])
-    ax.set_ylabel("Confidence Score")
-    ax.set_title("Trend Confidence by Ticker")
-    st.pyplot(fig)
+    # Confidence bar chart
+    chart = alt.Chart(df).mark_bar().encode(
+        x="ticker",
+        y="confidence_score",
+        color=alt.condition(
+            alt.datum.trend == "Bullish",
+            alt.value("green"),
+            alt.value("red")
+        )
+    ).properties(title="Trend Confidence by Ticker")
+    st.altair_chart(chart, use_container_width=True)
 
     # RSI distribution
-    fig2, ax2 = plt.subplots(figsize=(8,4))
-    ax2.hist(df["rsi"], bins=10, color="blue", alpha=0.7)
-    ax2.set_title("RSI Distribution")
-    st.pyplot(fig2)
+    rsi_chart = alt.Chart(df).mark_bar().encode(
+        x=alt.X("rsi", bin=alt.Bin(maxbins=10)),
+        y="count()",
+        tooltip=["rsi"]
+    ).properties(title="RSI Distribution")
+    st.altair_chart(rsi_chart, use_container_width=True)
 
 # ---------------------------
 # Main scan
