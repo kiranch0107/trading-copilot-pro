@@ -61,8 +61,8 @@ st.sidebar.divider()
 ADX_MIN       = st.sidebar.number_input("ADX minimum",              value=25,   min_value=1,    max_value=100)
 EARNINGS_DAYS = int(st.sidebar.number_input("Earnings blackout days",value=3,   min_value=0,    max_value=30))
 BUDGET_MAX    = st.sidebar.number_input("Budget max (option mid)",   value=2.00, min_value=0.01, step=0.10)
-MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",   value=7,    min_value=1))
-MIN_RR        = st.sidebar.number_input("Min Reward/Risk",           value=1.5,  min_value=0.1,  step=0.1)
+MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",   value=1,    min_value=1))
+MIN_RR        = st.sidebar.number_input("Min Reward/Risk",           value=0.5,  min_value=0.1,  step=0.1)
 MIN_ROWS      = int(st.sidebar.number_input("Min history bars",      value=50,   min_value=10))
 VOLUME_MULT   = st.sidebar.number_input("Volume multiplier",         value=1.0,  min_value=0.1,  step=0.1)
 st.sidebar.divider()
@@ -72,7 +72,7 @@ st.sidebar.divider()
 
 # FIX #10: account settings for position sizing
 st.sidebar.header("💰 Position Sizing")
-ACCOUNT_SIZE = int(st.sidebar.number_input("Account size ($)",   value=10000, min_value=100, step=500))
+ACCOUNT_SIZE = int(st.sidebar.number_input("Account size ($)",   value=1500, min_value=100, step=500))
 RISK_PCT     = st.sidebar.number_input("Risk per trade (%)",     value=1.0,   min_value=0.1, max_value=10.0, step=0.1)
 
 COOLDOWN       = 600
@@ -666,9 +666,14 @@ def check_pick_unusual_activity(ticker: str, opt: dict) -> dict | None:
 
 # ─────────────────────────────────────────────
 # TRADE ANALYSIS
+#
+# Returns a dict on success, OR a diagnostic dict
+# with "blocked": True so the UI can always show
+# exactly WHY — base conditions / filters / RR.
+# Never returns bare None anymore.
 # ─────────────────────────────────────────────
 def _analyze_uncached(df: pd.DataFrame, ticker: str,
-                      spy_regime: dict | None = None) -> dict | None:
+                      spy_regime: dict | None = None) -> dict:
     latest  = df.iloc[-1]
     price   = float(latest["Close"])
     ema20   = float(latest["EMA20"])
@@ -683,77 +688,117 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
     vol_ok      = volume >= vol_avg * VOLUME_MULT
     vol_soft_ok = volume >= vol_avg * 0.70
 
-    if price>ema20>ema50 and macd>signal and 30<rsi<75 and vol_soft_ok:
+    # ── Base conditions ──
+    if price > ema20 > ema50 and macd > signal and 30 < rsi < 75 and vol_soft_ok:
         trend = "Bullish"
-    elif price<ema20<ema50 and macd<signal and 25<rsi<70 and vol_soft_ok:
+    elif price < ema20 < ema50 and macd < signal and 25 < rsi < 70 and vol_soft_ok:
         trend = "Bearish"
     else:
-        return None
+        # Base conditions failed — return diagnostic so UI can show exactly what failed
+        return {
+            "blocked":       True,
+            "block_reason":  "base",
+            "price":         round(price, 2),
+            "ema20":         round(ema20, 2),
+            "ema50":         round(ema50, 2),
+            "rsi":           round(rsi, 1),
+            "macd":          round(macd, 4),
+            "signal_line":   round(signal, 4),
+            "vol_ratio":     round(volume / vol_avg, 2) if vol_avg else 0,
+            "filters":       {},
+        }
 
     strength = "Strong" if (
-        ((rsi>60 and trend=="Bullish") or (rsi<40 and trend=="Bearish")) and vol_ok
+        ((rsi > 60 and trend == "Bullish") or (rsi < 40 and trend == "Bearish")) and vol_ok
     ) else "Normal"
 
-    filters: dict[str,dict] = {}
+    # ── 4 Enhancement filters ──
+    filters: dict[str, dict] = {}
     adx_ok, adx_val = check_adx(df)
-    filters["ADX Trend Strength"] = {"pass":adx_ok,
-        "detail":f"ADX {adx_val} {'≥' if adx_ok else '<'} {ADX_MIN} threshold"}
+    filters["ADX Trend Strength"] = {"pass": adx_ok,
+        "detail": f"ADX {adx_val} {'≥' if adx_ok else '<'} {ADX_MIN} threshold"}
 
     weekly = get_weekly_trend(ticker) if WEEKLY_CONFIRM else None
     mtf_ok, mtf_detail = check_weekly_alignment(trend, weekly)
-    filters["Multi-TF Alignment"] = {"pass":mtf_ok,"detail":mtf_detail}
+    filters["Multi-TF Alignment"] = {"pass": mtf_ok, "detail": mtf_detail}
 
     earnings_ok, earnings_detail = check_earnings_blackout(ticker)
-    filters["Earnings Blackout"] = {"pass":earnings_ok,"detail":earnings_detail}
+    filters["Earnings Blackout"] = {"pass": earnings_ok, "detail": earnings_detail}
 
     if SPY_REGIME and spy_regime:
         regime_ok, regime_detail = check_regime_alignment(trend, spy_regime)
     else:
         regime_ok, regime_detail = True, "Regime filter disabled"
-    filters["Macro Regime"] = {"pass":regime_ok,"detail":regime_detail}
+    filters["Macro Regime"] = {"pass": regime_ok, "detail": regime_detail}
 
     n_pass   = sum(1 for f in filters.values() if f["pass"])
     n_total  = len(filters)
     all_pass = (n_pass == n_total)
 
-    # FIX #8: entry at breakout level (not above it) — limit-order style
-    # FIX #9: stop at swing low/high rather than pure ATR
+    # ── Entry / stop / target ──
     lookback_high = df["High"].iloc[-6:-1].max()
     lookback_low  = df["Low"].iloc[-6:-1].min()
     swing_low_10  = float(df["Low"].tail(10).min())
     swing_high_10 = float(df["High"].tail(10).max())
 
     if trend == "Bullish":
-        entry      = round(float(lookback_high), 2)           # at breakout level, not above
-        stop       = round(min(swing_low_10, price - atr), 2) # swing low or ATR, whichever is tighter
+        entry      = round(float(lookback_high), 2)
+        stop       = round(min(swing_low_10, price - atr), 2)
         resistance = float(df["High"].tail(20).max())
-        target     = round(min(price + atr*2.5, resistance*0.99), 2)
+        target     = round(min(price + atr * 2.5, resistance * 0.99), 2)
     else:
         entry   = round(float(lookback_low), 2)
         stop    = round(max(swing_high_10, price + atr), 2)
         support = float(df["Low"].tail(20).min())
-        target  = round(max(price - atr*2.5, support*1.01), 2)
+        target  = round(max(price - atr * 2.5, support * 1.01), 2)
 
     risk = abs(entry - stop)
     if risk < 0.01:
-        return None
+        return {
+            "blocked": True, "block_reason": "zero_risk",
+            "trend": trend, "price": round(price, 2),
+            "filters": filters, "filters_pass": n_pass, "filters_total": n_total,
+        }
+
     rr = round(abs(target - entry) / risk, 2)
     if rr < MIN_RR:
-        return None
+        return {
+            "blocked": True, "block_reason": "rr",
+            "trend": trend, "strength": strength,
+            "price": round(price, 2), "entry": entry,
+            "stop": stop, "target": target, "rr": rr,
+            "filters": filters, "filters_pass": n_pass, "filters_total": n_total,
+            "rsi": round(rsi, 1), "adx": adx_val,
+        }
 
     option       = get_option_data(ticker, price, trend, strength)
     high_quality = (rr >= 2.0 and strength == "Strong" and all_pass)
 
-    return {"ticker":ticker,"price":round(price,2),"trend":trend,"strength":strength,
-            "entry":entry,"stop":stop,"target":target,"rr":rr,
-            "rsi":round(rsi,1),"atr":round(atr,2),"adx":adx_val,"option":option,
-            "filters":filters,"filters_pass":n_pass,"filters_total":n_total,
-            "all_pass":all_pass,"high_quality":high_quality}
+    return {
+        "blocked":       False,
+        "ticker":        ticker,
+        "price":         round(price, 2),
+        "trend":         trend,
+        "strength":      strength,
+        "entry":         entry,
+        "stop":          stop,
+        "target":        target,
+        "rr":            rr,
+        "rsi":           round(rsi, 1),
+        "atr":           round(atr, 2),
+        "adx":           adx_val,
+        "option":        option,
+        "filters":       filters,
+        "filters_pass":  n_pass,
+        "filters_total": n_total,
+        "all_pass":      all_pass,
+        "high_quality":  high_quality,
+    }
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def analyze(_df: pd.DataFrame, ticker: str, latest_bar_key: str,
-            spy_regime: dict | None = None) -> dict | None:
+            spy_regime: dict | None = None) -> dict:
     return _analyze_uncached(_df, ticker, spy_regime=spy_regime)
 
 
@@ -791,7 +836,8 @@ def _scan_one_ticker(ticker: str, data_map: dict, spy_regime: dict) -> dict | No
     if df is None: return None
     df = compute(df)
     if df.empty: return None
-    return analyze(df, ticker, f"{ticker}_{df.index[-1]}", spy_regime=spy_regime)
+    r = analyze(df, ticker, f"{ticker}_{df.index[-1]}", spy_regime=spy_regime)
+    return r if r and not r.get("blocked") else None
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -825,14 +871,20 @@ def render_filter_scorecard(filters: dict, n_pass: int, n_total: int):
             unsafe_allow_html=True)
 
 
-def render_no_signal_diagnostic(df, latest_price, latest_rsi, vol_now, vol_avg):
-    """FIX #4: direction-aware diagnostic shown in both Swing Trade and Signal Filters tabs."""
-    ema20_v = float(df["EMA20"].iloc[-1])
-    ema50_v = float(df["EMA50"].iloc[-1])
-    macd_v  = float(df["MACD"].iloc[-1])
-    sig_v   = float(df["Signal"].iloc[-1])
-    rsi_v   = latest_rsi
-    vol_ratio = vol_now/vol_avg if vol_avg else 0
+def render_no_signal_diagnostic(df, latest_price, latest_rsi, vol_now, vol_avg,
+                                diag: dict | None = None):
+    """
+    Shows exactly WHY no tradeable signal was produced.
+    Now consumes the rich diagnostic dict from _analyze_uncached so when
+    base conditions ALL pass (like NVDA above) the actual 4 enhancement
+    filter results are shown instead of a misleading 'check filters above'.
+    """
+    ema20_v   = float(df["EMA20"].iloc[-1])
+    ema50_v   = float(df["EMA50"].iloc[-1])
+    macd_v    = float(df["MACD"].iloc[-1])
+    sig_v     = float(df["Signal"].iloc[-1])
+    rsi_v     = latest_rsi
+    vol_ratio = vol_now / vol_avg if vol_avg else 0
 
     stack_bull = latest_price > ema20_v > ema50_v
     stack_bear = latest_price < ema20_v < ema50_v
@@ -862,16 +914,52 @@ def render_no_signal_diagnostic(df, latest_price, latest_rsi, vol_now, vol_avg):
         rsi_label    = f"EMA stack must align first (RSI {rsi_v:.1f})"
 
     all_base = (stack_bull or stack_bear) and macd_aligned and rsi_ok and vol_floor
-    st.markdown(
-        f"**Implied direction: {'🟢 '+implied if implied else '⚪ Mixed/No trend'} — "
-        f"{'base OK — check 4 enhancement filters above' if all_base else 'base condition(s) failed below'}**"
-    )
+
+    # ── Base condition summary ──
+    st.markdown(f"**Implied direction: {'🟢 ' + implied if implied else '⚪ Mixed/No trend'}**")
     st.caption(f"{chk(stack_bull or stack_bear)} Trend stack — "
                f"Price ${latest_price:.2f} / EMA20 ${ema20_v:.2f} / EMA50 ${ema50_v:.2f}")
     st.caption(f"{chk(macd_aligned)} MACD — {macd_label}")
     st.caption(f"{chk(rsi_ok)} RSI band — {rsi_label}")
     st.caption(f"{chk(vol_floor)} Volume floor — {vol_ratio:.2f}× avg (need ≥ 0.70×)")
-    st.caption("MACD lagging an EMA stack is the most common miss — usually resolves within 1–3 bars.")
+
+    if not all_base:
+        st.caption("MACD lagging an EMA stack is the most common miss — usually resolves within 1–3 bars.")
+        return
+
+    # ── Base conditions ALL passed — show what actually blocked the signal ──
+    block_reason = diag.get("block_reason") if diag else None
+    filters      = diag.get("filters", {}) if diag else {}
+
+    if block_reason == "rr":
+        rr      = diag.get("rr", 0)
+        st.warning(
+            f"⚠️ Base conditions ✅ — blocked by **R:R too low**: "
+            f"calculated R:R is **{rr}**, minimum is **{MIN_RR}**. "
+            f"Entry ${diag.get('entry')} · Stop ${diag.get('stop')} · Target ${diag.get('target')}. "
+            f"Consider widening target or tightening stop."
+        )
+    elif filters:
+        n_pass  = sum(1 for f in filters.values() if f["pass"])
+        n_total = len(filters)
+        failed  = [name for name, f in filters.items() if not f["pass"]]
+        if n_pass == n_total:
+            st.success(f"✅ Base conditions AND all {n_total} enhancement filters pass — "
+                       f"but R:R or risk calculation may have blocked it.")
+        else:
+            st.warning(f"⚠️ Base conditions ✅ — blocked by **{len(failed)} enhancement filter(s) failing**: "
+                       f"{', '.join(failed)}")
+        # Show the full filter scorecard
+        st.markdown("**Enhancement Filter Results:**")
+        icons = {True: "✅", False: "❌"}
+        for name, f in filters.items():
+            css = "filter-pass" if f["pass"] else "filter-fail"
+            st.markdown(
+                f'<div class="{css}">{icons[f["pass"]]} <b>{name}</b> — {f["detail"]}</div>',
+                unsafe_allow_html=True
+            )
+    else:
+        st.info("✅ All base conditions passed — re-run or refresh to get updated filter results.")
 
 
 def render_price_chart(df: pd.DataFrame, ticker: str):
@@ -1078,9 +1166,9 @@ with TAB_STOCK:
             ])
 
             with stab1:
-                if r is None:
-                    st.warning("⚠️ No valid trade setup — base signal conditions not met.")
-                    render_no_signal_diagnostic(df, latest_price, latest_rsi, vol_now, vol_avg)
+                if r.get("blocked"):
+                    st.warning("⚠️ No valid trade setup — see diagnosis below.")
+                    render_no_signal_diagnostic(df, latest_price, latest_rsi, vol_now, vol_avg, diag=r)
                 else:
                     badge = ("🔥 HIGH QUALITY" if r["high_quality"]
                              else "✅ VALID — all filters pass" if r["all_pass"]
@@ -1095,7 +1183,6 @@ with TAB_STOCK:
                     reward_amt = abs(r["target"]-r["entry"])
                     st.progress(min(reward_amt/(risk_amt+reward_amt),1.0),
                                 text=f"Reward ${reward_amt:.2f} vs Risk ${risk_amt:.2f}")
-                    # FIX #10: position sizing
                     ps = calc_position_size(r["entry"], r["stop"])
                     st.info(
                         f"💰 **Position Sizing** — "
@@ -1104,11 +1191,10 @@ with TAB_STOCK:
                     )
 
             with stab2:
-                # FIX #4: diagnostic shown here too regardless of signal state
                 st.markdown("### 🔬 Signal Filter Scorecard")
-                if r is None:
-                    st.warning("No base signal — showing why below.")
-                    render_no_signal_diagnostic(df, latest_price, latest_rsi, vol_now, vol_avg)
+                if r.get("blocked"):
+                    st.warning("Signal blocked — showing full diagnosis below.")
+                    render_no_signal_diagnostic(df, latest_price, latest_rsi, vol_now, vol_avg, diag=r)
                 else:
                     render_filter_scorecard(r["filters"], r["filters_pass"], r["filters_total"])
                 st.divider()
@@ -1119,7 +1205,7 @@ with TAB_STOCK:
                 st.caption("4. **Macro Regime** — no longs in Bear; no shorts in Bull")
 
             with stab3:
-                if r is None:
+                if r.get("blocked"):
                     st.warning("Swing trade setup required for options recommendation.")
                 else:
                     opt = r["option"]
@@ -1149,7 +1235,6 @@ with TAB_STOCK:
                             st.caption("🌊 No unusual activity on this contract.")
 
             with stab4:
-                # FIX #12: require 30 bars minimum (Monday mornings / short sessions)
                 if intraday is None or len(intraday) < 30:
                     st.warning("Not enough intraday bars (need ≥ 30). "
                                "Try again once the session has more data.")
@@ -1168,7 +1253,7 @@ with TAB_STOCK:
 
             with stab5:
                 st.markdown(f"### 💸 Options under ${BUDGET_MAX:.2f}/contract")
-                if r is None:
+                if r.get("blocked"):
                     st.warning("A valid swing setup is needed.")
                 else:
                     opt = r["option"]
