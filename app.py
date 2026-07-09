@@ -157,8 +157,11 @@ def journal_stats(journal: list) -> dict:
     avg_win  = round(sum(j["actual_rr"] for j in wins)  /len(wins),  2) if wins   else 0
     avg_loss = round(sum(j["actual_rr"] for j in losses)/len(losses), 2) if losses else 0
     total_r  = round(sum(j["actual_rr"] for j in journal), 2)
-    gp = sum(j["actual_rr"] for j in wins   if j["actual_rr"] > 0)
-    gl = abs(sum(j["actual_rr"] for j in losses if j["actual_rr"] < 0))
+    gp = sum(j["actual_rr"] for j in wins   if j["actual_rr"] > 0.05)   # J1 FIX: ignore dust trades
+    gl = abs(sum(j["actual_rr"] for j in losses if j["actual_rr"] < -0.05))  # same floor on loss side
+    # If all wins/losses are below 0.05R, fall back to full set so pf isn't 0/inf
+    if gp == 0: gp = sum(j["actual_rr"] for j in wins if j["actual_rr"] > 0)
+    if gl == 0: gl = abs(sum(j["actual_rr"] for j in losses if j["actual_rr"] < 0))
     pf = round(gp/gl, 2) if gl else float("inf")
     outcomes    = [j["outcome"] for j in sorted(journal, key=lambda x: x["closed"])]
     streak      = 0
@@ -252,7 +255,15 @@ class RateLimiter:
                 time.sleep(self._min_gap - elapsed)
             self._last_ts = time.time()
 
-_rl = RateLimiter(min_gap=0.35)
+_rl = RateLimiter(min_gap=0.35)          # default gap for data + options calls
+_rl_slow = RateLimiter(min_gap=0.80)    # D1 FIX: slower gap for weekly trend + earnings
+                                         # — these fire per-ticker (5 tickers = 10 calls)
+                                         # and don't need to be fast (cached 15-60 min).
+                                         # Keeps them from crowding the main data fetches.
+# F1 FIX: SPY regime uses ADX=20 deliberately (index trends are smoother than
+# individual stocks so a lower threshold is appropriate). Documented here so
+# it's not confused with the per-ticker ADX_MIN (default 25, user-tunable).
+SPY_ADX_THRESHOLD = 20
 
 _YF_RETRY_TRIES = 3
 _YF_RETRY_DELAY = 2.0
@@ -372,7 +383,7 @@ def check_adx(df: pd.DataFrame) -> tuple[bool, float]:
 @st.cache_data(ttl=900, show_spinner=False)
 def get_weekly_trend(ticker: str) -> str | None:
     try:
-        _rl.wait()
+        _rl_slow.wait()
         df = yf.download(ticker, period="1y", interval="1wk", progress=False)
         if df is None or df.empty or len(df) < 20:
             return None
@@ -382,11 +393,13 @@ def get_weekly_trend(ticker: str) -> str | None:
         df["EMA10w"] = ta.trend.ema_indicator(df["Close"], window=10)
         df["EMA20w"] = ta.trend.ema_indicator(df["Close"], window=20)
         df = df.dropna(subset=["EMA10w","EMA20w"])
-        p  = float(df["Close"].iloc[-1])
         e10 = float(df["EMA10w"].iloc[-1])
         e20 = float(df["EMA20w"].iloc[-1])
-        if p > e10 > e20:   return "Bullish"
-        elif p < e10 < e20: return "Bearish"
+        # B1 FIX: use EMA crossover only (e10 vs e20), not triple-chain
+        # price>e10>e20 was too strict — in ranging markets where price dips
+        # below e10 temporarily it returned None even in a clear uptrend.
+        if e10 > e20:   return "Bullish"
+        elif e10 < e20: return "Bearish"
         return None
     except Exception as e:
         logger.exception("get_weekly_trend(%s): %s", ticker, e)
@@ -402,7 +415,7 @@ def check_weekly_alignment(daily: str, weekly: str | None) -> tuple[bool, str]:
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_next_earnings(ticker: str) -> str | None:
     try:
-        _rl.wait()
+        _rl_slow.wait()
         t   = yf.Ticker(ticker)
         cal = t.calendar
         if cal is None:
@@ -460,10 +473,10 @@ def get_spy_regime() -> dict:
         price   = float(df["Close"].iloc[-1])
         sma200  = float(df["SMA200"].iloc[-1])
         adx_val = float(df["ADX"].iloc[-1])
-        if price > sma200 and adx_val >= 20:
+        if price > sma200 and adx_val >= SPY_ADX_THRESHOLD:
             regime    = "Bull"
             reasoning = f"SPY ${price:.0f} above 200-SMA ${sma200:.0f} (ADX {adx_val:.0f})"
-        elif price <= sma200 and adx_val >= 20:
+        elif price <= sma200 and adx_val >= SPY_ADX_THRESHOLD:
             regime    = "Bear"
             reasoning = f"SPY ${price:.0f} below 200-SMA ${sma200:.0f} (ADX {adx_val:.0f})"
         else:
@@ -577,12 +590,17 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str) -> dic
         opts = opts.copy()
         opts["spread"] = opts["ask"] - opts["bid"]
         opts["mid"]    = (opts["ask"] + opts["bid"]) / 2
-        valid = opts[(opts["mid"]>0)&(opts["spread"]/opts["mid"]<=0.15)]
-        valid = valid[(valid["volume"]>0)|(valid["openInterest"]>0)]
+        # O2 FIX: require bid > 0 — mid can pass even when bid=0 (wide/illiquid)
+        valid = opts[(opts["mid"] > 0) & (opts["bid"] > 0) & (opts["spread"] / opts["mid"] <= 0.15)]
+        valid = valid[(valid["volume"] > 0) | (valid["openInterest"] > 0)]
         if valid.empty: continue
         valid = valid.copy()
         valid["liq"]   = valid["volume"] + valid["openInterest"]
-        valid["score"] = valid["liq"] / (1+(valid["spread"]/(valid["mid"]+1e-6)))
+        # O1 FIX: multiply score by volume_weight so zero-volume high-OI contracts
+        # don't outscore genuinely active contracts. volume=0 → weight=0.1 (minimal
+        # credit for existence), volume>0 → weight scales with actual activity.
+        valid["vol_weight"] = valid["volume"].apply(lambda v: 0.1 if v == 0 else 1.0 + (v / (v + 100)))
+        valid["score"] = (valid["liq"] * valid["vol_weight"]) / (1 + (valid["spread"] / (valid["mid"] + 1e-6)))
         top = valid.sort_values("score", ascending=False).iloc[0]
         if top["score"] > best_score:
             best = (top, expiry, dte); best_score = top["score"]
@@ -743,12 +761,17 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
 
     if trend == "Bullish":
         entry      = round(float(lookback_high), 2)
-        stop       = round(min(swing_low_10, price - atr), 2)
+        # B3 FIX: clamp so stop is always BELOW price (swing_low_10 could be
+        # above current price if all 10 bars closed above it — e.g. gap-up days)
+        raw_stop   = min(swing_low_10, price - atr)
+        stop       = round(min(raw_stop, price - 0.01), 2)   # hard clamp: always below price
         resistance = float(df["High"].tail(20).max())
         target     = round(min(price + atr * 2.5, resistance * 0.99), 2)
     else:
         entry   = round(float(lookback_low), 2)
-        stop    = round(max(swing_high_10, price + atr), 2)
+        # B3 FIX: clamp so stop is always ABOVE price
+        raw_stop   = max(swing_high_10, price + atr)
+        stop    = round(max(raw_stop, price + 0.01), 2)       # hard clamp: always above price
         support = float(df["Low"].tail(20).min())
         target  = round(max(price - atr * 2.5, support * 1.01), 2)
 
@@ -806,11 +829,13 @@ def analyze(_df: pd.DataFrame, ticker: str, latest_bar_key: str,
 # SCALP ENGINE
 # ─────────────────────────────────────────────
 def scalp(df: pd.DataFrame) -> dict:
-    latest     = df.iloc[-1]
-    price      = float(latest["Close"])
-    atr        = float(latest["ATR"]) if "ATR" in df.columns else 0
-    prior_high = float(df["High"].iloc[-6:-1].max())
-    prior_low  = float(df["Low"].iloc[-6:-1].min())
+    latest = df.iloc[-1]
+    price  = float(latest["Close"])
+    atr    = float(latest["ATR"]) if "ATR" in df.columns else 0
+    # S1 FIX: widened from 6 to 12 bars — 6 bars = only 30 min of 5-min data,
+    # too sensitive; 12 bars = 1 hour gives a more stable intraday range.
+    prior_high = float(df["High"].iloc[-13:-1].max())
+    prior_low  = float(df["Low"].iloc[-13:-1].min())
     if (prior_high - prior_low)/price < 0.005:
         return {"signal":"Low volatility — avoid scalping","direction":None}
     rsi  = float(latest["RSI"])    if "RSI"    in df.columns else 50
