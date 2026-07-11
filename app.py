@@ -59,7 +59,9 @@ st.sidebar.caption(f"Scanning: {', '.join(SCAN_LIST)}")
 st.sidebar.divider()
 
 ADX_MIN       = st.sidebar.number_input("ADX minimum",              value=25,   min_value=1,    max_value=100)
-EARNINGS_DAYS = int(st.sidebar.number_input("Earnings blackout days",value=3,   min_value=0,    max_value=30))
+EARNINGS_DAYS      = int(st.sidebar.number_input("Earnings blackout days",      value=3,   min_value=0, max_value=30))
+POST_EARNINGS_DAYS = int(st.sidebar.number_input("Post-earnings cooling (days)", value=1,   min_value=0, max_value=7,
+    help="Also block signals N days AFTER earnings (avoids IV crush residual)"))
 BUDGET_MAX    = st.sidebar.number_input("Budget max (option mid)",   value=2.00, min_value=0.01, step=0.10)
 MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",   value=1,    min_value=1))
 MIN_RR        = st.sidebar.number_input("Min Reward/Risk",           value=0.5,  min_value=0.1,  step=0.1)
@@ -450,7 +452,11 @@ def check_earnings_blackout(ticker: str) -> tuple[bool, str]:
         if 0 <= days <= EARNINGS_DAYS:
             return False, f"⚠️ Earnings in {days}d ({ds}) — signal blocked"
         elif days < 0:
-            return True, f"Last earnings: {ds}"
+            # Fix 5: post-earnings cooling window — very recent earnings can
+            # still cause IV crush / gap residual the next 1-2 days
+            if abs(days) <= POST_EARNINGS_DAYS:
+                return False, f"⚠️ Earnings was {abs(days)}d ago ({ds}) — post-earnings cooling ({POST_EARNINGS_DAYS}d)"
+            return True, f"Last earnings: {ds} ({abs(days)}d ago)"
         return True, f"Next earnings: {ds} ({days}d away)"
     except Exception as e:
         logger.exception("check_earnings_blackout(%s): %s", ticker, e)
@@ -460,7 +466,7 @@ def check_earnings_blackout(ticker: str) -> tuple[bool, str]:
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_spy_regime() -> dict:
     try:
-        _rl.wait()
+        _rl_slow.wait()   # SPY fetched once per 30 min — use slow limiter to avoid crowding data calls
         df = yf.download("SPY", period="14mo", interval="1d", progress=False)
         if df is None or df.empty:
             return {"regime":"Unknown","reasoning":"SPY data unavailable"}
@@ -591,8 +597,15 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str) -> dic
         opts["spread"] = opts["ask"] - opts["bid"]
         opts["mid"]    = (opts["ask"] + opts["bid"]) / 2
         # O2 FIX: require bid > 0 — mid can pass even when bid=0 (wide/illiquid)
-        valid = opts[(opts["mid"] > 0) & (opts["bid"] > 0) & (opts["spread"] / opts["mid"] <= 0.15)]
-        valid = valid[(valid["volume"] > 0) | (valid["openInterest"] > 0)]
+        # O1 FIX: require volume > 0 explicitly — vol_weight=0.1 penalised but
+        # didn't exclude. A zero-volume contract is untradeable regardless of OI.
+        valid = opts[
+            (opts["mid"] > 0) &
+            (opts["bid"] > 0) &
+            (opts["volume"] > 0) &
+            (opts["spread"] / opts["mid"] <= 0.15)
+        ]
+        valid = valid[valid["openInterest"] > 0]   # also require some existing interest
         if valid.empty: continue
         valid = valid.copy()
         valid["liq"]   = valid["volume"] + valid["openInterest"]
