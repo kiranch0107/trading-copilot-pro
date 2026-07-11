@@ -864,9 +864,15 @@ def scalp(df: pd.DataFrame) -> dict:
 
 
 # ─────────────────────────────────────────────
-# WATCHLIST SCAN  (batch + thread pool + sorted)
+# WATCHLIST SCAN
+# FIX: ThreadPoolExecutor moved OUT of
+# @st.cache_data. Streamlit's cache serialises
+# the return value — running threads inside the
+# cached function causes OOM on Streamlit Cloud.
+# Pattern: uncached _run_scan() does the work;
+# cached run_watchlist_scan() stores the result.
 # ─────────────────────────────────────────────
-_SCAN_MAX_WORKERS = 3
+_SCAN_MAX_WORKERS = 2   # reduced from 3 → 2 for Streamlit Cloud memory headroom
 
 
 def _scan_one_ticker(ticker: str, data_map: dict, spy_regime: dict) -> dict | None:
@@ -878,11 +884,10 @@ def _scan_one_ticker(ticker: str, data_map: dict, spy_regime: dict) -> dict | No
     return r if r and not r.get("blocked") else None
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def run_watchlist_scan(scan_list: tuple) -> list[dict]:
-    spy_regime = get_spy_regime()
-    data_map   = batch_get_data(scan_list)
-    results    = []
+def _run_scan_uncached(scan_list: tuple, spy_regime: dict) -> list[dict]:
+    """Does the actual parallel work — not cached so threads don't OOM cache."""
+    data_map = batch_get_data(scan_list)
+    results  = []
     with ThreadPoolExecutor(max_workers=_SCAN_MAX_WORKERS) as executor:
         futures = {executor.submit(_scan_one_ticker, t, data_map, spy_regime): t
                    for t in scan_list}
@@ -891,9 +896,19 @@ def run_watchlist_scan(scan_list: tuple) -> list[dict]:
                 r = future.result()
                 if r: results.append(r)
             except Exception as e:
-                logger.exception("Scan failed for ticker: %s", e)
-    # FIX #3: sort by R:R descending so best setups appear first
+                logger.exception("Scan ticker failed: %s", e)
     return sorted(results, key=lambda x: x["rr"], reverse=True)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def run_watchlist_scan(scan_list: tuple, spy_regime_key: str) -> list[dict]:
+    """
+    Cached wrapper — spy_regime_key is a string snapshot of the regime
+    so the cache correctly invalidates when SPY regime changes.
+    Actual threading happens in _run_scan_uncached (not inside this function).
+    """
+    spy_regime = get_spy_regime()   # already cached at ttl=1800, cheap call
+    return _run_scan_uncached(scan_list, spy_regime)
 
 
 # ─────────────────────────────────────────────
@@ -1051,22 +1066,17 @@ def render_unusual_table(flagged: list, ticker_label: str = "", top_n: int = 5):
 
 # ─────────────────────────────────────────────
 # MARKET STATUS + REGIME BANNER
+# Both fetched lazily (inside a cached wrapper)
+# so they don't fire at module level on every
+# Streamlit rerun / startup health check.
 # ─────────────────────────────────────────────
-market_open = is_market_open()
-spy_regime  = get_spy_regime()
-
-col_status, col_regime = st.columns([1, 2])
-with col_status:
-    if market_open:
-        st.success("🟢 Market OPEN")
-    else:
-        st.warning("🔴 Market CLOSED")
-with col_regime:
-    regime       = spy_regime.get("regime","Unknown")
-    regime_color = {"Bull":"🟢","Bear":"🔴","Neutral":"🟡"}.get(regime,"⚪")
-    st.info(f"{regime_color} **Macro Regime: {regime}** — {spy_regime.get('reasoning','')}")
-
-st.divider()
+@st.cache_data(ttl=300, show_spinner=False)
+def get_market_context() -> dict:
+    """Single lazy call for market open + SPY regime — cached 5 min."""
+    return {
+        "market_open": is_market_open(),
+        "spy_regime":  get_spy_regime(),
+    }
 
 # ─────────────────────────────────────────────
 # TOP-LEVEL TABS
@@ -1081,78 +1091,109 @@ TAB_SCAN, TAB_STOCK, TAB_UNUSUAL, TAB_ALERTS, TAB_JOURNAL = st.tabs([
 # TAB 1 — WATCHLIST SCAN
 # ═══════════════════════════════════════════════
 with TAB_SCAN:
-    # FIX #1: manual refresh button — user controls when network call fires
-    sc1, sc2 = st.columns([3,1])
+    # ── Lazy market context (not fetched at module level) ──
+    ctx         = get_market_context()
+    market_open = ctx["market_open"]
+    spy_regime  = ctx["spy_regime"]
+
+    # ── Market status + regime banner ──
+    col_status, col_regime = st.columns([1, 2])
+    with col_status:
+        if market_open:
+            st.success("🟢 Market OPEN")
+        else:
+            st.warning("🔴 Market CLOSED")
+    with col_regime:
+        regime       = spy_regime.get("regime", "Unknown")
+        regime_color = {"Bull":"🟢","Bear":"🔴","Neutral":"🟡"}.get(regime, "⚪")
+        st.info(f"{regime_color} **Macro Regime: {regime}** — {spy_regime.get('reasoning','')}")
+
+    st.divider()
+
+    # FIX cause 2: scan is GATED behind a button — no auto-run on startup.
+    # Streamlit Cloud sends a healthz probe immediately after startup;
+    # if the app tries to fetch 5 tickers + options chains before responding,
+    # it segfaults. Button click is required for first scan.
+    sc1, sc2 = st.columns([3, 1])
     with sc1:
         st.caption(f"Tickers: {', '.join(SCAN_LIST)} · Cache: 5 min · Sorted by R:R ↓")
     with sc2:
-        if st.button("🔄 Refresh Scan", type="primary", key="refresh_scan"):
+        if st.button("🔄 Run / Refresh Scan", type="primary", key="refresh_scan"):
+            st.session_state["scan_triggered"] = True
             run_watchlist_scan.clear()
             st.rerun()
 
-    with st.spinner("Scanning watchlist…"):
-        all_setups = run_watchlist_scan(tuple(SCAN_LIST))
+    if "scan_triggered" not in st.session_state:
+        st.session_state["scan_triggered"] = False
 
-    high_quality = [s for s in all_setups if s["high_quality"]]
-    partial      = [s for s in all_setups if not s["high_quality"] and s["all_pass"]]
-    weak         = [s for s in all_setups if not s["all_pass"]]
+    regime_key = spy_regime.get("regime", "Unknown")
 
-    for a in high_quality:
-        log_alert(ticker=a["ticker"], trend=a["trend"], strength=a["strength"],
-                  entry=a["entry"], stop=a["stop"], target=a["target"],
-                  rr=a["rr"], price=a["price"], filters_passed=a["filters"])
-        if market_open:
-            fs = " | ".join(f"{'✅' if f['pass'] else '❌'} {n}"
-                            for n,f in a["filters"].items())
-            send_telegram_alert(a["ticker"], (
-                f"🚨 HIGH QUALITY ({a['filters_pass']}/{a['filters_total']} filters)\n"
-                f"{a['ticker']} → {a['trend']} ({a['strength']})\n"
-                f"Price: {a['price']} | RR: {a['rr']} | ADX: {a['adx']}\n"
-                f"Entry: {a['entry']} | Stop: {a['stop']} | Target: {a['target']}\n{fs}"
-            ))
+    if not st.session_state["scan_triggered"]:
+        st.info("👆 Click **Run / Refresh Scan** to scan the watchlist.")
+    else:
+        with st.spinner("Scanning watchlist…"):
+            all_setups = run_watchlist_scan(tuple(SCAN_LIST), regime_key)
 
-    c1,c2,c3 = st.columns(3)
-    c1.metric("🔥 High Quality",  len(high_quality))
-    c2.metric("✅ All Filters",   len(partial))
-    c3.metric("⚠️ Partial Setup", len(weak))
-    st.divider()
+        high_quality = [s for s in all_setups if s["high_quality"]]
+        partial      = [s for s in all_setups if not s["high_quality"] and s["all_pass"]]
+        weak         = [s for s in all_setups if not s["all_pass"]]
 
-    st.markdown("### 🔥 High-Quality Setups")
-    if high_quality:
         for a in high_quality:
-            with st.container(border=True):
-                h1,h2,h3,h4,h5 = st.columns(5)
-                h1.metric("Ticker",  a["ticker"])
-                h2.metric("Trend",   f"{a['trend']} ({a['strength']})")
-                h3.metric("R:R",     a["rr"])
-                h4.metric("ADX",     a["adx"])
-                h5.metric("Filters", f"{a['filters_pass']}/{a['filters_total']}")
-                st.caption(f"Entry {a['entry']} · Stop {a['stop']} · Target {a['target']} · RSI {a['rsi']}")
-                ps = calc_position_size(a["entry"], a["stop"])
-                st.caption(
-                    f"💰 Position sizing — Risk ${ps['risk_dollars']} · "
-                    f"Shares {ps['shares']} · Option contracts {ps['contracts']} "
-                    f"(${ACCOUNT_SIZE:,} acct · {RISK_PCT}% risk)"
-                )
-    else:
-        st.info("No high-quality setups right now — all 4 filters must pass.")
+            log_alert(ticker=a["ticker"], trend=a["trend"], strength=a["strength"],
+                      entry=a["entry"], stop=a["stop"], target=a["target"],
+                      rr=a["rr"], price=a["price"], filters_passed=a["filters"])
+            if market_open:
+                fs = " | ".join(f"{'✅' if f['pass'] else '❌'} {n}"
+                                for n,f in a["filters"].items())
+                send_telegram_alert(a["ticker"], (
+                    f"🚨 HIGH QUALITY ({a['filters_pass']}/{a['filters_total']} filters)\n"
+                    f"{a['ticker']} → {a['trend']} ({a['strength']})\n"
+                    f"Price: {a['price']} | RR: {a['rr']} | ADX: {a['adx']}\n"
+                    f"Entry: {a['entry']} | Stop: {a['stop']} | Target: {a['target']}\n{fs}"
+                ))
 
-    st.markdown("### ✅ Valid Setups")
-    if partial:
-        for a in partial:
-            with st.container(border=True):
-                p1,p2,p3,p4 = st.columns(4)
-                p1.write(f"**{a['ticker']}**")
-                p2.write(a["trend"])
-                p3.write(f"RR {a['rr']}")
-                p4.write(f"ADX {a['adx']} · RSI {a['rsi']}")
-    else:
-        st.info("No additional valid setups")
+        c1,c2,c3 = st.columns(3)
+        c1.metric("🔥 High Quality",  len(high_quality))
+        c2.metric("✅ All Filters",   len(partial))
+        c3.metric("⚠️ Partial Setup", len(weak))
+        st.divider()
 
-    with st.expander(f"⚠️ Partial / failed signals ({len(weak)} tickers)"):
-        for a in weak:
-            failed = [n for n,f in a["filters"].items() if not f["pass"]]
-            st.write(f"**{a['ticker']}** — {a['trend']} | RR {a['rr']} | Failed: {', '.join(failed)}")
+        st.markdown("### 🔥 High-Quality Setups")
+        if high_quality:
+            for a in high_quality:
+                with st.container(border=True):
+                    h1,h2,h3,h4,h5 = st.columns(5)
+                    h1.metric("Ticker",  a["ticker"])
+                    h2.metric("Trend",   f"{a['trend']} ({a['strength']})")
+                    h3.metric("R:R",     a["rr"])
+                    h4.metric("ADX",     a["adx"])
+                    h5.metric("Filters", f"{a['filters_pass']}/{a['filters_total']}")
+                    st.caption(f"Entry {a['entry']} · Stop {a['stop']} · Target {a['target']} · RSI {a['rsi']}")
+                    ps = calc_position_size(a["entry"], a["stop"])
+                    st.caption(
+                        f"💰 Position sizing — Risk ${ps['risk_dollars']} · "
+                        f"Shares {ps['shares']} · Option contracts {ps['contracts']} "
+                        f"(${ACCOUNT_SIZE:,} acct · {RISK_PCT}% risk)"
+                    )
+        else:
+            st.info("No high-quality setups right now — all 4 filters must pass.")
+
+        st.markdown("### ✅ Valid Setups")
+        if partial:
+            for a in partial:
+                with st.container(border=True):
+                    p1,p2,p3,p4 = st.columns(4)
+                    p1.write(f"**{a['ticker']}**")
+                    p2.write(a["trend"])
+                    p3.write(f"RR {a['rr']}")
+                    p4.write(f"ADX {a['adx']} · RSI {a['rsi']}")
+        else:
+            st.info("No additional valid setups")
+
+        with st.expander(f"⚠️ Partial / failed signals ({len(weak)} tickers)"):
+            for a in weak:
+                failed = [n for n,f in a["filters"].items() if not f["pass"]]
+                st.write(f"**{a['ticker']}** — {a['trend']} | RR {a['rr']} | Failed: {', '.join(failed)}")
 
 
 # ═══════════════════════════════════════════════
@@ -1160,6 +1201,9 @@ with TAB_SCAN:
 # ═══════════════════════════════════════════════
 with TAB_STOCK:
     st.subheader("🔍 Single Stock Analysis")
+    # Get spy_regime lazily (already cached from TAB_SCAN or fetches fresh)
+    _ctx_stock = get_market_context()
+    spy_regime  = _ctx_stock["spy_regime"]
     query = st.text_input("Enter ticker (e.g. TSLA, NVDA, AAPL)", placeholder="TSLA", key="ticker_input")
 
     if query:
