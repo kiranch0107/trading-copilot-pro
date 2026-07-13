@@ -949,7 +949,11 @@ def _scan_one_ticker(ticker: str, data_map: dict, spy_regime: dict | None) -> di
     df = compute(df)
     if df.empty:
         return None
-    return analyze(df, ticker, f"{ticker}_{df.index[-1]}", spy_regime)
+    r = analyze(df, ticker, f"{ticker}_{df.index[-1]}", spy_regime)
+    # analyze() never returns None anymore - it returns a diagnostic dict
+    # with "blocked": True when no valid setup. Blocked dicts lack "ticker"
+    # and other display keys, so exclude them from watchlist results.
+    return r if r and not r.get("blocked") else None
 
 # --------------------------------------------------
 # MAIN APP LAYOUT
@@ -973,6 +977,8 @@ with ThreadPoolExecutor(max_workers=SCAN_MAX_WORKERS) as executor:
         except Exception as e:
             logger.exception("Scan failed for %s: %s", ticker, e)
 
+# Defensive: only keep well-formed setup dicts (must have "ticker")
+all_setups = [s for s in all_setups if isinstance(s, dict) and "ticker" in s]
 scanned_tickers = [s["ticker"] for s in all_setups] if all_setups else []
 
 col_left, col_right = st.columns([2, 1])
