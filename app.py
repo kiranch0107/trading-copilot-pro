@@ -1151,39 +1151,30 @@ def render_no_signal_diagnostic(df, latest_price, latest_rsi, vol_now, vol_avg,
         st.caption("MACD lagging an EMA stack is the most common miss — usually resolves within 1–3 bars.")
         return
 
-    # ── Base conditions ALL passed — show what actually blocked the signal ──
+    # ── Base conditions ALL passed ──
+    # NOTE: this function now covers BASE CONDITIONS ONLY. The 4 enhancement
+    # filters are rendered separately by the caller (Signal Filters tab, §2)
+    # so we don't duplicate the same scorecard in two places.
     block_reason = diag.get("block_reason") if diag else None
     filters      = diag.get("filters", {}) if diag else {}
 
+    st.success("✅ All base conditions passed.")
+
     if block_reason == "rr":
-        rr      = diag.get("rr", 0)
         st.warning(
-            f"⚠️ Base conditions ✅ — blocked by **R:R too low**: "
-            f"calculated R:R is **{rr}**, minimum is **{MIN_RR}**. "
-            f"Entry ${diag.get('entry')} · Stop ${diag.get('stop')} · Target ${diag.get('target')}. "
-            f"Consider widening target or tightening stop."
+            f"…but blocked by **Reward:Risk** — calculated R:R is "
+            f"**{diag.get('rr')}**, below your **{MIN_RR}** minimum. "
+            f"See the 💼 Swing Trade tab for the proposed levels."
         )
+    elif block_reason == "zero_risk":
+        st.warning("…but blocked — entry and stop resolved to the same price (zero risk).")
     elif filters:
-        n_pass  = sum(1 for f in filters.values() if f["pass"])
-        n_total = len(filters)
-        failed  = [name for name, f in filters.items() if not f["pass"]]
-        if n_pass == n_total:
-            st.success(f"✅ Base conditions AND all {n_total} enhancement filters pass — "
-                       f"but R:R or risk calculation may have blocked it.")
-        else:
-            st.warning(f"⚠️ Base conditions ✅ — blocked by **{len(failed)} enhancement filter(s) failing**: "
-                       f"{', '.join(failed)}")
-        # Show the full filter scorecard
-        st.markdown("**Enhancement Filter Results:**")
-        icons = {True: "✅", False: "❌"}
-        for name, f in filters.items():
-            css = "filter-pass" if f["pass"] else "filter-fail"
-            st.markdown(
-                f'<div class="{css}">{icons[f["pass"]]} <b>{name}</b> — {f["detail"]}</div>',
-                unsafe_allow_html=True
+        failed = [n for n, f in filters.items() if not f["pass"]]
+        if failed:
+            st.warning(
+                f"…but blocked by **{len(failed)} enhancement filter(s)**: "
+                f"{', '.join(failed)} — details in §2 below."
             )
-    else:
-        st.info("✅ All base conditions passed — re-run or refresh to get updated filter results.")
 
 
 def render_price_chart(df: pd.DataFrame, ticker: str):
@@ -1438,9 +1429,37 @@ with TAB_STOCK:
             ])
 
             with stab1:
+                # ── SWING TRADE = the TRADE PLAN (entry/stop/target/size) ──
                 if r.get("blocked"):
-                    st.warning("⚠️ No valid trade setup — see diagnosis below.")
-                    render_no_signal_diagnostic(df, latest_price, latest_rsi, vol_now, vol_avg, diag=r)
+                    reason = r.get("block_reason")
+                    if reason == "base":
+                        st.warning(
+                            "⚠️ **No trade plan** — the base signal conditions "
+                            "(EMA stack / MACD / RSI / volume) don't align yet."
+                        )
+                        st.caption(
+                            "👉 See the **🔬 Signal Filters** tab for a full "
+                            "condition-by-condition breakdown of what's missing."
+                        )
+                    elif reason == "rr":
+                        st.warning(
+                            f"⚠️ **Trade plan rejected — poor Reward:Risk** "
+                            f"({r.get('rr')} < your {MIN_RR} minimum)"
+                        )
+                        # Still show the levels — the user may want to override
+                        s1,s2,s3,s4 = st.columns(4)
+                        s1.metric("Entry",  f"${r.get('entry','—')}")
+                        s2.metric("Stop",   f"${r.get('stop','—')}")
+                        s3.metric("Target", f"${r.get('target','—')}")
+                        s4.metric("R:R",    r.get("rr","—"), delta="below min",
+                                  delta_color="inverse")
+                        st.caption(
+                            "The trend is valid but the levels don't offer enough "
+                            "reward for the risk. Lower **Min Reward/Risk** in the "
+                            "sidebar to see it, or wait for a better entry."
+                        )
+                    else:
+                        st.warning(f"⚠️ No trade plan — blocked ({reason}).")
                 else:
                     badge = ("🔥 HIGH QUALITY" if r["high_quality"]
                              else "✅ VALID — all filters pass" if r["all_pass"]
@@ -1469,20 +1488,49 @@ with TAB_STOCK:
                             f"Risk budget is ${ps['risk_dollars']} "
                             f"({RISK_PCT}% of ${ACCOUNT_SIZE:,}).\n\n{ps['note']}"
                         )
+                    if not r["all_pass"]:
+                        failed = [n for n,f in r["filters"].items() if not f["pass"]]
+                        st.caption(
+                            f"⚠️ {len(failed)} enhancement filter(s) failing: "
+                            f"**{', '.join(failed)}** — see 🔬 Signal Filters tab."
+                        )
 
             with stab2:
-                st.markdown("### 🔬 Signal Filter Scorecard")
-                if r.get("blocked"):
-                    st.warning("Signal blocked — showing full diagnosis below.")
-                    render_no_signal_diagnostic(df, latest_price, latest_rsi, vol_now, vol_avg, diag=r)
+                # ── SIGNAL FILTERS = WHY the signal passed or failed ──
+                st.markdown("### 🔬 Signal Diagnostics")
+                st.caption(
+                    "This tab explains **why** a signal did or didn't fire. "
+                    "The 💼 Swing Trade tab shows the resulting **trade plan**."
+                )
+                st.divider()
+
+                # Layer 1 — base conditions (always shown)
+                st.markdown("#### 1️⃣ Base Signal Conditions")
+                render_no_signal_diagnostic(df, latest_price, latest_rsi,
+                                            vol_now, vol_avg, diag=r)
+
+                # Layer 2 — the 4 enhancement filters (only meaningful once base passes)
+                st.divider()
+                st.markdown("#### 2️⃣ Enhancement Filters")
+                if r.get("blocked") and r.get("block_reason") == "base":
+                    st.info(
+                        "Enhancement filters are only evaluated once the base "
+                        "conditions pass. Fix the base conditions above first."
+                    )
+                elif r.get("filters"):
+                    render_filter_scorecard(r["filters"],
+                                            r.get("filters_pass", 0),
+                                            r.get("filters_total", 4))
                 else:
-                    render_filter_scorecard(r["filters"], r["filters_pass"], r["filters_total"])
+                    st.info("No filter results available.")
+
                 st.divider()
                 st.markdown("**Filter Definitions**")
                 st.caption(f"1. **ADX ≥ {ADX_MIN}** — real trend, not chop/sideways")
                 st.caption("2. **Multi-TF Alignment** — weekly EMA must agree with daily direction")
-                st.caption(f"3. **Earnings Blackout** — blocks within {EARNINGS_DAYS}d of earnings")
-                st.caption("4. **Macro Regime** — no longs in Bear; no shorts in Bull")
+                st.caption(f"3. **Earnings Blackout** — blocks within {EARNINGS_DAYS}d of earnings "
+                           f"(and {POST_EARNINGS_DAYS}d after)")
+                st.caption("4. **Macro Regime** — no longs in SPY Bear; no shorts in SPY Bull")
 
             with stab3:
                 if r.get("blocked"):
