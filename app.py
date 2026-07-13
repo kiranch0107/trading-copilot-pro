@@ -65,6 +65,9 @@ POST_EARNINGS_DAYS = int(st.sidebar.number_input("Post-earnings cooling (days)",
 BUDGET_MAX    = st.sidebar.number_input("Budget max (option mid)",   value=2.00, min_value=0.01, step=0.10)
 MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",   value=1,    min_value=1))
 MIN_RR        = st.sidebar.number_input("Min Reward/Risk",           value=0.5,  min_value=0.1,  step=0.1)
+HQ_MIN_RR     = st.sidebar.number_input("High-Quality R:R threshold", value=1.5,  min_value=0.2,  step=0.1,
+    help="R:R needed to qualify as a 🔥 HIGH QUALITY setup (these trigger Telegram alerts). "
+         "Must also be 'Strong' strength with all 4 filters passing.")
 MIN_ROWS      = int(st.sidebar.number_input("Min history bars",      value=50,   min_value=10))
 VOLUME_MULT   = st.sidebar.number_input("Volume multiplier",         value=1.0,  min_value=0.1,  step=0.1)
 st.sidebar.divider()
@@ -892,49 +895,77 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
     swing_high_10 = float(df["High"].tail(10).max())
 
     if trend == "Bullish":
-        # Enter at market (current price) — the trend/momentum conditions have
-        # already confirmed. We are not waiting for a breakout above a stale high.
+        # Enter at market — trend/momentum conditions already confirmed.
         entry = round(price, 2)
 
-        # Stop: below the recent swing low, but never further than 1.5 ATR
-        # (caps risk on wide-ranging names). Always strictly below entry.
-        structural_stop = swing_low_10 - (atr * 0.10)     # small buffer under the low
-        atr_stop        = price - (atr * 1.5)             # volatility-based floor
-        stop            = round(max(structural_stop, atr_stop), 2)
-        stop            = round(min(stop, entry - 0.01), 2)   # clamp: strictly below entry
+        # Stop: prefer the structural level (just under the 10-bar swing low),
+        # but ONLY if that level is actually below price. On a gap-down the
+        # 10-bar low can sit ABOVE current price, which makes it meaningless
+        # as a stop — in that case fall back to the pure ATR stop.
+        #
+        # BUG (fixed): the old `max(structural_stop, atr_stop)` would pick the
+        # invalid above-price structural value, then the entry-0.01 clamp jammed
+        # risk to one cent, producing phantom setups with R:R ≈ 750 that would be
+        # stopped out on the first tick.
+        atr_stop = price - (atr * 1.5)
+        structural_stop = swing_low_10 - (atr * 0.10)
 
-        # Target: 2.5 ATR up. Only cap at resistance if that resistance is
-        # ABOVE entry (a real obstacle). If price is already breaking out past
-        # the 20-bar high, there is no overhead resistance to cap against.
+        if structural_stop < price:
+            # Structure is valid — take the tighter (higher) of the two
+            stop = max(structural_stop, atr_stop)
+        else:
+            # Structure unusable (swing low is at/above price) — ATR only
+            stop = atr_stop
+
+        stop = round(min(stop, entry - 0.01), 2)   # final safety clamp
+
+        # Target: 2.5 ATR up, capped only by resistance that is genuinely
+        # ABOVE entry (a real obstacle). On a breakout to new highs there is
+        # no overhead resistance, so no cap is applied.
         raw_target = price + (atr * 2.5)
         resistance = float(df["High"].tail(20).max())
-        if resistance > entry * 1.005:        # resistance is meaningfully above entry
+        if resistance > entry * 1.005:
             target = round(min(raw_target, resistance * 0.995), 2)
         else:
-            target = round(raw_target, 2)     # breakout — no overhead cap
-        target = round(max(target, entry + 0.02), 2)      # clamp: strictly above entry
+            target = round(raw_target, 2)
+        target = round(max(target, entry + 0.02), 2)
 
     else:  # Bearish
         entry = round(price, 2)
 
+        atr_stop = price + (atr * 1.5)
         structural_stop = swing_high_10 + (atr * 0.10)
-        atr_stop        = price + (atr * 1.5)
-        stop            = round(min(structural_stop, atr_stop), 2)
-        stop            = round(max(stop, entry + 0.01), 2)   # clamp: strictly above entry
+
+        if structural_stop > price:
+            # Structure valid — take the tighter (lower) of the two
+            stop = min(structural_stop, atr_stop)
+        else:
+            # Structure unusable (swing high is at/below price) — ATR only
+            stop = atr_stop
+
+        stop = round(max(stop, entry + 0.01), 2)
 
         raw_target = price - (atr * 2.5)
         support    = float(df["Low"].tail(20).min())
-        if support < entry * 0.995:           # support is meaningfully below entry
+        if support < entry * 0.995:
             target = round(max(raw_target, support * 1.005), 2)
         else:
-            target = round(raw_target, 2)     # breakdown — no support cap
-        target = round(min(target, entry - 0.02), 2)      # clamp: strictly below entry
+            target = round(raw_target, 2)
+        target = round(min(target, entry - 0.02), 2)
 
-    risk = abs(entry - stop)
-    if risk < 0.01:
+    # ── Risk sanity gate ──
+    # Guard must be RELATIVE to price, not an absolute penny. A $0.01 stop on a
+    # $100 stock is 0.01% — it would be stopped out by any tick. Anything under
+    # 0.3% of price is not a tradeable stop for a swing setup.
+    risk     = abs(entry - stop)
+    min_risk = max(0.05, price * 0.003)     # 0.3% of price, floor of 5 cents
+
+    if risk < min_risk:
         return {
             "blocked": True, "block_reason": "zero_risk",
             "trend": trend, "price": round(price, 2),
+            "entry": entry, "stop": stop,
+            "risk": round(risk, 2), "min_risk": round(min_risk, 2),
             "filters": filters, "filters_pass": n_pass, "filters_total": n_total,
         }
 
@@ -949,8 +980,15 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
             "rsi": round(rsi, 1), "adx": adx_val,
         }
 
-    option       = get_option_data(ticker, price, trend, strength)
-    high_quality = (rr >= 2.0 and strength == "Strong" and all_pass)
+    option = get_option_data(ticker, price, trend, strength)
+
+    # ── High-quality tier ──
+    # Was hardcoded `rr >= 2.0`. With MIN_RR now user-tunable (default 0.5),
+    # a fixed 2.0 bar meant the HIGH QUALITY tier almost never fired — and since
+    # Telegram alerts only fire on high_quality, alerts went silent.
+    # Now the bar is a sidebar tunable (HQ_MIN_RR) that defaults to 2× MIN_RR,
+    # so it scales sensibly with whatever the user sets.
+    high_quality = (rr >= HQ_MIN_RR and strength == "Strong" and all_pass)
 
     return {
         "blocked":       False,
@@ -996,7 +1034,7 @@ def analyze(_df: pd.DataFrame, ticker: str, latest_bar_key: str,
 def get_settings_key() -> str:
     """Fingerprint of all sidebar tunables that affect signal logic."""
     return (
-        f"adx{ADX_MIN}_rr{MIN_RR}_vol{VOLUME_MULT}"
+        f"adx{ADX_MIN}_rr{MIN_RR}_hqrr{HQ_MIN_RR}_vol{VOLUME_MULT}"
         f"_earn{EARNINGS_DAYS}_post{POST_EARNINGS_DAYS}"
         f"_wk{int(WEEKLY_CONFIRM)}_spy{int(SPY_REGIME)}"
         f"_dte{MIN_DTE}_bud{BUDGET_MAX}_rows{MIN_ROWS}"
@@ -1167,7 +1205,12 @@ def render_no_signal_diagnostic(df, latest_price, latest_rsi, vol_now, vol_avg,
             f"See the 💼 Swing Trade tab for the proposed levels."
         )
     elif block_reason == "zero_risk":
-        st.warning("…but blocked — entry and stop resolved to the same price (zero risk).")
+        st.warning(
+            f"…but blocked — **stop is too tight to be tradeable**. "
+            f"Risk is only **${diag.get('risk', 0):.2f}** vs a minimum of "
+            f"**${diag.get('min_risk', 0):.2f}** (0.3% of price). A stop this "
+            f"close would be hit by normal intraday noise."
+        )
     elif filters:
         failed = [n for n, f in filters.items() if not f["pass"]]
         if failed:
