@@ -867,26 +867,68 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
     all_pass = (n_pass == n_total)
 
     # ── Entry / stop / target ──
-    lookback_high = df["High"].iloc[-6:-1].max()
-    lookback_low  = df["Low"].iloc[-6:-1].min()
+    #
+    # ROOT-CAUSE FIX: the old code mixed reference points, which made almost
+    # every setup fail MIN_RR:
+    #
+    #   entry  = lookback_high            <- a PAST bar's high
+    #   stop   = min(swing_low, price-atr)<- based on CURRENT price
+    #   target = min(price+2.5atr, res*.99) <- based on CURRENT price
+    #
+    # Two failure modes resulted:
+    #   1) In an uptrend price runs ABOVE the 5-bar lookback high, so `entry`
+    #      sat BELOW price. Reward (target-entry) collapsed toward zero.
+    #   2) The resistance cap `res_20 * 0.99` is BELOW price whenever price is
+    #      at/near the 20-bar high — i.e. on the strongest breakouts — pulling
+    #      the target BELOW the entry and giving R:R ~0.03. The logic actively
+    #      penalised the exact setups it should reward.
+    #
+    # New approach: ALL THREE levels are anchored to the SAME reference —
+    # current price — so they're internally coherent. Structure (swing levels)
+    # informs the stop, and the resistance/support cap is only applied when it
+    # is actually beyond the entry (i.e. a real obstacle), never behind it.
+
     swing_low_10  = float(df["Low"].tail(10).min())
     swing_high_10 = float(df["High"].tail(10).max())
 
     if trend == "Bullish":
-        entry      = round(float(lookback_high), 2)
-        # B3 FIX: clamp so stop is always BELOW price (swing_low_10 could be
-        # above current price if all 10 bars closed above it — e.g. gap-up days)
-        raw_stop   = min(swing_low_10, price - atr)
-        stop       = round(min(raw_stop, price - 0.01), 2)   # hard clamp: always below price
+        # Enter at market (current price) — the trend/momentum conditions have
+        # already confirmed. We are not waiting for a breakout above a stale high.
+        entry = round(price, 2)
+
+        # Stop: below the recent swing low, but never further than 1.5 ATR
+        # (caps risk on wide-ranging names). Always strictly below entry.
+        structural_stop = swing_low_10 - (atr * 0.10)     # small buffer under the low
+        atr_stop        = price - (atr * 1.5)             # volatility-based floor
+        stop            = round(max(structural_stop, atr_stop), 2)
+        stop            = round(min(stop, entry - 0.01), 2)   # clamp: strictly below entry
+
+        # Target: 2.5 ATR up. Only cap at resistance if that resistance is
+        # ABOVE entry (a real obstacle). If price is already breaking out past
+        # the 20-bar high, there is no overhead resistance to cap against.
+        raw_target = price + (atr * 2.5)
         resistance = float(df["High"].tail(20).max())
-        target     = round(min(price + atr * 2.5, resistance * 0.99), 2)
-    else:
-        entry   = round(float(lookback_low), 2)
-        # B3 FIX: clamp so stop is always ABOVE price
-        raw_stop   = max(swing_high_10, price + atr)
-        stop    = round(max(raw_stop, price + 0.01), 2)       # hard clamp: always above price
-        support = float(df["Low"].tail(20).min())
-        target  = round(max(price - atr * 2.5, support * 1.01), 2)
+        if resistance > entry * 1.005:        # resistance is meaningfully above entry
+            target = round(min(raw_target, resistance * 0.995), 2)
+        else:
+            target = round(raw_target, 2)     # breakout — no overhead cap
+        target = round(max(target, entry + 0.02), 2)      # clamp: strictly above entry
+
+    else:  # Bearish
+        entry = round(price, 2)
+
+        structural_stop = swing_high_10 + (atr * 0.10)
+        atr_stop        = price + (atr * 1.5)
+        stop            = round(min(structural_stop, atr_stop), 2)
+        stop            = round(max(stop, entry + 0.01), 2)   # clamp: strictly above entry
+
+        raw_target = price - (atr * 2.5)
+        support    = float(df["Low"].tail(20).min())
+        if support < entry * 0.995:           # support is meaningfully below entry
+            target = round(max(raw_target, support * 1.005), 2)
+        else:
+            target = round(raw_target, 2)     # breakdown — no support cap
+        target = round(min(target, entry - 0.02), 2)      # clamp: strictly below entry
 
     risk = abs(entry - stop)
     if risk < 0.01:
