@@ -78,12 +78,27 @@ ACCOUNT_SIZE = int(st.sidebar.number_input("Account size ($)",   value=1500, min
 RISK_PCT     = st.sidebar.number_input("Risk per trade (%)",     value=1.0,   min_value=0.1, max_value=10.0, step=0.1)
 
 COOLDOWN       = 600
+# ─────────────────────────────────────────────
+# PERSISTENCE
+#
+# BUG FIX #4: Streamlit Cloud containers are STATELESS. Files written to disk
+# (alert_history.json / trade_journal.json) are destroyed on redeploy, restart,
+# or idle timeout — silently wiping the user's entire trade journal.
+#
+# Mitigation (3 layers):
+#   1. st.session_state is the primary read source (survives reruns instantly)
+#   2. Disk is still written as a best-effort backup (works locally, and
+#      survives short-lived reruns on cloud)
+#   3. Export / Import buttons in the Journal tab so the user can persist
+#      their data themselves — the only true fix on ephemeral hosting.
+# ─────────────────────────────────────────────
 ALERT_LOG_FILE = Path("alert_history.json")
 JOURNAL_FILE   = Path("trade_journal.json")
 
-# ─────────────────────────────────────────────
-# PERSISTENCE HELPERS
-# ─────────────────────────────────────────────
+_SS_ALERTS  = "_alerts_store"
+_SS_JOURNAL = "_journal_store"
+
+
 def _load(path: Path) -> list:
     try:
         return json.loads(path.read_text()) if path.exists() else []
@@ -91,33 +106,69 @@ def _load(path: Path) -> list:
         logger.exception("Failed to load %s: %s", path, e)
         return []
 
+
 def _save(path: Path, data: list) -> None:
     try:
         path.write_text(json.dumps(data, indent=2, default=str))
     except Exception as e:
-        logger.exception("Failed to save %s: %s", path, e)
+        # On some hosts the FS is read-only — session_state still holds the data
+        logger.warning("Could not persist %s to disk (%s) — session_state only", path, e)
 
-def load_alerts()  -> list: return _load(ALERT_LOG_FILE)
-def save_alerts(d):          _save(ALERT_LOG_FILE, d)
-def load_journal() -> list: return _load(JOURNAL_FILE)
-def save_journal(d):         _save(JOURNAL_FILE, d)
+
+def load_alerts() -> list:
+    """Read from session_state first; hydrate from disk on first access."""
+    if _SS_ALERTS not in st.session_state:
+        st.session_state[_SS_ALERTS] = _load(ALERT_LOG_FILE)
+    return st.session_state[_SS_ALERTS]
+
+
+def save_alerts(d: list) -> None:
+    st.session_state[_SS_ALERTS] = d
+    _save(ALERT_LOG_FILE, d)
+
+
+def load_journal() -> list:
+    if _SS_JOURNAL not in st.session_state:
+        st.session_state[_SS_JOURNAL] = _load(JOURNAL_FILE)
+    return st.session_state[_SS_JOURNAL]
+
+
+def save_journal(d: list) -> None:
+    st.session_state[_SS_JOURNAL] = d
+    _save(JOURNAL_FILE, d)
 
 
 def log_alert(ticker, trend, strength, entry, stop, target, rr, price,
               filters_passed: dict) -> None:
     alerts = load_alerts()
+    now_epoch = time.time()
+
+    # BUG FIX #2: cooldown was comparing against strptime("... ET") which
+    # produces a NAIVE datetime — the literal "ET" is not parsed as a timezone.
+    # .timestamp() then interpreted it in the SERVER's local tz (UTC on
+    # Streamlit Cloud), a 4-5 hour offset, so the cooldown never triggered and
+    # duplicate Telegram alerts fired on every scan.
+    # Fix: store a real epoch alongside the display string and compare on that.
     recent = [a for a in alerts if a["ticker"] == ticker]
     if recent:
-        try:
-            last_epoch = datetime.strptime(recent[-1]["timestamp"],
-                                           "%Y-%m-%d %H:%M ET").timestamp()
-            if time.time() - last_epoch < COOLDOWN:
-                return
-        except Exception:
-            pass
+        last = recent[-1]
+        last_epoch = last.get("epoch")
+        if last_epoch is None:
+            # Legacy record without epoch — fall back to a tz-aware parse
+            try:
+                naive = datetime.strptime(last["timestamp"], "%Y-%m-%d %H:%M ET")
+                aware = pytz.timezone("America/New_York").localize(naive)
+                last_epoch = aware.timestamp()
+            except Exception:
+                last_epoch = 0
+        if now_epoch - float(last_epoch) < COOLDOWN:
+            logger.info("Cooldown active for %s — alert suppressed", ticker)
+            return
+
     alerts.append({
-        "id":             f"{ticker}_{int(time.time())}",
+        "id":             f"{ticker}_{int(now_epoch)}",
         "timestamp":      datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d %H:%M ET"),
+        "epoch":          now_epoch,   # tz-safe cooldown source of truth
         "ticker":  ticker, "trend":    trend,    "strength": strength,
         "price":   price,  "entry":    entry,    "stop":     stop,
         "target":  target, "rr":       rr,
@@ -187,15 +238,64 @@ def journal_stats(journal: list) -> dict:
 
 
 # ─────────────────────────────────────────────
-# POSITION SIZING  (FIX #10)
+# POSITION SIZING
 # ─────────────────────────────────────────────
+SHARES_PER_CONTRACT = 100
+
+
 def calc_position_size(entry: float, stop: float) -> dict:
+    """
+    BUG FIX #3: the old code did `contracts = max(1, shares // 100)`.
+
+    With a $1,500 account at 1% risk = $15 max risk. If per-share risk is $5,
+    that's 3 shares. But `max(1, 0)` returned **1 contract**, which controls
+    100 shares = $500 of real risk — 33% of the account, NOT the 1% configured.
+    The floor silently blew through the user's risk limit by up to 33x.
+
+    Now: contracts is a true floor-division with NO minimum. If 0, we surface
+    that explicitly along with what the account/risk would need to be to afford
+    a single contract, so the user can make an informed decision.
+    """
     risk_dollars = round(ACCOUNT_SIZE * RISK_PCT / 100, 2)
     per_share    = abs(entry - stop)
-    shares       = int(risk_dollars / per_share) if per_share > 0 else 0
-    # Each standard equity option contract = 100 shares
-    contracts    = max(1, shares // 100)
-    return {"risk_dollars": risk_dollars, "shares": shares, "contracts": contracts}
+
+    if per_share <= 0:
+        return {
+            "risk_dollars": risk_dollars, "shares": 0, "contracts": 0,
+            "affordable": False,
+            "note": "Invalid stop (zero risk per share).",
+        }
+
+    shares    = int(risk_dollars / per_share)
+    contracts = shares // SHARES_PER_CONTRACT   # NO max(1, ...) floor
+
+    # What one contract would actually cost in risk terms
+    risk_per_contract = round(per_share * SHARES_PER_CONTRACT, 2)
+
+    if contracts >= 1:
+        note = None
+        affordable = True
+    else:
+        affordable = False
+        # Minimum account needed to afford 1 contract at this risk %
+        min_account = round(risk_per_contract / (RISK_PCT / 100), 0)
+        note = (
+            f"1 contract = {SHARES_PER_CONTRACT} shares × ${per_share:.2f} risk "
+            f"= **${risk_per_contract:,.2f}** at risk — that's "
+            f"**{risk_per_contract / ACCOUNT_SIZE * 100:.1f}%** of your "
+            f"${ACCOUNT_SIZE:,} account (limit: {RISK_PCT}%). "
+            f"You'd need ~${min_account:,.0f} to take 1 contract within your risk rule. "
+            f"Consider trading **{shares} shares** instead."
+        )
+
+    return {
+        "risk_dollars":      risk_dollars,
+        "shares":            shares,
+        "contracts":         contracts,
+        "risk_per_contract": risk_per_contract,
+        "affordable":        affordable,
+        "note":              note,
+    }
 
 
 # ─────────────────────────────────────────────
@@ -834,8 +934,31 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
 
 @st.cache_data(ttl=300, show_spinner=False)
 def analyze(_df: pd.DataFrame, ticker: str, latest_bar_key: str,
-            spy_regime: dict | None = None) -> dict:
+            settings_key: str, spy_regime: dict | None = None) -> dict:
+    """
+    BUG FIX #1: settings_key is a fingerprint of every sidebar tunable that
+    _analyze_uncached() reads as a global (ADX_MIN, MIN_RR, VOLUME_MULT,
+    EARNINGS_DAYS, POST_EARNINGS_DAYS, WEEKLY_CONFIRM, SPY_REGIME).
+
+    Previously those were captured as CLOSURES, not cache-key params — so
+    changing ADX_MIN from 25→40 in the sidebar did NOT invalidate this cache.
+    Users saw stale results computed with the OLD threshold for up to 5 minutes
+    with no indication anything was wrong.
+
+    Including the fingerprint in the signature forces Streamlit to treat a
+    settings change as a cache miss.
+    """
     return _analyze_uncached(_df, ticker, spy_regime=spy_regime)
+
+
+def get_settings_key() -> str:
+    """Fingerprint of all sidebar tunables that affect signal logic."""
+    return (
+        f"adx{ADX_MIN}_rr{MIN_RR}_vol{VOLUME_MULT}"
+        f"_earn{EARNINGS_DAYS}_post{POST_EARNINGS_DAYS}"
+        f"_wk{int(WEEKLY_CONFIRM)}_spy{int(SPY_REGIME)}"
+        f"_dte{MIN_DTE}_bud{BUDGET_MAX}_rows{MIN_ROWS}"
+    )
 
 
 # ─────────────────────────────────────────────
@@ -875,22 +998,27 @@ def scalp(df: pd.DataFrame) -> dict:
 _SCAN_MAX_WORKERS = 2   # reduced from 3 → 2 for Streamlit Cloud memory headroom
 
 
-def _scan_one_ticker(ticker: str, data_map: dict, spy_regime: dict) -> dict | None:
+def _scan_one_ticker(ticker: str, data_map: dict, spy_regime: dict,
+                     settings_key: str) -> dict | None:
     df = data_map.get(ticker)
     if df is None: return None
     df = compute(df)
     if df.empty: return None
-    r = analyze(df, ticker, f"{ticker}_{df.index[-1]}", spy_regime=spy_regime)
+    r = analyze(df, ticker, f"{ticker}_{df.index[-1]}", settings_key,
+                spy_regime=spy_regime)
     return r if r and not r.get("blocked") else None
 
 
-def _run_scan_uncached(scan_list: tuple, spy_regime: dict) -> list[dict]:
+def _run_scan_uncached(scan_list: tuple, spy_regime: dict,
+                       settings_key: str) -> list[dict]:
     """Does the actual parallel work — not cached so threads don't OOM cache."""
     data_map = batch_get_data(scan_list)
     results  = []
     with ThreadPoolExecutor(max_workers=_SCAN_MAX_WORKERS) as executor:
-        futures = {executor.submit(_scan_one_ticker, t, data_map, spy_regime): t
-                   for t in scan_list}
+        futures = {
+            executor.submit(_scan_one_ticker, t, data_map, spy_regime, settings_key): t
+            for t in scan_list
+        }
         for future in as_completed(futures):
             try:
                 r = future.result()
@@ -901,14 +1029,15 @@ def _run_scan_uncached(scan_list: tuple, spy_regime: dict) -> list[dict]:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def run_watchlist_scan(scan_list: tuple, spy_regime_key: str) -> list[dict]:
+def run_watchlist_scan(scan_list: tuple, spy_regime_key: str,
+                       settings_key: str) -> list[dict]:
     """
-    Cached wrapper — spy_regime_key is a string snapshot of the regime
-    so the cache correctly invalidates when SPY regime changes.
-    Actual threading happens in _run_scan_uncached (not inside this function).
+    Cached wrapper. Both spy_regime_key AND settings_key are part of the cache
+    signature so the scan re-runs when either the macro regime OR any sidebar
+    tunable changes (BUG FIX #1).
     """
-    spy_regime = get_spy_regime()   # already cached at ttl=1800, cheap call
-    return _run_scan_uncached(scan_list, spy_regime)
+    spy_regime = get_spy_regime()   # cached at ttl=1800, cheap
+    return _run_scan_uncached(scan_list, spy_regime, settings_key)
 
 
 # ─────────────────────────────────────────────
@@ -1132,7 +1261,8 @@ with TAB_SCAN:
         st.info("👆 Click **Run / Refresh Scan** to scan the watchlist.")
     else:
         with st.spinner("Scanning watchlist…"):
-            all_setups = run_watchlist_scan(tuple(SCAN_LIST), regime_key)
+            all_setups = run_watchlist_scan(tuple(SCAN_LIST), regime_key,
+                                            get_settings_key())
 
         # Defensive: only keep well-formed setup dicts (must have "ticker").
         # analyze() returns diagnostic dicts with "blocked": True for failed
@@ -1179,11 +1309,19 @@ with TAB_SCAN:
                     h5.metric("Filters", f"{a['filters_pass']}/{a['filters_total']}")
                     st.caption(f"Entry {a['entry']} · Stop {a['stop']} · Target {a['target']} · RSI {a['rsi']}")
                     ps = calc_position_size(a["entry"], a["stop"])
-                    st.caption(
-                        f"💰 Position sizing — Risk ${ps['risk_dollars']} · "
-                        f"Shares {ps['shares']} · Option contracts {ps['contracts']} "
-                        f"(${ACCOUNT_SIZE:,} acct · {RISK_PCT}% risk)"
-                    )
+                    if ps["affordable"]:
+                        st.caption(
+                            f"💰 Position sizing — Risk ${ps['risk_dollars']} · "
+                            f"**{ps['shares']} shares** or **{ps['contracts']} contract(s)** "
+                            f"(${ACCOUNT_SIZE:,} acct · {RISK_PCT}% risk)"
+                        )
+                    else:
+                        st.caption(
+                            f"💰 Position sizing — Risk ${ps['risk_dollars']} · "
+                            f"**{ps['shares']} shares** · ⚠️ **0 contracts** "
+                            f"(1 contract = ${ps['risk_per_contract']:,.2f} risk, "
+                            f"over your {RISK_PCT}% limit)"
+                        )
         else:
             st.info("No high-quality setups right now — all 4 filters must pass.")
 
@@ -1249,7 +1387,8 @@ with TAB_STOCK:
             st.divider()
 
             latest_bar_key = f"{ticker}_{df.index[-1]}"
-            r = analyze(df, ticker, latest_bar_key, spy_regime=spy_regime)
+            r = analyze(df, ticker, latest_bar_key, get_settings_key(),
+                        spy_regime=spy_regime)
 
             stab1, stab2, stab3, stab4, stab5 = st.tabs([
                 "💼 Swing Trade","🔬 Signal Filters",
@@ -1275,11 +1414,19 @@ with TAB_STOCK:
                     st.progress(min(reward_amt/(risk_amt+reward_amt),1.0),
                                 text=f"Reward ${reward_amt:.2f} vs Risk ${risk_amt:.2f}")
                     ps = calc_position_size(r["entry"], r["stop"])
-                    st.info(
-                        f"💰 **Position Sizing** — "
-                        f"Risk ${ps['risk_dollars']} ({RISK_PCT}% of ${ACCOUNT_SIZE:,}) · "
-                        f"**{ps['shares']} shares** · **{ps['contracts']} option contract(s)**"
-                    )
+                    if ps["affordable"]:
+                        st.info(
+                            f"💰 **Position Sizing** — "
+                            f"Risk ${ps['risk_dollars']} ({RISK_PCT}% of ${ACCOUNT_SIZE:,}) · "
+                            f"**{ps['shares']} shares** · **{ps['contracts']} option contract(s)** "
+                            f"(1 contract = ${ps['risk_per_contract']:,.2f} risk)"
+                        )
+                    else:
+                        st.warning(
+                            f"⚠️ **Options exceed your risk limit** — "
+                            f"Risk budget is ${ps['risk_dollars']} "
+                            f"({RISK_PCT}% of ${ACCOUNT_SIZE:,}).\n\n{ps['note']}"
+                        )
 
             with stab2:
                 st.markdown("### 🔬 Signal Filter Scorecard")
@@ -1502,6 +1649,49 @@ with TAB_JOURNAL:
     journal = load_journal()
     alerts  = load_alerts()
     stats   = journal_stats(journal)
+
+    # ── BUG FIX #4: data-safety warning + export/import ──
+    with st.expander("⚠️ Data Safety — read this if hosting on Streamlit Cloud", expanded=False):
+        st.warning(
+            "**Streamlit Cloud containers are stateless.** Your journal is written "
+            "to disk, but that disk is wiped on every redeploy, restart, or idle "
+            "timeout. **Export regularly** to avoid losing your trade history."
+        )
+        ex1, ex2 = st.columns(2)
+        with ex1:
+            st.markdown("**📥 Export**")
+            backup = {
+                "exported_at": datetime.now(pytz.timezone("America/New_York")).isoformat(),
+                "journal":     journal,
+                "alerts":      alerts,
+            }
+            st.download_button(
+                "⬇️ Download backup (.json)",
+                data=json.dumps(backup, indent=2, default=str),
+                file_name=f"trading_copilot_backup_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+            st.caption(f"{len(journal)} trades · {len(alerts)} alerts")
+
+        with ex2:
+            st.markdown("**📤 Restore**")
+            uploaded = st.file_uploader("Upload a backup .json", type=["json"],
+                                        key="journal_restore", label_visibility="collapsed")
+            if uploaded is not None:
+                try:
+                    payload = json.load(uploaded)
+                    n_j = len(payload.get("journal", []))
+                    n_a = len(payload.get("alerts", []))
+                    st.caption(f"Found {n_j} trades · {n_a} alerts")
+                    if st.button("♻️ Restore (overwrites current)", type="primary",
+                                 use_container_width=True, key="do_restore"):
+                        save_journal(payload.get("journal", []))
+                        save_alerts(payload.get("alerts", []))
+                        st.success(f"Restored {n_j} trades and {n_a} alerts.")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Invalid backup file: {e}")
 
     if stats:
         st.markdown("### 📊 Performance Dashboard")
