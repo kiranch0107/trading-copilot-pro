@@ -292,20 +292,23 @@ def calc_position_size(entry: float, stop: float) -> dict:
         affordable = False
         # Minimum account needed to afford 1 contract at this risk %
         min_account = round(risk_per_contract / (RISK_PCT / 100), 0)
+        # NOTE: Streamlit markdown treats $...$ as LaTeX math. Every literal
+        # dollar sign must be escaped as \$ or the text between two of them
+        # gets swallowed into a math block (renders as italic serif garbage).
         note = (
-            f"1 contract = {SHARES_PER_CONTRACT} shares × ${per_share:.2f} risk "
-            f"= **${risk_per_contract:,.2f}** at risk — that's "
+            f"1 contract = {SHARES_PER_CONTRACT} shares × \\${per_share:,.2f} risk "
+            f"= **\\${risk_per_contract:,.2f} at risk** — that's "
             f"**{risk_per_contract / ACCOUNT_SIZE * 100:.1f}%** of your "
-            f"${ACCOUNT_SIZE:,} account (limit: {RISK_PCT}%). "
-            f"You'd need ~${min_account:,.0f} to take 1 contract within your risk rule. "
-            f"Consider trading **{shares} shares** instead."
+            f"\\${ACCOUNT_SIZE:,} account (your limit: {RISK_PCT}%). "
+            f"You'd need ~**\\${min_account:,.0f}** to take 1 contract within your risk rule. "
+            f"Consider trading **{shares} share(s)** instead."
         )
 
     if notional_capped:
         cap_note = (
             f"⚠️ Share count limited by buying power: risk sizing suggested "
-            f"{shares_by_risk:,} shares but ${ACCOUNT_SIZE:,} only covers "
-            f"{shares_by_cash:,} at ${entry:.2f}/share."
+            f"{shares_by_risk:,} shares but \\${ACCOUNT_SIZE:,} only covers "
+            f"{shares_by_cash:,} at \\${entry:,.2f}/share."
         )
         note = f"{cap_note}\n\n{note}" if note else cap_note
 
@@ -1208,7 +1211,7 @@ def render_no_signal_diagnostic(df, latest_price, latest_rsi, vol_now, vol_avg,
     # ── Base condition summary ──
     st.markdown(f"**Implied direction: {'🟢 ' + implied if implied else '⚪ Mixed/No trend'}**")
     st.caption(f"{chk(stack_bull or stack_bear)} Trend stack — "
-               f"Price ${latest_price:.2f} / EMA20 ${ema20_v:.2f} / EMA50 ${ema50_v:.2f}")
+               f"Price \\${latest_price:,.2f} / EMA20 \\${ema20_v:,.2f} / EMA50 \\${ema50_v:,.2f}")
     st.caption(f"{chk(macd_aligned)} MACD — {macd_label}")
     st.caption(f"{chk(rsi_ok)} RSI band — {rsi_label}")
     st.caption(f"{chk(vol_floor)} Volume floor — {vol_ratio:.2f}× avg (need ≥ 0.70×)")
@@ -1235,8 +1238,8 @@ def render_no_signal_diagnostic(df, latest_price, latest_rsi, vol_now, vol_avg,
     elif block_reason == "zero_risk":
         st.warning(
             f"…but blocked — **stop is too tight to be tradeable**. "
-            f"Risk is only **${diag.get('risk', 0):.2f}** vs a minimum of "
-            f"**${diag.get('min_risk', 0):.2f}** (0.3% of price). A stop this "
+            f"Risk is only **\\${diag.get('risk', 0):,.2f}** vs a minimum of "
+            f"**\\${diag.get('min_risk', 0):,.2f}** (0.3% of price). A stop this "
             f"close would be hit by normal intraday noise."
         )
     elif filters:
@@ -1415,15 +1418,15 @@ with TAB_SCAN:
                     ps = calc_position_size(a["entry"], a["stop"])
                     if ps["affordable"]:
                         st.caption(
-                            f"💰 Position sizing — Risk ${ps['risk_dollars']} · "
+                            f"💰 Position sizing — Risk \\${ps['risk_dollars']:,.2f} · "
                             f"**{ps['shares']} shares** or **{ps['contracts']} contract(s)** "
-                            f"(${ACCOUNT_SIZE:,} acct · {RISK_PCT}% risk)"
+                            f"(\\${ACCOUNT_SIZE:,} acct · {RISK_PCT}% risk)"
                         )
                     else:
                         st.caption(
-                            f"💰 Position sizing — Risk ${ps['risk_dollars']} · "
+                            f"💰 Position sizing — Risk \\${ps['risk_dollars']:,.2f} · "
                             f"**{ps['shares']} shares** · ⚠️ **0 contracts** "
-                            f"(1 contract = ${ps['risk_per_contract']:,.2f} risk, "
+                            f"(1 contract = \\${ps['risk_per_contract']:,.2f} risk, "
                             f"over your {RISK_PCT}% limit)"
                         )
         else:
@@ -1549,15 +1552,15 @@ with TAB_STOCK:
                     if ps["affordable"]:
                         st.info(
                             f"💰 **Position Sizing** — "
-                            f"Risk ${ps['risk_dollars']} ({RISK_PCT}% of ${ACCOUNT_SIZE:,}) · "
+                            f"Risk \\${ps['risk_dollars']:,.2f} ({RISK_PCT}% of \\${ACCOUNT_SIZE:,}) · "
                             f"**{ps['shares']} shares** · **{ps['contracts']} option contract(s)** "
-                            f"(1 contract = ${ps['risk_per_contract']:,.2f} risk)"
+                            f"(1 contract = \\${ps['risk_per_contract']:,.2f} risk)"
                         )
                     else:
                         st.warning(
                             f"⚠️ **Options exceed your risk limit** — "
-                            f"Risk budget is ${ps['risk_dollars']} "
-                            f"({RISK_PCT}% of ${ACCOUNT_SIZE:,}).\n\n{ps['note']}"
+                            f"Risk budget is \\${ps['risk_dollars']:,.2f} "
+                            f"({RISK_PCT}% of \\${ACCOUNT_SIZE:,}).\n\n{ps['note']}"
                         )
                     if not r["all_pass"]:
                         failed = [n for n,f in r["filters"].items() if not f["pass"]]
@@ -1619,9 +1622,9 @@ with TAB_STOCK:
                         o3.metric("Volume",    f"{opt['volume']:,}")
                         o4.metric("Open Int.", f"{opt['oi']:,}")
                         spread_pct = (opt["spread"]/opt["mid"]*100) if opt["mid"] else 0
-                        st.caption(f"Spread: ${opt['spread']} ({spread_pct:.1f}% of mid) · Last: ${opt['last_price']}")
+                        st.caption(f"Spread: \\${opt['spread']} ({spread_pct:.1f}% of mid) · Last: \\${opt['last_price']}")
                         if opt["is_budget"]:
-                            st.success(f"💸 Budget pick — ${opt['mid']}/contract (under ${BUDGET_MAX:.2f})")
+                            st.success(f"💸 Budget pick — \\${opt['mid']}/contract (under \\${BUDGET_MAX:.2f})")
                         if not r["all_pass"]:
                             st.warning("⚠️ Not all filters pass — trade at your own discretion.")
                         ua_hit = check_pick_unusual_activity(ticker, opt)
@@ -1660,13 +1663,13 @@ with TAB_STOCK:
                         st.error(f"⚠️ {opt['error']}")
                     elif opt["is_budget"]:
                         st.success(
-                            f"✅ **{opt['label']}** · Strike ${opt['strike']} · "
+                            f"✅ **{opt['label']}** · Strike \\${opt['strike']} · "
                             f"Exp {opt['expiry']} ({opt['dte']} DTE) · "
-                            f"Mid **${opt['mid']}** · Vol {opt['volume']:,} · OI {opt['oi']:,}"
+                            f"Mid **\\${opt['mid']}** · Vol {opt['volume']:,} · OI {opt['oi']:,}"
                         )
                         st.caption("Budget options carry higher gamma risk — size accordingly.")
                     else:
-                        st.info(f"Best contract is ${opt['mid']}/contract — above ${BUDGET_MAX:.2f}. "
+                        st.info(f"Best contract is \\${opt['mid']}/contract — above \\${BUDGET_MAX:.2f}. "
                                 "Try a wider strike or longer expiry.")
 
             st.divider()
@@ -1953,7 +1956,7 @@ with TAB_JOURNAL:
                 d2.metric("Exit",        f"${j['exit_price']}")
                 d3.metric("Planned R:R", j["planned_rr"])
                 d4.metric("Actual R",    j["actual_rr"])
-                st.caption(f"Stop: ${j['stop']} · Target: ${j['target']} · Alerted: {short_ts(j['date'])}")
+                st.caption(f"Stop: \\${j['stop']} · Target: \\${j['target']} · Alerted: {short_ts(j['date'])}")
                 if j.get("notes"):
                     st.markdown(f"📝 *{j['notes']}*")
                 if st.button("🗑️ Delete", key=f"del_{j['id']}", type="secondary"):
