@@ -63,7 +63,10 @@ EARNINGS_DAYS      = int(st.sidebar.number_input("Earnings blackout days",      
 POST_EARNINGS_DAYS = int(st.sidebar.number_input("Post-earnings cooling (days)", value=1,   min_value=0, max_value=7,
     help="Also block signals N days AFTER earnings (avoids IV crush residual)"))
 BUDGET_MAX    = st.sidebar.number_input("Budget max (option mid)",   value=2.00, min_value=0.01, step=0.10)
-MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",   value=1,    min_value=1))
+MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",   value=7,    min_value=1,
+    help="Minimum days-to-expiry to consider. Your swing target (2.5× ATR) usually needs "
+         "~8 sessions to play out — a 1-2 DTE contract will lose to theta even if the "
+         "trade thesis is correct. 7+ is a sane floor for swing trades."))
 MIN_RR        = st.sidebar.number_input("Min Reward/Risk",           value=0.5,  min_value=0.1,  step=0.1)
 HQ_MIN_RR     = st.sidebar.number_input("High-Quality R:R threshold", value=1.5,  min_value=0.2,  step=0.1,
     help="R:R needed to qualify as a 🔥 HIGH QUALITY setup (these trigger Telegram alerts). "
@@ -702,7 +705,9 @@ def check_regime_alignment(daily_trend: str, spy_regime: dict) -> tuple[bool, st
 _OPT_RETRY_ATTEMPTS = 3
 _OPT_RETRY_DELAY    = 2.0
 _OPT_EXPIRY_DELAY   = 0.4
-_OPT_MAX_EXPIRIES   = 3
+_OPT_MAX_EXPIRIES   = 5   # was 3. With MIN_DTE=1 the first 3 expiries can all be
+                          # <3 weeks out — too short for a 2.5-ATR swing target.
+                          # Widening to 5 lets the scorer reach ~4-6 weeks out.
 
 
 def _fetch_chain_with_retry(stock, expiry: str):
@@ -769,27 +774,58 @@ def get_full_chain_data(ticker: str) -> dict:
         return {"error":f"Option chain fetch failed ({msg})","expiries":[]}
 
 
-def get_option_data(ticker: str, price: float, trend: str, strength: str) -> dict:
+def get_option_data(ticker: str, price: float, trend: str, strength: str,
+                    atr: float | None = None) -> dict:
+    """
+    Strike selection.
+
+    BUG FIX: the 'Strong' branch previously had only ONE bound —
+        opts[opts["strike"] <= price * 1.02]      (bullish)
+    which accepted EVERY strike from $1 up to 1.02×price. On SPY at $749 that
+    scanned every deep-ITM call from $1 to $764. Same unbounded issue on the
+    bearish side. Now both branches are two-sided windows.
+
+    Windows are also ATR-aware where possible: a 5% band means something very
+    different on a 1%-ATR index than on a 6%-ATR small cap. If ATR is supplied
+    we size the window to ±2.0 ATR (floored/capped at sane percentage bounds);
+    otherwise we fall back to fixed percentages.
+    """
     chain_data = get_full_chain_data(ticker)
     if chain_data.get("error"):
         return {"error": chain_data["error"]}
+
+    # ── Build the strike window ──
+    if atr and atr > 0 and price > 0:
+        band = (atr * 2.0) / price               # ±2 ATR expressed as a fraction
+        band = min(max(band, 0.03), 0.12)        # clamp to 3%–12%
+    else:
+        band = 0.05                              # fallback: ±5%
+
+    if strength == "Strong":
+        # Slightly ITM/ATM bias — but two-sided, not unbounded.
+        if trend == "Bullish":
+            lo_mult, hi_mult = 1.0 - band, 1.02          # ITM up to 1 band, max 2% OTM
+        else:
+            lo_mult, hi_mult = 0.98, 1.0 + band          # ITM up to 1 band, max 2% OTM
+    else:
+        lo_mult, hi_mult = 1.0 - band, 1.0 + band        # symmetric ATM window
+
+    lo, hi = price * lo_mult, price * hi_mult
+
     best = None; best_score = 0.0
     for entry in chain_data["expiries"]:
         expiry, dte = entry["expiry"], entry["dte"]
         opts = entry["calls"] if trend=="Bullish" else entry["puts"]
         if opts.empty: continue
-        if strength=="Strong":
-            opts = opts[(opts["strike"]<=price*1.02) if trend=="Bullish"
-                        else (opts["strike"]>=price*0.98)]
-        else:
-            opts = opts[(opts["strike"]>=price*0.95)&(opts["strike"]<=price*1.05)]
+
+        opts = opts[(opts["strike"] >= lo) & (opts["strike"] <= hi)]
         if opts.empty: continue
+
         opts = opts.copy()
         opts["spread"] = opts["ask"] - opts["bid"]
         opts["mid"]    = (opts["ask"] + opts["bid"]) / 2
-        # O2 FIX: require bid > 0 — mid can pass even when bid=0 (wide/illiquid)
-        # O1 FIX: require volume > 0 explicitly — vol_weight=0.1 penalised but
-        # didn't exclude. A zero-volume contract is untradeable regardless of OI.
+        # Require bid > 0 (mid can pass even when bid=0 on wide/illiquid strikes)
+        # and volume > 0 (a zero-volume contract is untradeable regardless of OI).
         valid = opts[
             (opts["mid"] > 0) &
             (opts["bid"] > 0) &
@@ -800,23 +836,43 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str) -> dic
         if valid.empty: continue
         valid = valid.copy()
         valid["liq"]   = valid["volume"] + valid["openInterest"]
-        # O1 FIX: multiply score by volume_weight so zero-volume high-OI contracts
-        # don't outscore genuinely active contracts. volume=0 → weight=0.1 (minimal
-        # credit for existence), volume>0 → weight scales with actual activity.
+        # Volume weight so zero-volume high-OI contracts don't outscore genuinely
+        # active ones. volume=0 → weight 0.1; volume>0 → scales with activity.
         valid["vol_weight"] = valid["volume"].apply(lambda v: 0.1 if v == 0 else 1.0 + (v / (v + 100)))
         valid["score"] = (valid["liq"] * valid["vol_weight"]) / (1 + (valid["spread"] / (valid["mid"] + 1e-6)))
+
+        # ── DTE ADEQUACY (theta protection) ──
+        # A 2.5-ATR target typically needs ~2.5 average-range days of favourable
+        # movement, and real moves are rarely straight lines — budget ~3x that,
+        # plus a few days of buffer. A contract that expires before the trade can
+        # realistically reach target is a theta trap no matter how liquid it is.
+        # We SCALE the score rather than hard-filtering, so a very liquid short
+        # contract can still win if nothing better exists — but it gets flagged.
+        if atr and atr > 0:
+            days_needed = max(5, int(2.5 * 3))   # ~8 sessions for a 2.5-ATR move
+        else:
+            days_needed = 10
+        if dte < days_needed:
+            valid["score"] *= (dte / days_needed) ** 2   # quadratic theta penalty
+
         top = valid.sort_values("score", ascending=False).iloc[0]
         if top["score"] > best_score:
             best = (top, expiry, dte); best_score = top["score"]
+
     if best is None:
         return {"error":"No liquid options found"}
+
     row, expiry, dte = best
+    days_needed = max(5, int(2.5 * 3)) if (atr and atr > 0) else 10
     return {"label":"CALL" if trend=="Bullish" else "PUT",
             "strike":round(float(row["strike"]),2),
             "expiry":expiry,"mid":round(float(row["mid"]),2),
             "last_price":round(float(row.get("lastPrice",0)),2),
             "volume":int(row.get("volume",0)),"oi":int(row.get("openInterest",0)),
             "spread":round(float(row["spread"]),2),"dte":dte,
+            "strike_lo":round(lo,2),"strike_hi":round(hi,2),
+            "days_needed":days_needed,
+            "dte_adequate":dte >= days_needed,
             "is_budget":row["mid"]<=BUDGET_MAX}
 
 
@@ -1078,7 +1134,7 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
             "rsi": round(rsi, 1), "adx": adx_val,
         }
 
-    option = get_option_data(ticker, price, trend, strength)
+    option = get_option_data(ticker, price, trend, strength, atr=atr)
 
     # ── High-quality tier ──
     # Was hardcoded `rr >= 2.0`. With MIN_RR now user-tunable (default 0.5),
@@ -1717,6 +1773,43 @@ with TAB_STOCK:
                         o4.metric("Open Int.", f"{opt['oi']:,}")
                         spread_pct = (opt["spread"]/opt["mid"]*100) if opt["mid"] else 0
                         st.caption(f"Spread: \\${opt['spread']} ({spread_pct:.1f}% of mid) · Last: \\${opt['last_price']}")
+
+                        # ── DTE adequacy (theta trap warning) ──
+                        if not opt.get("dte_adequate", True):
+                            st.error(
+                                f"⏳ **Theta risk — expiry may be too short.** This contract has "
+                                f"**{opt['dte']} DTE**, but your target (2.5× ATR) typically needs "
+                                f"**~{opt.get('days_needed', 8)} sessions** of favourable movement. "
+                                f"The trade thesis may be right and the option still expire worthless. "
+                                f"Raise **Min DTE** in the sidebar to search further out."
+                            )
+                        else:
+                            st.caption(
+                                f"⏳ {opt['dte']} DTE vs ~{opt.get('days_needed', 8)} sessions needed "
+                                f"for the target — adequate time cushion. ✅"
+                            )
+
+                        # ── Search-window transparency ──
+                        with st.expander("🔍 What was searched"):
+                            st.caption(
+                                f"**Expiries:** up to {_OPT_MAX_EXPIRIES} nearest with "
+                                f"DTE ≥ {MIN_DTE} (your sidebar setting)."
+                            )
+                            if "strike_lo" in opt:
+                                st.caption(
+                                    f"**Strikes:** \\${opt['strike_lo']:,.2f} → \\${opt['strike_hi']:,.2f} "
+                                    f"(window sized to ±2× ATR around spot, clamped 3–12%; "
+                                    f"'{r['strength']}' strength shifts the window slightly ITM)."
+                                )
+                            st.caption(
+                                "**Liquidity gates:** bid > 0, volume > 0, open interest > 0, "
+                                "and bid-ask spread ≤ 15% of mid."
+                            )
+                            st.caption(
+                                "**Ranking:** (volume + OI) × volume-weight ÷ spread-penalty, "
+                                "then scaled down quadratically if DTE is below what the target needs."
+                            )
+
                         if opt["is_budget"]:
                             st.success(f"💸 Budget pick — \\${opt['mid']}/contract (under \\${BUDGET_MAX:.2f})")
                         if not r["all_pass"]:
