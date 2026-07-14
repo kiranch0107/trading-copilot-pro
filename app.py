@@ -269,7 +269,17 @@ def calc_position_size(entry: float, stop: float) -> dict:
             "note": "Invalid stop (zero risk per share).",
         }
 
-    shares    = int(risk_dollars / per_share)
+    shares_by_risk = int(risk_dollars / per_share)
+
+    # NOTIONAL CAP (bug fix): risk-based sizing alone can suggest more stock
+    # than the account can buy. Example: $1 stock with a $0.01 stop → risk
+    # sizing says 1,500 shares = $1,500 notional = 100% of a $1,500 account
+    # (before commissions, and ignoring that cash accounts can't even fill it).
+    # Cap shares by buying power (95% of account to leave room for fees).
+    shares_by_cash  = int((ACCOUNT_SIZE * 0.95) / entry) if entry > 0 else 0
+    shares          = min(shares_by_risk, shares_by_cash)
+    notional_capped = shares_by_cash < shares_by_risk
+
     contracts = shares // SHARES_PER_CONTRACT   # NO max(1, ...) floor
 
     # What one contract would actually cost in risk terms
@@ -290,6 +300,14 @@ def calc_position_size(entry: float, stop: float) -> dict:
             f"You'd need ~${min_account:,.0f} to take 1 contract within your risk rule. "
             f"Consider trading **{shares} shares** instead."
         )
+
+    if notional_capped:
+        cap_note = (
+            f"⚠️ Share count limited by buying power: risk sizing suggested "
+            f"{shares_by_risk:,} shares but ${ACCOUNT_SIZE:,} only covers "
+            f"{shares_by_cash:,} at ${entry:.2f}/share."
+        )
+        note = f"{cap_note}\n\n{note}" if note else cap_note
 
     return {
         "risk_dollars":      risk_dollars,
@@ -919,15 +937,22 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
 
         stop = round(min(stop, entry - 0.01), 2)   # final safety clamp
 
-        # Target: 2.5 ATR up, capped only by resistance that is genuinely
-        # ABOVE entry (a real obstacle). On a breakout to new highs there is
-        # no overhead resistance, so no cap is applied.
+        # Target: 2.5 ATR up. Cap at overhead resistance ONLY if that level is
+        # at least 1 ATR above entry.
+        #
+        # BUG v2 (fixed): the previous threshold was a fixed 0.5% (entry*1.005).
+        # In a steady uptrend the 20-bar high IS the most recent bar's high —
+        # typically 0.5–1.5% above the close — so the cap fired on virtually
+        # every clean trend and crushed the target to just above entry
+        # (rr ≈ 0.2). "Meaningful resistance" must be measured in ATR: if the
+        # 20-bar high is within 1 ATR, price is effectively AT its highs
+        # (breakout) and there is no genuine overhead level to cap against.
         raw_target = price + (atr * 2.5)
         resistance = float(df["High"].tail(20).max())
-        if resistance > entry * 1.005:
+        if resistance >= entry + (atr * 1.0):
             target = round(min(raw_target, resistance * 0.995), 2)
         else:
-            target = round(raw_target, 2)
+            target = round(raw_target, 2)     # at/near highs — no cap
         target = round(max(target, entry + 0.02), 2)
 
     else:  # Bearish
@@ -947,10 +972,13 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
 
         raw_target = price - (atr * 2.5)
         support    = float(df["Low"].tail(20).min())
-        if support < entry * 0.995:
+        # Same ATR-based threshold as bullish: only cap at support if it's at
+        # least 1 ATR below entry. In a steady downtrend the 20-bar low is the
+        # most recent bar's low — capping against it crushed every clean trend.
+        if support <= entry - (atr * 1.0):
             target = round(max(raw_target, support * 1.005), 2)
         else:
-            target = round(raw_target, 2)
+            target = round(raw_target, 2)     # at/near lows — no cap
         target = round(min(target, entry - 0.02), 2)
 
     # ── Risk sanity gate ──
