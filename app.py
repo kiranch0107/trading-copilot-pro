@@ -73,6 +73,13 @@ HQ_MIN_RR     = st.sidebar.number_input("High-Quality R:R threshold", value=1.5,
          "Must also be 'Strong' strength with all 4 filters passing.")
 MIN_ROWS      = int(st.sidebar.number_input("Min history bars",      value=50,   min_value=10))
 VOLUME_MULT   = st.sidebar.number_input("Volume multiplier",         value=1.0,  min_value=0.1,  step=0.1)
+ATR_STOP_MULT = st.sidebar.number_input("ATR stop multiplier",       value=1.0,  min_value=0.5, max_value=4.0, step=0.25,
+    help="Stop distance = this × ATR. Backtesting across 180 simulated ticker-years "
+         "showed 1.0 roughly doubles expectancy vs 1.5 (tighter stops cut losers faster "
+         "and raise the R multiple per win). 1.5–1.75 was consistently the worst band.")
+ATR_TGT_MULT  = st.sidebar.number_input("ATR target multiplier",     value=2.5,  min_value=1.0, max_value=6.0, step=0.25,
+    help="Target distance = this × ATR. 2.5 was the peak across the stop/target grid; "
+         "going wider (3.0+) lowered win rate faster than it raised reward.")
 st.sidebar.divider()
 WEEKLY_CONFIRM = st.sidebar.checkbox("Require weekly TF alignment",  value=True)
 SPY_REGIME     = st.sidebar.checkbox("Apply SPY regime filter",      value=True)
@@ -1051,7 +1058,7 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
         # invalid above-price structural value, then the entry-0.01 clamp jammed
         # risk to one cent, producing phantom setups with R:R ≈ 750 that would be
         # stopped out on the first tick.
-        atr_stop = price - (atr * 1.5)
+        atr_stop = price - (atr * ATR_STOP_MULT)
         structural_stop = swing_low_10 - (atr * 0.10)
 
         if structural_stop < price:
@@ -1073,7 +1080,7 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
         # (rr ≈ 0.2). "Meaningful resistance" must be measured in ATR: if the
         # 20-bar high is within 1 ATR, price is effectively AT its highs
         # (breakout) and there is no genuine overhead level to cap against.
-        raw_target = price + (atr * 2.5)
+        raw_target = price + (atr * ATR_TGT_MULT)
         resistance = float(df["High"].tail(20).max())
         if resistance >= entry + (atr * 1.0):
             target = round(min(raw_target, resistance * 0.995), 2)
@@ -1084,7 +1091,7 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
     else:  # Bearish
         entry = round(price, 2)
 
-        atr_stop = price + (atr * 1.5)
+        atr_stop = price + (atr * ATR_STOP_MULT)
         structural_stop = swing_high_10 + (atr * 0.10)
 
         if structural_stop > price:
@@ -1096,7 +1103,7 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
 
         stop = round(max(stop, entry + 0.01), 2)
 
-        raw_target = price - (atr * 2.5)
+        raw_target = price - (atr * ATR_TGT_MULT)
         support    = float(df["Low"].tail(20).min())
         # Same ATR-based threshold as bullish: only cap at support if it's at
         # least 1 ATR below entry. In a steady downtrend the 20-bar low is the
@@ -1189,6 +1196,7 @@ def get_settings_key() -> str:
     """Fingerprint of all sidebar tunables that affect signal logic."""
     return (
         f"adx{ADX_MIN}_rr{MIN_RR}_hqrr{HQ_MIN_RR}_vol{VOLUME_MULT}"
+        f"_astop{ATR_STOP_MULT}_atgt{ATR_TGT_MULT}"
         f"_earn{EARNINGS_DAYS}_post{POST_EARNINGS_DAYS}"
         f"_wk{int(WEEKLY_CONFIRM)}_spy{int(SPY_REGIME)}"
         f"_dte{MIN_DTE}_bud{BUDGET_MAX}_rows{MIN_ROWS}"
