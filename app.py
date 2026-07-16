@@ -63,7 +63,7 @@ EARNINGS_DAYS      = int(st.sidebar.number_input("Earnings blackout days",      
 POST_EARNINGS_DAYS = int(st.sidebar.number_input("Post-earnings cooling (days)", value=1,   min_value=0, max_value=7,
     help="Also block signals N days AFTER earnings (avoids IV crush residual)"))
 BUDGET_MAX    = st.sidebar.number_input("Budget max (option mid)",   value=2.00, min_value=0.01, step=0.10)
-MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",   value=7,    min_value=1,
+MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",   value=9,    min_value=1,
     help="Minimum days-to-expiry to consider. Your swing target (2.5× ATR) usually needs "
          "~8 sessions to play out — a 1-2 DTE contract will lose to theta even if the "
          "trade thesis is correct. 7+ is a sane floor for swing trades."))
