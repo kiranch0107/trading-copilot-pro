@@ -221,6 +221,12 @@ def add_journal_trade(alert_id, ticker, trend, entry, stop, target,
 def journal_stats(journal: list) -> dict:
     if not journal:
         return {}
+    # Cross-app safety: the Restore uploader accepts backups from the
+    # discipline-enforcer app, whose journal contains OPEN trades without
+    # "closed"/"exit_price" keys. Only closed outcomes count here.
+    journal = [j for j in journal if j.get("outcome") in ("WIN", "LOSS", "BREAKEVEN")]
+    if not journal:
+        return {}
     wins   = [j for j in journal if j["outcome"] == "WIN"]
     losses = [j for j in journal if j["outcome"] == "LOSS"]
     be     = [j for j in journal if j["outcome"] == "BREAKEVEN"]
@@ -235,14 +241,14 @@ def journal_stats(journal: list) -> dict:
     if gp == 0: gp = sum(j["actual_rr"] for j in wins if j["actual_rr"] > 0)
     if gl == 0: gl = abs(sum(j["actual_rr"] for j in losses if j["actual_rr"] < 0))
     pf = round(gp/gl, 2) if gl else float("inf")
-    outcomes    = [j["outcome"] for j in sorted(journal, key=lambda x: x["closed"])]
+    outcomes    = [j["outcome"] for j in sorted(journal, key=lambda x: x.get("closed", ""))]
     streak      = 0
     streak_type = outcomes[-1] if outcomes else ""
     for o in reversed(outcomes):
         if o == streak_type: streak += 1
         else: break
     # FIX #5: build equity curve for chart
-    sorted_j = sorted(journal, key=lambda x: x["closed"])
+    sorted_j = sorted(journal, key=lambda x: x.get("closed", ""))
     cum_r    = 0.0
     eq_curve = []
     for j in sorted_j:
@@ -345,7 +351,8 @@ def short_ts(ts: str) -> str:
     """FIX #6: compact timestamp — 'Jul 1 14:32' instead of '2025-07-01 14:32 ET'"""
     try:
         dt = datetime.strptime(ts, "%Y-%m-%d %H:%M ET")
-        return dt.strftime("%b %-d %H:%M")
+        # %-d is a glibc extension (raises on Windows) — build portably:
+        return f"{dt.strftime('%b')} {dt.day} {dt.strftime('%H:%M')}"
     except Exception:
         return ts
 
@@ -443,9 +450,11 @@ def _normalise_df(df: pd.DataFrame, min_rows: int) -> pd.DataFrame | None:
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def get_data(ticker: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame | None:
+def get_data(ticker: str, period: str = "1y", interval: str = "1d",
+             min_rows: int = 50) -> pd.DataFrame | None:
+    # min_rows is a cache-key param (was the MIN_ROWS global — stale on change)
     try:
-        return _normalise_df(_yf_download_with_retry(ticker, period, interval), MIN_ROWS)
+        return _normalise_df(_yf_download_with_retry(ticker, period, interval), min_rows)
     except Exception as e:
         logger.info("get_data(%s) failed: %s", ticker, e)
         return None
@@ -467,7 +476,8 @@ def get_data_with_error(ticker: str, period: str = "1y",
 
 @st.cache_data(ttl=600, show_spinner=False)
 def batch_get_data(tickers: tuple, period: str = "1y",
-                   interval: str = "1d") -> dict[str, pd.DataFrame]:
+                   interval: str = "1d",
+                   min_rows: int = 50) -> dict[str, pd.DataFrame]:
     if not tickers:
         return {}
     _rl.wait()
@@ -482,7 +492,7 @@ def batch_get_data(tickers: tuple, period: str = "1y",
     if raw is not None and not raw.empty and isinstance(raw.columns, pd.MultiIndex):
         for t in tickers:
             try:
-                df = _normalise_df(raw[t].copy(), MIN_ROWS)
+                df = _normalise_df(raw[t].copy(), min_rows)
                 if df is not None:
                     result[t] = df
             except Exception:
@@ -491,7 +501,7 @@ def batch_get_data(tickers: tuple, period: str = "1y",
             return result
 
     for t in tickers:
-        df = get_data(t, period, interval)
+        df = get_data(t, period, interval, min_rows)
         if df is not None:
             result[t] = df
     return result
@@ -740,7 +750,10 @@ def _fetch_chain_with_retry(stock, expiry: str):
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def get_full_chain_data(ticker: str) -> dict:
+def get_full_chain_data(ticker: str, min_dte: int) -> dict:
+    # BUG FIX: min_dte is part of the cache key. Previously the MIN_DTE
+    # sidebar global was read as a closure, so changing Min DTE did NOT
+    # invalidate this 15-minute cache — stale expiries kept being served.
     try:
         stock = yf.Ticker(ticker)
         _rl.wait()
@@ -764,7 +777,7 @@ def get_full_chain_data(ticker: str) -> dict:
                 dte = (pd.Timestamp(expiry) - today).days
             except Exception:
                 continue
-            if dte < MIN_DTE:
+            if dte < min_dte:
                 continue
             checked += 1
             try:
@@ -803,7 +816,7 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
     we size the window to ±2.0 ATR (floored/capped at sane percentage bounds);
     otherwise we fall back to fixed percentages.
     """
-    chain_data = get_full_chain_data(ticker)
+    chain_data = get_full_chain_data(ticker, MIN_DTE)
     if chain_data.get("error"):
         return {"error": chain_data["error"]}
 
@@ -862,7 +875,9 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
         # We SCALE the score rather than hard-filtering, so a very liquid short
         # contract can still win if nothing better exists — but it gets flagged.
         if atr and atr > 0:
-            days_needed = max(5, int(2.5 * 3))   # ~8 sessions for a 2.5-ATR move
+            # Scales with the sidebar target multiplier (was hardcoded 2.5 —
+            # inconsistent after the default target moved to 3.0× ATR).
+            days_needed = max(5, int(ATR_TGT_MULT * 3))
         else:
             days_needed = 10
         if dte < days_needed:
@@ -876,7 +891,7 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
         return {"error":"No liquid options found"}
 
     row, expiry, dte = best
-    days_needed = max(5, int(2.5 * 3)) if (atr and atr > 0) else 10
+    days_needed = max(5, int(ATR_TGT_MULT * 3)) if (atr and atr > 0) else 10
     return {"label":"CALL" if trend=="Bullish" else "PUT",
             "strike":round(float(row["strike"]),2),
             "expiry":expiry,"mid":round(float(row["mid"]),2),
@@ -922,7 +937,7 @@ def _score_unusual_contract(row: pd.Series, peer_med: float) -> dict:
 
 
 def scan_unusual_activity(ticker: str) -> dict:
-    chain = get_full_chain_data(ticker)
+    chain = get_full_chain_data(ticker, MIN_DTE)
     if chain.get("error"):
         return {"error":chain["error"],"flagged":[]}
     flagged = []; checked = 0
@@ -1261,7 +1276,7 @@ def _scan_one_ticker(ticker: str, data_map: dict, spy_regime: dict,
 def _run_scan_uncached(scan_list: tuple, spy_regime: dict,
                        settings_key: str) -> list[dict]:
     """Does the actual parallel work — not cached so threads don't OOM cache."""
-    data_map = batch_get_data(scan_list)
+    data_map = batch_get_data(scan_list, min_rows=MIN_ROWS)
     results  = []
     with ThreadPoolExecutor(max_workers=_SCAN_MAX_WORKERS) as executor:
         futures = {
@@ -1602,7 +1617,7 @@ with TAB_STOCK:
         ticker = query.strip().upper()
         with st.spinner(f"Fetching {ticker}…"):
             df, fetch_error = get_data_with_error(ticker)
-            intraday = get_data(ticker, period="5d", interval="5m")
+            intraday = get_data(ticker, period="5d", interval="5m", min_rows=MIN_ROWS)
 
         if df is None:
             st.error(f"❌ {fetch_error or f'Could not load data for {ticker}'}")
@@ -1623,258 +1638,258 @@ with TAB_STOCK:
                     "before their values converge. Trading on unconverged indicators "
                     "produces materially wrong signals."
                 )
-                st.stop()
-            if dropped_partial:
-                st.info(
-                    "📊 Market is open — analysing the **last completed daily bar**. "
-                    "Today's bar is still forming (its volume is only partial), so "
-                    "including it would make the volume filter depend on the time of "
-                    "day rather than on actual market activity."
-                )
-            latest_price = float(df["Close"].iloc[-1])
-            latest_rsi   = float(df["RSI"].iloc[-1])
-            latest_atr   = float(df["ATR"].iloc[-1])
-            latest_adx   = float(df["ADX"].iloc[-1])
-            vol_now      = float(df["Volume"].iloc[-1])
-            vol_avg      = float(df["VOL_AVG20"].iloc[-1])
-
-            pc1,pc2,pc3,pc4,pc5 = st.columns(5)
-            pc1.metric("Last Price", f"${latest_price:,.2f}")
-            pc2.metric("RSI (14)",   f"{latest_rsi:.1f}")
-            pc3.metric("ATR (14)",   f"${latest_atr:.2f}")
-            pc4.metric("ADX (14)",   f"{latest_adx:.1f}",
-                       delta="Trending" if latest_adx>=ADX_MIN else "Choppy",
-                       delta_color="normal" if latest_adx>=ADX_MIN else "inverse")
-            pc5.metric("Vol vs Avg", f"{vol_now/vol_avg:.2f}×")
-
-            st.divider()
-            # FIX #2: price chart always visible
-            render_price_chart(df, ticker)
-            st.divider()
-
-            latest_bar_key = f"{ticker}_{df.index[-1]}"
-            r = analyze(df, ticker, latest_bar_key, get_settings_key(),
-                        spy_regime=spy_regime)
-
-            stab1, stab2, stab3, stab4, stab5 = st.tabs([
-                "💼 Swing Trade","🔬 Signal Filters",
-                "🧠 Options","⚡ Intraday Scalp","💸 Budget Options"
-            ])
-
-            with stab1:
-                # ── SWING TRADE = the TRADE PLAN (entry/stop/target/size) ──
-                if r.get("blocked"):
-                    reason = r.get("block_reason")
-                    if reason == "base":
-                        st.warning(
-                            "⚠️ **No trade plan** — the base signal conditions "
-                            "(EMA stack / MACD / RSI / volume) don't align yet."
-                        )
-                        st.caption(
-                            "👉 See the **🔬 Signal Filters** tab for a full "
-                            "condition-by-condition breakdown of what's missing."
-                        )
-                    elif reason == "rr":
-                        st.warning(
-                            f"⚠️ **Trade plan rejected — poor Reward:Risk** "
-                            f"({r.get('rr')} < your {MIN_RR} minimum)"
-                        )
-                        # Still show the levels — the user may want to override
-                        s1,s2,s3,s4 = st.columns(4)
-                        s1.metric("Entry",  f"${r.get('entry','—')}")
-                        s2.metric("Stop",   f"${r.get('stop','—')}")
-                        s3.metric("Target", f"${r.get('target','—')}")
-                        s4.metric("R:R",    r.get("rr","—"), delta="below min",
-                                  delta_color="inverse")
-                        st.caption(
-                            "The trend is valid but the levels don't offer enough "
-                            "reward for the risk. Lower **Min Reward/Risk** in the "
-                            "sidebar to see it, or wait for a better entry."
-                        )
-                    else:
-                        st.warning(f"⚠️ No trade plan — blocked ({reason}).")
-                else:
-                    badge = ("🔥 HIGH QUALITY" if r["high_quality"]
-                             else "✅ VALID — all filters pass" if r["all_pass"]
-                             else f"⚠️ PARTIAL — {r['filters_pass']}/{r['filters_total']} filters pass")
-                    st.markdown(f"### {badge} — {r['trend']} ({r['strength']})")
-                    s1,s2,s3,s4 = st.columns(4)
-                    s1.metric("Entry",  f"${r['entry']}")
-                    s2.metric("Stop",   f"${r['stop']}")
-                    s3.metric("Target", f"${r['target']}")
-                    s4.metric("R:R",    r["rr"])
-                    risk_amt   = abs(r["entry"]-r["stop"])
-                    reward_amt = abs(r["target"]-r["entry"])
-                    st.progress(min(reward_amt/(risk_amt+reward_amt),1.0),
-                                text=f"Reward ${reward_amt:.2f} vs Risk ${risk_amt:.2f}")
-                    ps = calc_position_size(r["entry"], r["stop"])
-                    if ps["affordable"]:
-                        st.info(
-                            f"💰 **Position Sizing** — "
-                            f"Risk \\${ps['risk_dollars']:,.2f} ({RISK_PCT}% of \\${ACCOUNT_SIZE:,}) · "
-                            f"**{ps['shares']} shares** · **{ps['contracts']} option contract(s)** "
-                            f"(1 contract = \\${ps['risk_per_contract']:,.2f} risk)"
-                        )
-                    else:
-                        st.warning(
-                            f"⚠️ **Options exceed your risk limit** — "
-                            f"Risk budget is \\${ps['risk_dollars']:,.2f} "
-                            f"({RISK_PCT}% of \\${ACCOUNT_SIZE:,}).\n\n{ps['note']}"
-                        )
-                    st.caption(
-                        "⚠️ **Gap risk:** a stop is not a guarantee. Swing positions are held "
-                        "overnight and an adverse gap can open *beyond* your stop, making the "
-                        "realised loss larger than the planned risk shown above."
-                    )
-                    if not r["all_pass"]:
-                        failed = [n for n,f in r["filters"].items() if not f["pass"]]
-                        st.caption(
-                            f"⚠️ {len(failed)} enhancement filter(s) failing: "
-                            f"**{', '.join(failed)}** — see 🔬 Signal Filters tab."
-                        )
-
-            with stab2:
-                # ── SIGNAL FILTERS = WHY the signal passed or failed ──
-                st.markdown("### 🔬 Signal Diagnostics")
-                st.caption(
-                    "This tab explains **why** a signal did or didn't fire. "
-                    "The 💼 Swing Trade tab shows the resulting **trade plan**."
-                )
-                st.divider()
-
-                # Layer 1 — base conditions (always shown)
-                st.markdown("#### 1️⃣ Base Signal Conditions")
-                render_no_signal_diagnostic(df, latest_price, latest_rsi,
-                                            vol_now, vol_avg, diag=r)
-
-                # Layer 2 — the 4 enhancement filters (only meaningful once base passes)
-                st.divider()
-                st.markdown("#### 2️⃣ Enhancement Filters")
-                if r.get("blocked") and r.get("block_reason") == "base":
+            else:
+                if dropped_partial:
                     st.info(
-                        "Enhancement filters are only evaluated once the base "
-                        "conditions pass. Fix the base conditions above first."
+                        "📊 Market is open — analysing the **last completed daily bar**. "
+                        "Today's bar is still forming (its volume is only partial), so "
+                        "including it would make the volume filter depend on the time of "
+                        "day rather than on actual market activity."
                     )
-                elif r.get("filters"):
-                    render_filter_scorecard(r["filters"],
-                                            r.get("filters_pass", 0),
-                                            r.get("filters_total", 4))
-                else:
-                    st.info("No filter results available.")
+                latest_price = float(df["Close"].iloc[-1])
+                latest_rsi   = float(df["RSI"].iloc[-1])
+                latest_atr   = float(df["ATR"].iloc[-1])
+                latest_adx   = float(df["ADX"].iloc[-1])
+                vol_now      = float(df["Volume"].iloc[-1])
+                vol_avg      = float(df["VOL_AVG20"].iloc[-1])
+
+                pc1,pc2,pc3,pc4,pc5 = st.columns(5)
+                pc1.metric("Last Price", f"${latest_price:,.2f}")
+                pc2.metric("RSI (14)",   f"{latest_rsi:.1f}")
+                pc3.metric("ATR (14)",   f"${latest_atr:.2f}")
+                pc4.metric("ADX (14)",   f"{latest_adx:.1f}",
+                           delta="Trending" if latest_adx>=ADX_MIN else "Choppy",
+                           delta_color="normal" if latest_adx>=ADX_MIN else "inverse")
+                pc5.metric("Vol vs Avg", f"{vol_now/vol_avg:.2f}×")
 
                 st.divider()
-                st.markdown("**Filter Definitions**")
-                st.caption(f"1. **ADX ≥ {ADX_MIN}** — real trend, not chop/sideways")
-                st.caption("2. **Multi-TF Alignment** — weekly EMA must agree with daily direction")
-                st.caption(f"3. **Earnings Blackout** — blocks within {EARNINGS_DAYS}d of earnings "
-                           f"(and {POST_EARNINGS_DAYS}d after)")
-                st.caption("4. **Macro Regime** — no longs in SPY Bear; no shorts in SPY Bull")
+                # FIX #2: price chart always visible
+                render_price_chart(df, ticker)
+                st.divider()
 
-            with stab3:
-                if r.get("blocked"):
-                    st.warning("Swing trade setup required for options recommendation.")
-                else:
-                    opt = r["option"]
-                    if "error" in opt:
-                        st.error(f"⚠️ {opt['error']}")
-                    else:
-                        emoji = "📈" if opt["label"]=="CALL" else "📉"
-                        st.markdown(f"### {emoji} {opt['label']} — Exp {opt['expiry']} ({opt['dte']} DTE)")
-                        o1,o2,o3,o4 = st.columns(4)
-                        o1.metric("Strike",    f"${opt['strike']}")
-                        o2.metric("Mid Price", f"${opt['mid']}")
-                        o3.metric("Volume",    f"{opt['volume']:,}")
-                        o4.metric("Open Int.", f"{opt['oi']:,}")
-                        spread_pct = (opt["spread"]/opt["mid"]*100) if opt["mid"] else 0
-                        st.caption(f"Spread: \\${opt['spread']} ({spread_pct:.1f}% of mid) · Last: \\${opt['last_price']}")
+                latest_bar_key = f"{ticker}_{df.index[-1]}"
+                r = analyze(df, ticker, latest_bar_key, get_settings_key(),
+                            spy_regime=spy_regime)
 
-                        # ── DTE adequacy (theta trap warning) ──
-                        if not opt.get("dte_adequate", True):
-                            st.error(
-                                f"⏳ **Theta risk — expiry may be too short.** This contract has "
-                                f"**{opt['dte']} DTE**, but your target (2.5× ATR) typically needs "
-                                f"**~{opt.get('days_needed', 8)} sessions** of favourable movement. "
-                                f"The trade thesis may be right and the option still expire worthless. "
-                                f"Raise **Min DTE** in the sidebar to search further out."
+                stab1, stab2, stab3, stab4, stab5 = st.tabs([
+                    "💼 Swing Trade","🔬 Signal Filters",
+                    "🧠 Options","⚡ Intraday Scalp","💸 Budget Options"
+                ])
+
+                with stab1:
+                    # ── SWING TRADE = the TRADE PLAN (entry/stop/target/size) ──
+                    if r.get("blocked"):
+                        reason = r.get("block_reason")
+                        if reason == "base":
+                            st.warning(
+                                "⚠️ **No trade plan** — the base signal conditions "
+                                "(EMA stack / MACD / RSI / volume) don't align yet."
+                            )
+                            st.caption(
+                                "👉 See the **🔬 Signal Filters** tab for a full "
+                                "condition-by-condition breakdown of what's missing."
+                            )
+                        elif reason == "rr":
+                            st.warning(
+                                f"⚠️ **Trade plan rejected — poor Reward:Risk** "
+                                f"({r.get('rr')} < your {MIN_RR} minimum)"
+                            )
+                            # Still show the levels — the user may want to override
+                            s1,s2,s3,s4 = st.columns(4)
+                            s1.metric("Entry",  f"${r.get('entry','—')}")
+                            s2.metric("Stop",   f"${r.get('stop','—')}")
+                            s3.metric("Target", f"${r.get('target','—')}")
+                            s4.metric("R:R",    r.get("rr","—"), delta="below min",
+                                      delta_color="inverse")
+                            st.caption(
+                                "The trend is valid but the levels don't offer enough "
+                                "reward for the risk. Lower **Min Reward/Risk** in the "
+                                "sidebar to see it, or wait for a better entry."
                             )
                         else:
-                            st.caption(
-                                f"⏳ {opt['dte']} DTE vs ~{opt.get('days_needed', 8)} sessions needed "
-                                f"for the target — adequate time cushion. ✅"
-                            )
-
-                        # ── Search-window transparency ──
-                        with st.expander("🔍 What was searched"):
-                            st.caption(
-                                f"**Expiries:** up to {_OPT_MAX_EXPIRIES} nearest with "
-                                f"DTE ≥ {MIN_DTE} (your sidebar setting)."
-                            )
-                            if "strike_lo" in opt:
-                                st.caption(
-                                    f"**Strikes:** \\${opt['strike_lo']:,.2f} → \\${opt['strike_hi']:,.2f} "
-                                    f"(window sized to ±2× ATR around spot, clamped 3–12%; "
-                                    f"'{r['strength']}' strength shifts the window slightly ITM)."
-                                )
-                            st.caption(
-                                "**Liquidity gates:** bid > 0, volume > 0, open interest > 0, "
-                                "and bid-ask spread ≤ 15% of mid."
-                            )
-                            st.caption(
-                                "**Ranking:** (volume + OI) × volume-weight ÷ spread-penalty, "
-                                "then scaled down quadratically if DTE is below what the target needs."
-                            )
-
-                        if opt["is_budget"]:
-                            st.success(f"💸 Budget pick — \\${opt['mid']}/contract (under \\${BUDGET_MAX:.2f})")
-                        if not r["all_pass"]:
-                            st.warning("⚠️ Not all filters pass — trade at your own discretion.")
-                        ua_hit = check_pick_unusual_activity(ticker, opt)
-                        if ua_hit:
-                            se = {"Extreme":"🔴","High":"🟠","Moderate":"🟡"}.get(ua_hit["severity"],"⚪")
-                            st.markdown(f"### {se} Unusual Activity — {ua_hit['severity']}")
-                            for reason in ua_hit["reasons"]:
-                                st.caption(f"• {reason}")
-                        else:
-                            st.caption("🌊 No unusual activity on this contract.")
-
-            with stab4:
-                if intraday is None or len(intraday) < 30:
-                    st.warning("Not enough intraday bars (need ≥ 30). "
-                               "Try again once the session has more data.")
-                else:
-                    intraday = compute(intraday)
-                    sc = scalp(intraday)
-                    if sc["direction"] is None:
-                        st.info(f"ℹ️ {sc['signal']}")
+                            st.warning(f"⚠️ No trade plan — blocked ({reason}).")
                     else:
-                        arrow = "↑" if sc["direction"]=="Long" else "↓"
-                        st.markdown(f"### ⚡ {sc['signal']} {arrow}")
-                        sc1,sc2 = st.columns(2)
-                        sc1.metric("Scalp Stop",   f"${sc.get('stop','N/A')}")
-                        sc2.metric("Scalp Target", f"${sc.get('target','N/A')}")
-                        st.caption("Scalp targets are intraday — tight stops, monitor closely.")
-
-            with stab5:
-                st.markdown(f"### 💸 Options under ${BUDGET_MAX:.2f}/contract")
-                if r.get("blocked"):
-                    st.warning("A valid swing setup is needed.")
-                else:
-                    opt = r["option"]
-                    if "error" in opt:
-                        st.error(f"⚠️ {opt['error']}")
-                    elif opt["is_budget"]:
-                        st.success(
-                            f"✅ **{opt['label']}** · Strike \\${opt['strike']} · "
-                            f"Exp {opt['expiry']} ({opt['dte']} DTE) · "
-                            f"Mid **\\${opt['mid']}** · Vol {opt['volume']:,} · OI {opt['oi']:,}"
+                        badge = ("🔥 HIGH QUALITY" if r["high_quality"]
+                                 else "✅ VALID — all filters pass" if r["all_pass"]
+                                 else f"⚠️ PARTIAL — {r['filters_pass']}/{r['filters_total']} filters pass")
+                        st.markdown(f"### {badge} — {r['trend']} ({r['strength']})")
+                        s1,s2,s3,s4 = st.columns(4)
+                        s1.metric("Entry",  f"${r['entry']}")
+                        s2.metric("Stop",   f"${r['stop']}")
+                        s3.metric("Target", f"${r['target']}")
+                        s4.metric("R:R",    r["rr"])
+                        risk_amt   = abs(r["entry"]-r["stop"])
+                        reward_amt = abs(r["target"]-r["entry"])
+                        st.progress(min(reward_amt/(risk_amt+reward_amt),1.0),
+                                    text=f"Reward ${reward_amt:.2f} vs Risk ${risk_amt:.2f}")
+                        ps = calc_position_size(r["entry"], r["stop"])
+                        if ps["affordable"]:
+                            st.info(
+                                f"💰 **Position Sizing** — "
+                                f"Risk \\${ps['risk_dollars']:,.2f} ({RISK_PCT}% of \\${ACCOUNT_SIZE:,}) · "
+                                f"**{ps['shares']} shares** · **{ps['contracts']} option contract(s)** "
+                                f"(1 contract = \\${ps['risk_per_contract']:,.2f} risk)"
+                            )
+                        else:
+                            st.warning(
+                                f"⚠️ **Options exceed your risk limit** — "
+                                f"Risk budget is \\${ps['risk_dollars']:,.2f} "
+                                f"({RISK_PCT}% of \\${ACCOUNT_SIZE:,}).\n\n{ps['note']}"
+                            )
+                        st.caption(
+                            "⚠️ **Gap risk:** a stop is not a guarantee. Swing positions are held "
+                            "overnight and an adverse gap can open *beyond* your stop, making the "
+                            "realised loss larger than the planned risk shown above."
                         )
-                        st.caption("Budget options carry higher gamma risk — size accordingly.")
-                    else:
-                        st.info(f"Best contract is \\${opt['mid']}/contract — above \\${BUDGET_MAX:.2f}. "
-                                "Try a wider strike or longer expiry.")
+                        if not r["all_pass"]:
+                            failed = [n for n,f in r["filters"].items() if not f["pass"]]
+                            st.caption(
+                                f"⚠️ {len(failed)} enhancement filter(s) failing: "
+                                f"**{', '.join(failed)}** — see 🔬 Signal Filters tab."
+                            )
 
-            st.divider()
-            st.caption("⚠️ Not financial advice. Rule-based signals only.")
+                with stab2:
+                    # ── SIGNAL FILTERS = WHY the signal passed or failed ──
+                    st.markdown("### 🔬 Signal Diagnostics")
+                    st.caption(
+                        "This tab explains **why** a signal did or didn't fire. "
+                        "The 💼 Swing Trade tab shows the resulting **trade plan**."
+                    )
+                    st.divider()
+
+                    # Layer 1 — base conditions (always shown)
+                    st.markdown("#### 1️⃣ Base Signal Conditions")
+                    render_no_signal_diagnostic(df, latest_price, latest_rsi,
+                                                vol_now, vol_avg, diag=r)
+
+                    # Layer 2 — the 4 enhancement filters (only meaningful once base passes)
+                    st.divider()
+                    st.markdown("#### 2️⃣ Enhancement Filters")
+                    if r.get("blocked") and r.get("block_reason") == "base":
+                        st.info(
+                            "Enhancement filters are only evaluated once the base "
+                            "conditions pass. Fix the base conditions above first."
+                        )
+                    elif r.get("filters"):
+                        render_filter_scorecard(r["filters"],
+                                                r.get("filters_pass", 0),
+                                                r.get("filters_total", 4))
+                    else:
+                        st.info("No filter results available.")
+
+                    st.divider()
+                    st.markdown("**Filter Definitions**")
+                    st.caption(f"1. **ADX ≥ {ADX_MIN}** — real trend, not chop/sideways")
+                    st.caption("2. **Multi-TF Alignment** — weekly EMA must agree with daily direction")
+                    st.caption(f"3. **Earnings Blackout** — blocks within {EARNINGS_DAYS}d of earnings "
+                               f"(and {POST_EARNINGS_DAYS}d after)")
+                    st.caption("4. **Macro Regime** — no longs in SPY Bear; no shorts in SPY Bull")
+
+                with stab3:
+                    if r.get("blocked"):
+                        st.warning("Swing trade setup required for options recommendation.")
+                    else:
+                        opt = r["option"]
+                        if "error" in opt:
+                            st.error(f"⚠️ {opt['error']}")
+                        else:
+                            emoji = "📈" if opt["label"]=="CALL" else "📉"
+                            st.markdown(f"### {emoji} {opt['label']} — Exp {opt['expiry']} ({opt['dte']} DTE)")
+                            o1,o2,o3,o4 = st.columns(4)
+                            o1.metric("Strike",    f"${opt['strike']}")
+                            o2.metric("Mid Price", f"${opt['mid']}")
+                            o3.metric("Volume",    f"{opt['volume']:,}")
+                            o4.metric("Open Int.", f"{opt['oi']:,}")
+                            spread_pct = (opt["spread"]/opt["mid"]*100) if opt["mid"] else 0
+                            st.caption(f"Spread: \\${opt['spread']} ({spread_pct:.1f}% of mid) · Last: \\${opt['last_price']}")
+
+                            # ── DTE adequacy (theta trap warning) ──
+                            if not opt.get("dte_adequate", True):
+                                st.error(
+                                    f"⏳ **Theta risk — expiry may be too short.** This contract has "
+                                    f"**{opt['dte']} DTE**, but your target ({ATR_TGT_MULT}× ATR) typically needs "
+                                    f"**~{opt.get('days_needed', 8)} sessions** of favourable movement. "
+                                    f"The trade thesis may be right and the option still expire worthless. "
+                                    f"Raise **Min DTE** in the sidebar to search further out."
+                                )
+                            else:
+                                st.caption(
+                                    f"⏳ {opt['dte']} DTE vs ~{opt.get('days_needed', 8)} sessions needed "
+                                    f"for the target — adequate time cushion. ✅"
+                                )
+
+                            # ── Search-window transparency ──
+                            with st.expander("🔍 What was searched"):
+                                st.caption(
+                                    f"**Expiries:** up to {_OPT_MAX_EXPIRIES} nearest with "
+                                    f"DTE ≥ {MIN_DTE} (your sidebar setting)."
+                                )
+                                if "strike_lo" in opt:
+                                    st.caption(
+                                        f"**Strikes:** \\${opt['strike_lo']:,.2f} → \\${opt['strike_hi']:,.2f} "
+                                        f"(window sized to ±2× ATR around spot, clamped 3–12%; "
+                                        f"'{r['strength']}' strength shifts the window slightly ITM)."
+                                    )
+                                st.caption(
+                                    "**Liquidity gates:** bid > 0, volume > 0, open interest > 0, "
+                                    "and bid-ask spread ≤ 15% of mid."
+                                )
+                                st.caption(
+                                    "**Ranking:** (volume + OI) × volume-weight ÷ spread-penalty, "
+                                    "then scaled down quadratically if DTE is below what the target needs."
+                                )
+
+                            if opt["is_budget"]:
+                                st.success(f"💸 Budget pick — \\${opt['mid']}/contract (under \\${BUDGET_MAX:.2f})")
+                            if not r["all_pass"]:
+                                st.warning("⚠️ Not all filters pass — trade at your own discretion.")
+                            ua_hit = check_pick_unusual_activity(ticker, opt)
+                            if ua_hit:
+                                se = {"Extreme":"🔴","High":"🟠","Moderate":"🟡"}.get(ua_hit["severity"],"⚪")
+                                st.markdown(f"### {se} Unusual Activity — {ua_hit['severity']}")
+                                for reason in ua_hit["reasons"]:
+                                    st.caption(f"• {reason}")
+                            else:
+                                st.caption("🌊 No unusual activity on this contract.")
+
+                with stab4:
+                    if intraday is None or len(intraday) < 30:
+                        st.warning("Not enough intraday bars (need ≥ 30). "
+                                   "Try again once the session has more data.")
+                    else:
+                        intraday = compute(intraday)
+                        sc = scalp(intraday)
+                        if sc["direction"] is None:
+                            st.info(f"ℹ️ {sc['signal']}")
+                        else:
+                            arrow = "↑" if sc["direction"]=="Long" else "↓"
+                            st.markdown(f"### ⚡ {sc['signal']} {arrow}")
+                            sc1,sc2 = st.columns(2)
+                            sc1.metric("Scalp Stop",   f"${sc.get('stop','N/A')}")
+                            sc2.metric("Scalp Target", f"${sc.get('target','N/A')}")
+                            st.caption("Scalp targets are intraday — tight stops, monitor closely.")
+
+                with stab5:
+                    st.markdown(f"### 💸 Options under ${BUDGET_MAX:.2f}/contract")
+                    if r.get("blocked"):
+                        st.warning("A valid swing setup is needed.")
+                    else:
+                        opt = r["option"]
+                        if "error" in opt:
+                            st.error(f"⚠️ {opt['error']}")
+                        elif opt["is_budget"]:
+                            st.success(
+                                f"✅ **{opt['label']}** · Strike \\${opt['strike']} · "
+                                f"Exp {opt['expiry']} ({opt['dte']} DTE) · "
+                                f"Mid **\\${opt['mid']}** · Vol {opt['volume']:,} · OI {opt['oi']:,}"
+                            )
+                            st.caption("Budget options carry higher gamma risk — size accordingly.")
+                        else:
+                            st.info(f"Best contract is \\${opt['mid']}/contract — above \\${BUDGET_MAX:.2f}. "
+                                    "Try a wider strike or longer expiry.")
+
+                st.divider()
+                st.caption("⚠️ Not financial advice. Rule-based signals only.")
 
 
 # ═══════════════════════════════════════════════
@@ -2141,7 +2156,10 @@ with TAB_JOURNAL:
             j_trend = st.selectbox("Direction",
                 ["All","Bullish","Bearish"], key="j_trend_filter")
 
-        filtered_j = journal
+        # Cross-app safety: skip OPEN trades (restored from the discipline-
+        # enforcer app's backups) — they have no exit_price/closed to show.
+        filtered_j = [j for j in journal
+                      if j.get("outcome") in ("WIN", "LOSS", "BREAKEVEN")]
         if j_ticker  != "All": filtered_j=[j for j in filtered_j if j["ticker"]==j_ticker]
         if j_outcome != "All": filtered_j=[j for j in filtered_j if j["outcome"]==j_outcome]
         if j_trend   != "All": filtered_j=[j for j in filtered_j if j["trend"]==j_trend]
