@@ -725,12 +725,22 @@ def check_regime_alignment(daily_trend: str, spy_regime: dict) -> tuple[bool, st
 # ─────────────────────────────────────────────
 # OPTIONS ENGINE
 # ─────────────────────────────────────────────
-_OPT_RETRY_ATTEMPTS = 3
-_OPT_RETRY_DELAY    = 2.0
-_OPT_EXPIRY_DELAY   = 0.4
-_OPT_MAX_EXPIRIES   = 5   # was 3. With MIN_DTE=1 the first 3 expiries can all be
-                          # <3 weeks out — too short for a 2.5-ATR swing target.
-                          # Widening to 5 lets the scorer reach ~4-6 weeks out.
+_OPT_RETRY_ATTEMPTS = 4     # was 3 — one extra attempt before giving up.
+_OPT_RETRY_DELAY    = 4.0   # was 2.0 — Yahoo throttles the options endpoints
+                            # aggressively from shared cloud IPs. A longer first
+                            # backoff (4s → 8s → 16s with the ×2 growth below)
+                            # gives the limiter time to reset, turning most
+                            # "rate limited" errors into slow-but-successful
+                            # loads instead of a hard failure on the first ticker.
+_OPT_EXPIRY_DELAY   = 0.6   # was 0.4 — slightly more spacing between the per-
+                            # expiry chain fetches so a single ticker doesn't
+                            # burst 5 calls in ~2s and trip the limiter itself.
+_OPT_MAX_EXPIRIES   = 3   # was 5. Each expiry = one full-chain fetch, so 5
+                          # expiries = ~6 Yahoo calls for ONE ticker — the single
+                          # biggest source of rate-limit hits. Back to 3 cuts
+                          # per-ticker call volume ~40%. The DTE-adequacy check
+                          # already flags contracts that are too short-dated, so
+                          # 3 nearest valid expiries is enough for a swing target.
 
 
 def _fetch_chain_with_retry(stock, expiry: str):
@@ -756,13 +766,22 @@ def get_full_chain_data(ticker: str, min_dte: int) -> dict:
     # invalidate this 15-minute cache — stale expiries kept being served.
     try:
         stock = yf.Ticker(ticker)
-        _rl.wait()
-        try:
-            all_expiries = stock.options
-        except Exception as e:
-            if _is_rate_limit_error(e):
-                time.sleep(3); _rl.wait(); all_expiries = stock.options
-            else:
+        # The initial expiries fetch is the call most often rate-limited (it's
+        # the first Yahoo hit on the Options tab). Previously it retried only
+        # ONCE after a fixed 3s sleep, then failed hard — which is exactly the
+        # "rate limited on the first ticker" error. Give it the same escalating
+        # backoff as the chain fetches so a throttle becomes a slow success.
+        all_expiries = None
+        delay = _OPT_RETRY_DELAY
+        for attempt in range(_OPT_RETRY_ATTEMPTS):
+            _rl.wait()
+            try:
+                all_expiries = stock.options
+                break
+            except Exception as e:
+                if _is_rate_limit_error(e) and attempt < _OPT_RETRY_ATTEMPTS - 1:
+                    logger.warning("Rate limited options(%s); backoff %ss", ticker, delay)
+                    time.sleep(delay); delay *= 2; continue
                 raise
         if not all_expiries:
             return {"error":"No option chain available","expiries":[]}
