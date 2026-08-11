@@ -1,0 +1,93 @@
+# Trading Copilot — scheduled exit monitor
+# ────────────────────────────────────────────────────────────────────────
+# Save this to  .github/workflows/exit-monitor.yml  in your repo.
+#
+# Runs exit_monitor.py every 30 minutes during US market hours and Telegrams
+# you when an open position hits its stop or target. Runs on GitHub's
+# infrastructure, so it works whether or not your Streamlit app or laptop is on
+# — which is the entire point (a Streamlit app only executes while a tab is open).
+#
+# ── ONE-TIME SETUP ──────────────────────────────────────────────────────
+# 1. Repo → Settings → Secrets and variables → Actions → New repository secret
+#       TELEGRAM_BOT_TOKEN   (same bot the app uses)
+#       TELEGRAM_CHAT_ID
+# 2. Repo → Settings → Actions → General → Workflow permissions
+#       select "Read and write permissions"   ← needed so the monitor can
+#       commit updated position state back (otherwise you get a duplicate
+#       alert every run, because it can't remember it already alerted).
+# 3. Commit open_positions.json to the repo (the app writes it; even `[]` is fine).
+#
+# ── TESTING ─────────────────────────────────────────────────────────────
+# Actions tab → "Exit Monitor" → Run workflow. Set dry_run=true for a safe
+# no-send test that prints what it *would* have sent.
+#
+# ── COST ────────────────────────────────────────────────────────────────
+# Public repos: free. Private: counts against your Actions minutes — roughly
+# 14 runs/day × ~1 min. Keep the repo private only if you're comfortable with
+# that, and note the schedule already skips nights and weekends.
+
+name: Exit Monitor
+
+on:
+  schedule:
+    # Every 30 min, 13:30–20:00 UTC, Mon–Fri.
+    # NOTE: this is UTC and does NOT follow US daylight saving. It covers
+    # 9:30am–4:00pm ET during EDT (Mar–Nov). During EST (Nov–Mar) US markets
+    # run 14:30–21:00 UTC, so shift the hours below by one in winter, or just
+    # widen the range — the script itself checks real market hours and exits
+    # quietly when closed, so extra runs are harmless.
+    - cron: "0,30 13-20 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print alerts instead of sending"
+        type: boolean
+        default: false
+      force:
+        description: "Run even if the market is closed"
+        type: boolean
+        default: false
+
+concurrency:
+  # Never let two runs mutate open_positions.json at once.
+  group: exit-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install yfinance pandas pytz requests
+
+      - name: Run exit monitor
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python exit_monitor.py \
+            --interval 30 \
+            ${{ inputs.dry_run && '--dry-run' || '' }} \
+            ${{ inputs.force && '--force' || '' }}
+
+      - name: Persist position state
+        # Without this the "already alerted" flag is lost between runs and you
+        # get the same exit alert every 30 minutes until you close the trade.
+        if: ${{ !inputs.dry_run }}
+        run: |
+          if [[ -n "$(git status --porcelain open_positions.json)" ]]; then
+            git config user.name  "exit-monitor"
+            git config user.email "actions@github.com"
+            git add open_positions.json
+            git commit -m "chore: update position state [skip ci]"
+            git push
+          else
+            echo "No state change to commit."
+          fi
