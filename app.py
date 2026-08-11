@@ -87,6 +87,20 @@ ATR_TGT_MULT  = st.sidebar.number_input("ATR target multiplier",     value=3.0, 
          "winners run. Win rate drops slightly (you reach a farther target less often) but "
          "the larger average win more than compensates.")
 st.sidebar.divider()
+
+# MIN_DTE and ATR_TGT_MULT are coupled: the theta check needs roughly
+# ATR_TGT_MULT × 3 sessions for the target to play out. If Min DTE is below
+# that, EVERY contract the search returns gets flagged as theta-inadequate —
+# which looks like a bug but is just the two settings disagreeing.
+_days_needed_preview = max(5, int(ATR_TGT_MULT * 3))
+if MIN_DTE < _days_needed_preview:
+    st.sidebar.warning(
+        f"⚠️ Min DTE ({MIN_DTE}) is below the ~{_days_needed_preview} sessions a "
+        f"{ATR_TGT_MULT}× ATR target usually needs. Every contract found will be "
+        f"flagged as theta-inadequate. Raise Min DTE to {_days_needed_preview}+ "
+        f"or lower the ATR target multiplier."
+    )
+
 WEEKLY_CONFIRM = st.sidebar.checkbox("Require weekly TF alignment",  value=True)
 SPY_REGIME     = st.sidebar.checkbox("Apply SPY regime filter",      value=True)
 st.sidebar.divider()
@@ -224,9 +238,10 @@ def journal_stats(journal: list) -> dict:
     # Cross-app safety: the Restore uploader accepts backups from the
     # discipline-enforcer app, whose journal contains OPEN trades without
     # "closed"/"exit_price" keys. Only closed outcomes count here.
+    _n_open = sum(1 for j in journal if j.get("outcome") == "OPEN")
     journal = [j for j in journal if j.get("outcome") in ("WIN", "LOSS", "BREAKEVEN")]
     if not journal:
-        return {}
+        return {"open": _n_open} if _n_open else {}
     wins   = [j for j in journal if j["outcome"] == "WIN"]
     losses = [j for j in journal if j["outcome"] == "LOSS"]
     be     = [j for j in journal if j["outcome"] == "BREAKEVEN"]
@@ -255,7 +270,8 @@ def journal_stats(journal: list) -> dict:
         cum_r += j["actual_rr"]
         eq_curve.append({"date": j["closed"][:10], "Cumulative R": round(cum_r, 2)})
     return {
-        "total": total, "wins": len(wins), "losses": len(losses), "breakeven": len(be),
+        "total": total, "open": _n_open,
+        "wins": len(wins), "losses": len(losses), "breakeven": len(be),
         "win_rate": wr, "avg_win_r": avg_win, "avg_loss_r": avg_loss,
         "total_r": total_r, "profit_factor": pf, "streak": streak,
         "streak_type": streak_type, "equity_curve": eq_curve,
@@ -268,18 +284,37 @@ def journal_stats(journal: list) -> dict:
 SHARES_PER_CONTRACT = 100
 
 
-def calc_position_size(entry: float, stop: float) -> dict:
+def calc_position_size(entry: float, stop: float,
+                       option_premium: float | None = None) -> dict:
     """
-    BUG FIX #3: the old code did `contracts = max(1, shares // 100)`.
+    Position sizing for SHARES and (optionally) for a DEBIT OPTION.
 
-    With a $1,500 account at 1% risk = $15 max risk. If per-share risk is $5,
-    that's 3 shares. But `max(1, 0)` returned **1 contract**, which controls
-    100 shares = $500 of real risk — 33% of the account, NOT the 1% configured.
-    The floor silently blew through the user's risk limit by up to 33x.
+    BUG FIX #3 (earlier): `contracts = max(1, shares // 100)` floored to 1
+    contract even when the risk budget afforded none — silently blowing through
+    the configured risk limit by up to 33x. The floor is gone.
 
-    Now: contracts is a true floor-division with NO minimum. If 0, we surface
-    that explicitly along with what the account/risk would need to be to afford
-    a single contract, so the user can make an informed decision.
+    BUG FIX (this round) — OPTION RISK WAS MIS-MODELLED:
+    The previous version computed
+        risk_per_contract = 100 × (entry − stop)
+    i.e. the risk of 100 SHARES of stock. That is not what a long option risks.
+    Every recommendation this app makes is a DEBIT position (buying a CALL or a
+    PUT), and for a debit position **maximum loss = the premium paid**. You
+    cannot lose $830 on a call that cost $200.
+
+    Consequences of the old model, measured on this watchlist:
+      • overstated option risk ~4-5x (AAPL 333.26/324.96 → claimed $830/contract
+        when a $2.00 call actually risks $200)
+      • therefore returned 0 contracts for EVERY realistic setup — to get 1 you
+        needed a sub-$14.25 stock with a sub-$0.15 stop
+      • printed a nonsense "you'd need ~$83,000" account requirement
+
+    Now: when the option premium is known we size the option on its true cost,
+    capped by BOTH the risk budget and buying power. The stock-stop distance
+    still drives SHARE sizing, where it is the correct measure.
+
+    `option_premium` is per-share (i.e. the quoted mid); one contract costs
+    premium × 100. Pass None when no chain data is available — the function
+    then reports shares only and says so rather than inventing a contract count.
     """
     risk_dollars = round(ACCOUNT_SIZE * RISK_PCT / 100, 2)
     per_share    = abs(entry - stop)
@@ -287,44 +322,65 @@ def calc_position_size(entry: float, stop: float) -> dict:
     if per_share <= 0:
         return {
             "risk_dollars": risk_dollars, "shares": 0, "contracts": 0,
-            "affordable": False,
+            "affordable": False, "option_known": False,
             "note": "Invalid stop (zero risk per share).",
         }
 
+    # ── SHARE sizing — stop distance is the right risk measure here ──
     shares_by_risk = int(risk_dollars / per_share)
 
-    # NOTIONAL CAP (bug fix): risk-based sizing alone can suggest more stock
-    # than the account can buy. Example: $1 stock with a $0.01 stop → risk
-    # sizing says 1,500 shares = $1,500 notional = 100% of a $1,500 account
-    # (before commissions, and ignoring that cash accounts can't even fill it).
-    # Cap shares by buying power (95% of account to leave room for fees).
+    # NOTIONAL CAP: risk-based sizing alone can suggest more stock than the
+    # account can buy. A $1 stock with a $0.01 stop → 1,500 shares = 100% of a
+    # $1,500 account. Cap by buying power (95%, leaving room for fees).
     shares_by_cash  = int((ACCOUNT_SIZE * 0.95) / entry) if entry > 0 else 0
     shares          = min(shares_by_risk, shares_by_cash)
     notional_capped = shares_by_cash < shares_by_risk
 
-    contracts = shares // SHARES_PER_CONTRACT   # NO max(1, ...) floor
+    result = {
+        "risk_dollars": risk_dollars,
+        "shares":       shares,
+        "per_share":    round(per_share, 2),
+    }
 
-    # What one contract would actually cost in risk terms
-    risk_per_contract = round(per_share * SHARES_PER_CONTRACT, 2)
-
-    if contracts >= 1:
-        note = None
-        affordable = True
+    # ── OPTION sizing — premium IS the risk on a debit position ──
+    if option_premium is None or option_premium <= 0:
+        # No chain data. Report shares only; do NOT fabricate a contract count.
+        result.update({
+            "contracts": None, "option_known": False, "affordable": False,
+            "note": ("Option premium unknown (no chain data) — share sizing "
+                     "shown. Open the 🧠 Options tab to size the contract."),
+        })
     else:
-        affordable = False
-        # Minimum account needed to afford 1 contract at this risk %
-        min_account = round(risk_per_contract / (RISK_PCT / 100), 0)
-        # NOTE: Streamlit markdown treats $...$ as LaTeX math. Every literal
-        # dollar sign must be escaped as \$ or the text between two of them
-        # gets swallowed into a math block (renders as italic serif garbage).
-        note = (
-            f"1 contract = {SHARES_PER_CONTRACT} shares × \\${per_share:,.2f} risk "
-            f"= **\\${risk_per_contract:,.2f} at risk** — that's "
-            f"**{risk_per_contract / ACCOUNT_SIZE * 100:.1f}%** of your "
-            f"\\${ACCOUNT_SIZE:,} account (your limit: {RISK_PCT}%). "
-            f"You'd need ~**\\${min_account:,.0f}** to take 1 contract within your risk rule. "
-            f"Consider trading **{shares} share(s)** instead."
-        )
+        cost_per_contract  = round(option_premium * SHARES_PER_CONTRACT, 2)
+        contracts_by_risk  = int(risk_dollars / cost_per_contract)
+        contracts_by_cash  = int((ACCOUNT_SIZE * 0.95) / cost_per_contract)
+        contracts          = min(contracts_by_risk, contracts_by_cash)
+        # Largest premium that fits the risk rule, in per-share terms
+        max_premium        = round(risk_dollars / SHARES_PER_CONTRACT, 2)
+
+        result.update({
+            "contracts":         contracts,
+            "option_known":      True,
+            "cost_per_contract": cost_per_contract,
+            "max_premium":       max_premium,
+            "affordable":        contracts >= 1,
+        })
+
+        if contracts >= 1:
+            result["note"] = None
+        else:
+            pct_of_acct = cost_per_contract / ACCOUNT_SIZE * 100
+            result["note"] = (
+                f"1 contract costs **\\${cost_per_contract:,.2f}** "
+                f"(\\${option_premium:,.2f} × {SHARES_PER_CONTRACT}) — that's the "
+                f"**maximum you can lose** on a long option, and it's "
+                f"**{pct_of_acct:.1f}%** of your \\${ACCOUNT_SIZE:,} account "
+                f"(your limit: {RISK_PCT}% = \\${risk_dollars:,.2f}). "
+                f"Within your rule you could afford a contract priced up to "
+                f"**\\${max_premium:,.2f}**. Alternatives: trade "
+                f"**{shares} share(s)** instead, raise **Risk per trade**, or "
+                f"look for a cheaper contract."
+            )
 
     if notional_capped:
         cap_note = (
@@ -332,16 +388,9 @@ def calc_position_size(entry: float, stop: float) -> dict:
             f"{shares_by_risk:,} shares but \\${ACCOUNT_SIZE:,} only covers "
             f"{shares_by_cash:,} at \\${entry:,.2f}/share."
         )
-        note = f"{cap_note}\n\n{note}" if note else cap_note
+        result["note"] = f"{cap_note}\n\n{result['note']}" if result.get("note") else cap_note
 
-    return {
-        "risk_dollars":      risk_dollars,
-        "shares":            shares,
-        "contracts":         contracts,
-        "risk_per_contract": risk_per_contract,
-        "affordable":        affordable,
-        "note":              note,
-    }
+    return result
 
 
 # ─────────────────────────────────────────────
@@ -360,15 +409,48 @@ def short_ts(ts: str) -> str:
 # ─────────────────────────────────────────────
 # MARKET HOURS
 # ─────────────────────────────────────────────
+# NYSE full-day closures and 1:00pm ET half-days.
+#
+# BUG FIX: is_market_open() previously checked only weekday + clock time, so on
+# Thanksgiving, Christmas, Good Friday etc. it reported the market OPEN. That
+# matters because drop_partial_bar() trusts it: believing the market is open,
+# it DISCARDS the last completed daily bar as if it were a partial in-progress
+# bar. Every indicator, level and ATR was then computed on data a full session
+# stale — silently, with no warning to the user.
+#
+# Maintenance note: these are fixed dates published by the NYSE each year. Add
+# the next year's list when it's released; an unknown future year simply falls
+# back to weekday+time behaviour (the old, slightly-wrong-on-holidays logic).
+MARKET_HOLIDAYS = {
+    # 2025
+    "2025-01-01", "2025-01-09", "2025-01-20", "2025-02-17", "2025-04-18",
+    "2025-05-26", "2025-06-19", "2025-07-04", "2025-09-01", "2025-11-27",
+    "2025-12-25",
+    # 2026
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+}
+# Early closes — market shuts at 1:00pm ET
+MARKET_HALF_DAYS = {
+    "2025-07-03", "2025-11-28", "2025-12-24",
+    "2026-11-27", "2026-12-24",
+}
+
+
 def is_market_open() -> bool:
     try:
         tz  = pytz.timezone("America/New_York")
         now = datetime.now(tz)
         if now.weekday() >= 5:
             return False
-        return (now.replace(hour=9,  minute=30, second=0, microsecond=0)
+        day = now.strftime("%Y-%m-%d")
+        if day in MARKET_HOLIDAYS:
+            return False
+        close_hour, close_min = (13, 0) if day in MARKET_HALF_DAYS else (16, 0)
+        return (now.replace(hour=9, minute=30, second=0, microsecond=0)
                 <= now <=
-                now.replace(hour=16, minute=0,  second=0, microsecond=0))
+                now.replace(hour=close_hour, minute=close_min,
+                            second=0, microsecond=0))
     except Exception:
         return False
 
@@ -998,7 +1080,8 @@ def check_pick_unusual_activity(ticker: str, opt: dict) -> dict | None:
 # Never returns bare None anymore.
 # ─────────────────────────────────────────────
 def _analyze_uncached(df: pd.DataFrame, ticker: str,
-                      spy_regime: dict | None = None) -> dict:
+                      spy_regime: dict | None = None,
+                      fetch_options: bool = True) -> dict:
     latest  = df.iloc[-1]
     price   = float(latest["Close"])
     ema20   = float(latest["EMA20"])
@@ -1181,7 +1264,19 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
             "rsi": round(rsi, 1), "adx": adx_val,
         }
 
-    option = get_option_data(ticker, price, trend, strength, atr=atr)
+    # ── Option chain: LAZY ──
+    # BUG FIX (rate limiting): this used to fetch unconditionally, which meant
+    # EVERY ticker passing base+RR during a watchlist scan pulled a full option
+    # chain. Traced cost of one 5-ticker scan: 1 batch + 1 SPY + 5 weekly +
+    # 5 earnings + (1 expiry-list + 3 chains) per qualifying ticker = 16-32
+    # Yahoo calls fired from 2 threads in seconds. That exhausted Yahoo's
+    # unofficial limit, so the NEXT thing you did — usually opening the Options
+    # tab — failed with "Rate limited" on the very first ticker.
+    # Chains are only needed in the single-stock view, so the scan now skips
+    # them entirely (fetch_options=False) and the Options tab fetches on demand.
+    option = (get_option_data(ticker, price, trend, strength, atr=atr)
+              if fetch_options else
+              {"error": "Not fetched during scan — open 🔍 Stock Analysis for options."})
 
     # ── High-quality tier ──
     # Was hardcoded `rr >= 2.0`. With MIN_RR now user-tunable (default 0.5),
@@ -1215,7 +1310,8 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
 
 @st.cache_data(ttl=300, show_spinner=False)
 def analyze(_df: pd.DataFrame, ticker: str, latest_bar_key: str,
-            settings_key: str, spy_regime: dict | None = None) -> dict:
+            settings_key: str, spy_regime: dict | None = None,
+            fetch_options: bool = True) -> dict:
     """
     BUG FIX #1: settings_key is a fingerprint of every sidebar tunable that
     _analyze_uncached() reads as a global (ADX_MIN, MIN_RR, VOLUME_MULT,
@@ -1229,7 +1325,8 @@ def analyze(_df: pd.DataFrame, ticker: str, latest_bar_key: str,
     Including the fingerprint in the signature forces Streamlit to treat a
     settings change as a cache miss.
     """
-    return _analyze_uncached(_df, ticker, spy_regime=spy_regime)
+    return _analyze_uncached(_df, ticker, spy_regime=spy_regime,
+                             fetch_options=fetch_options)
 
 
 def get_settings_key() -> str:
@@ -1287,8 +1384,11 @@ def _scan_one_ticker(ticker: str, data_map: dict, spy_regime: dict,
     df = compute(df)
     df, _ = drop_partial_bar(df)      # bug #7: never analyse an in-progress bar
     if not has_sufficient_history(df, ticker): return None
+    # fetch_options=False: the scan must not pull option chains (see the LAZY
+    # note in _analyze_uncached). This is the single biggest reduction in
+    # Yahoo call volume — a 5-ticker scan drops from ~16-32 calls to ~12.
     r = analyze(df, ticker, f"{ticker}_{df.index[-1]}", settings_key,
-                spy_regime=spy_regime)
+                spy_regime=spy_regime, fetch_options=False)
     return r if r and not r.get("blocked") else None
 
 
@@ -1587,19 +1687,30 @@ with TAB_SCAN:
                     h4.metric("ADX",     a["adx"])
                     h5.metric("Filters", f"{a['filters_pass']}/{a['filters_total']}")
                     st.caption(f"Entry {a['entry']} · Stop {a['stop']} · Target {a['target']} · RSI {a['rsi']}")
-                    ps = calc_position_size(a["entry"], a["stop"])
+                    # Pass the option mid when the chain resolved, so contract
+                    # sizing is based on PREMIUM (true max loss on a debit
+                    # option) rather than on the stock stop distance.
+                    _opt = a.get("option") or {}
+                    _prem = _opt.get("mid") if not _opt.get("error") else None
+                    ps = calc_position_size(a["entry"], a["stop"], option_premium=_prem)
                     if ps["affordable"]:
                         st.caption(
                             f"💰 Position sizing — Risk \\${ps['risk_dollars']:,.2f} · "
                             f"**{ps['shares']} shares** or **{ps['contracts']} contract(s)** "
+                            f"at \\${ps['cost_per_contract']:,.2f} each "
                             f"(\\${ACCOUNT_SIZE:,} acct · {RISK_PCT}% risk)"
+                        )
+                    elif ps.get("option_known"):
+                        st.caption(
+                            f"💰 Position sizing — Risk \\${ps['risk_dollars']:,.2f} · "
+                            f"**{ps['shares']} shares** · ⚠️ **0 contracts** "
+                            f"(1 contract costs \\${ps['cost_per_contract']:,.2f}; "
+                            f"your limit affords up to \\${ps['max_premium']:,.2f}/share)"
                         )
                     else:
                         st.caption(
                             f"💰 Position sizing — Risk \\${ps['risk_dollars']:,.2f} · "
-                            f"**{ps['shares']} shares** · ⚠️ **0 contracts** "
-                            f"(1 contract = \\${ps['risk_per_contract']:,.2f} risk, "
-                            f"over your {RISK_PCT}% limit)"
+                            f"**{ps['shares']} shares** · contracts n/a (no chain data)"
                         )
         else:
             st.info("No high-quality setups right now — all 4 filters must pass.")
@@ -1741,19 +1852,28 @@ with TAB_STOCK:
                         reward_amt = abs(r["target"]-r["entry"])
                         st.progress(min(reward_amt/(risk_amt+reward_amt),1.0),
                                     text=f"Reward ${reward_amt:.2f} vs Risk ${risk_amt:.2f}")
-                        ps = calc_position_size(r["entry"], r["stop"])
+                        _opt  = r.get("option") or {}
+                        _prem = _opt.get("mid") if not _opt.get("error") else None
+                        ps = calc_position_size(r["entry"], r["stop"], option_premium=_prem)
                         if ps["affordable"]:
                             st.info(
                                 f"💰 **Position Sizing** — "
                                 f"Risk \\${ps['risk_dollars']:,.2f} ({RISK_PCT}% of \\${ACCOUNT_SIZE:,}) · "
                                 f"**{ps['shares']} shares** · **{ps['contracts']} option contract(s)** "
-                                f"(1 contract = \\${ps['risk_per_contract']:,.2f} risk)"
+                                f"at \\${ps['cost_per_contract']:,.2f} each "
+                                f"(premium × 100 = max loss on a long option)"
                             )
-                        else:
+                        elif ps.get("option_known"):
                             st.warning(
-                                f"⚠️ **Options exceed your risk limit** — "
+                                f"⚠️ **This contract exceeds your risk limit** — "
                                 f"Risk budget is \\${ps['risk_dollars']:,.2f} "
                                 f"({RISK_PCT}% of \\${ACCOUNT_SIZE:,}).\n\n{ps['note']}"
+                            )
+                        else:
+                            st.info(
+                                f"💰 **Position Sizing** — "
+                                f"Risk \\${ps['risk_dollars']:,.2f} ({RISK_PCT}% of \\${ACCOUNT_SIZE:,}) · "
+                                f"**{ps['shares']} shares**.\n\n{ps['note']}"
                             )
                         st.caption(
                             "⚠️ **Gap risk:** a stop is not a guarantee. Swing positions are held "
@@ -2092,10 +2212,15 @@ with TAB_JOURNAL:
                 except Exception as e:
                     st.error(f"Invalid backup file: {e}")
 
-    if stats:
+    if stats and stats.get("total"):
         st.markdown("### 📊 Performance Dashboard")
+        if stats.get("open"):
+            st.caption(
+                f"ℹ️ {stats['open']} OPEN trade(s) are excluded from every metric "
+                f"below — performance is computed on closed trades only."
+            )
         m1,m2,m3,m4,m5,m6 = st.columns(6)
-        m1.metric("Total Trades",  stats["total"])
+        m1.metric("Closed Trades", stats["total"])
         m2.metric("Win Rate",      f"{stats['win_rate']}%")
         m3.metric("Wins/Losses",   f"{stats['wins']} / {stats['losses']}")
         m4.metric("Avg Win (R)",   stats["avg_win_r"])
