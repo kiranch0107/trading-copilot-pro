@@ -50,7 +50,7 @@ st.caption("Swing · Options · Alerts · Journal · ADX · Multi-TF · Earnings
 # ─────────────────────────────────────────────
 st.sidebar.header("⚙️ Scan Settings")
 
-WATCHLIST = ["TSLA","NVDA","AAPL","MSFT","AMZN","META","SPY"]
+WATCHLIST = ["TSLA","NVDA","AAPL","MSFT","AMZN","META","SPY","ROKU"]
 
 # FIX #11: FAST_MODE exposed as sidebar toggle
 FAST_MODE  = st.sidebar.checkbox("Fast Mode (top 5 only)", value=True)
