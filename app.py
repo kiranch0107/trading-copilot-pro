@@ -104,8 +104,16 @@ if MIN_DTE < _days_needed_preview:
 WEEKLY_CONFIRM = st.sidebar.checkbox("Require weekly TF alignment",  value=True)
 SPY_REGIME     = st.sidebar.checkbox("Apply SPY regime filter",      value=True)
 st.sidebar.divider()
-
-# FIX #10: account settings for position sizing
+st.sidebar.header("📍 Exit Monitoring")
+EXIT_CHECK_MINUTES = int(st.sidebar.number_input(
+    "Check interval (minutes)", value=30, min_value=5, max_value=240, step=5,
+    help="How often exit_monitor.py should check your open positions. Set your "
+         "scheduler (cron / GitHub Actions) to the SAME interval — the monitor "
+         "scans the intraday range since its last check, so matching them means "
+         "no window is missed."))
+st.sidebar.caption("Alerts come from `exit_monitor.py` on a scheduler, not from "
+                   "this app — an app only runs while a tab is open.")
+st.sidebar.divider()
 st.sidebar.header("💰 Position Sizing")
 ACCOUNT_SIZE = int(st.sidebar.number_input("Account size ($)",   value=1500, min_value=100, step=500))
 RISK_PCT     = st.sidebar.number_input("Risk per trade (%)",     value=1.0,   min_value=0.1, max_value=10.0, step=0.1)
@@ -127,9 +135,11 @@ COOLDOWN       = 600
 # ─────────────────────────────────────────────
 ALERT_LOG_FILE = Path("alert_history.json")
 JOURNAL_FILE   = Path("trade_journal.json")
+POSITIONS_FILE = Path("open_positions.json")
 
-_SS_ALERTS  = "_alerts_store"
-_SS_JOURNAL = "_journal_store"
+_SS_ALERTS    = "_alerts_store"
+_SS_JOURNAL   = "_journal_store"
+_SS_POSITIONS = "_positions_store"
 
 
 def _load(path: Path) -> list:
@@ -169,6 +179,77 @@ def load_journal() -> list:
 def save_journal(d: list) -> None:
     st.session_state[_SS_JOURNAL] = d
     _save(JOURNAL_FILE, d)
+
+
+# ─────────────────────────────────────────────
+# OPEN POSITIONS  (needed for exit monitoring)
+#
+# The journal only ever held CLOSED trades — add_journal_trade() requires
+# exit_price and outcome. That meant the app had no idea what you were
+# currently holding, so there was nothing for an exit monitor to watch.
+# open_positions.json is the missing piece: it records a trade at ENTRY, and
+# exit_monitor.py (run on a schedule) watches these for stop/target hits.
+#
+# Shape of a position record:
+#   {id, ticker, trend, entry, stop, target, rr, opened, opened_epoch,
+#    qty, instrument, notes, last_check_epoch, status}
+# ─────────────────────────────────────────────
+def load_positions() -> list:
+    if _SS_POSITIONS not in st.session_state:
+        st.session_state[_SS_POSITIONS] = _load(POSITIONS_FILE)
+    return st.session_state[_SS_POSITIONS]
+
+
+def save_positions(d: list) -> None:
+    st.session_state[_SS_POSITIONS] = d
+    _save(POSITIONS_FILE, d)
+
+
+def open_position(ticker: str, trend: str, entry: float, stop: float,
+                  target: float, qty: float = 0, instrument: str = "shares",
+                  notes: str = "", source_alert_id: str | None = None) -> dict:
+    """Record a trade you actually took so the exit monitor can watch it."""
+    positions = load_positions()
+    now_epoch = time.time()
+    risk = abs(entry - stop)
+    pos = {
+        "id":               source_alert_id or f"POS_{ticker}_{int(now_epoch)}",
+        "ticker":           ticker,
+        "trend":            trend,
+        "entry":            round(float(entry), 2),
+        "stop":             round(float(stop), 2),
+        "target":           round(float(target), 2),
+        "rr":               round(abs(target - entry) / risk, 2) if risk > 0 else 0,
+        "qty":              qty,
+        "instrument":       instrument,
+        "notes":            notes,
+        "opened":           datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d %H:%M ET"),
+        "opened_epoch":     now_epoch,
+        # The monitor scans intraday bars from this timestamp forward, so a stop
+        # touched-and-recovered between checks is still caught.
+        "last_check_epoch": now_epoch,
+        "status":           "OPEN",
+        "exit_alerted":     False,
+    }
+    positions.append(pos)
+    save_positions(positions)
+    return pos
+
+
+def close_position(position_id: str, exit_price: float, outcome: str,
+                   notes: str = "") -> None:
+    """Move a position out of the open store and into the journal."""
+    positions = load_positions()
+    pos = next((p for p in positions if p["id"] == position_id), None)
+    if pos is None:
+        return
+    add_journal_trade(
+        alert_id=pos["id"], ticker=pos["ticker"], trend=pos["trend"],
+        entry=pos["entry"], stop=pos["stop"], target=pos["target"],
+        rr=pos["rr"], exit_price=exit_price, outcome=outcome,
+        notes=notes or pos.get("notes", ""), setup_date=pos["opened"],
+    )
+    save_positions([p for p in positions if p["id"] != position_id])
 
 
 def log_alert(ticker, trend, strength, entry, stop, target, rr, price,
@@ -1589,8 +1670,8 @@ def get_market_context() -> dict:
 # ─────────────────────────────────────────────
 # TOP-LEVEL TABS
 # ─────────────────────────────────────────────
-TAB_SCAN, TAB_STOCK, TAB_UNUSUAL, TAB_ALERTS, TAB_JOURNAL = st.tabs([
-    "📡 Watchlist Scan", "🔍 Stock Analysis",
+TAB_SCAN, TAB_STOCK, TAB_POSITIONS, TAB_UNUSUAL, TAB_ALERTS, TAB_JOURNAL = st.tabs([
+    "📡 Watchlist Scan", "🔍 Stock Analysis", "📍 Positions",
     "🌊 Unusual Activity", "🔔 Alert History", "📓 Trade Journal",
 ])
 
@@ -2032,7 +2113,171 @@ with TAB_STOCK:
 
 
 # ═══════════════════════════════════════════════
-# TAB 3 — UNUSUAL ACTIVITY
+# TAB — OPEN POSITIONS  (feeds the exit monitor)
+# ═══════════════════════════════════════════════
+with TAB_POSITIONS:
+    st.subheader("📍 Open Positions")
+    st.caption("Record trades you actually took. `exit_monitor.py` watches these "
+               "on a schedule and Telegrams you when a stop or target is hit.")
+
+    positions = load_positions()
+
+    # ── How the monitoring actually works (be honest about the constraint) ──
+    with st.expander("⚙️ How exit alerts work — read once", expanded=not positions):
+        st.markdown(
+            "**A Streamlit app only runs while a browser tab is open**, and "
+            "Streamlit Cloud sleeps idle apps. So this app *cannot* reliably "
+            "check your exits in the background — if your phone locks, checks "
+            "stop. An exit alert you might not receive is worse than none, "
+            "because you'd stop watching manually."
+        )
+        st.markdown(
+            f"`exit_monitor.py` solves this. It runs standalone on a scheduler "
+            f"(GitHub Actions cron is free), reads `open_positions.json`, and "
+            f"alerts you independently of this app. Current interval setting: "
+            f"**every {EXIT_CHECK_MINUTES} min** during market hours."
+        )
+        st.code(
+            f"# one-off test (won't send or change anything)\n"
+            f"python exit_monitor.py --dry-run --force\n\n"
+            f"# real run\n"
+            f"export TELEGRAM_BOT_TOKEN=...\n"
+            f"export TELEGRAM_CHAT_ID=...\n"
+            f"python exit_monitor.py --interval {EXIT_CHECK_MINUTES}",
+            language="bash")
+        st.caption("It checks the intraday high/low across the whole interval, "
+                   "so a stop that was touched and recovered between checks is "
+                   "still caught — polling the last price would miss it.")
+
+    # ── Positions the monitor has already flagged ──
+    signalled = [p for p in positions if p.get("status") == "EXIT_SIGNALLED"]
+    if signalled:
+        st.markdown("### 🔔 Exit signalled — close these")
+        for p in signalled:
+            icon = "🎯" if p.get("exit_reason") == "TARGET" else "🛑"
+            with st.container(border=True):
+                st.markdown(
+                    f"{icon} **{p['ticker']}** {p['trend']} — **{p.get('exit_reason')}** hit "
+                    f"at \\${p.get('exit_price')} ({p.get('exit_r', 0):+.2f}R) "
+                    f"· detected {p.get('exit_detected','')}"
+                )
+                if p.get("exit_gapped"):
+                    st.warning("⚠️ Price **gapped through** the level — the fill shown is "
+                               "the bar open, worse than your stop. Your real fill may "
+                               "differ again.")
+                fill = st.number_input("Your actual fill price", min_value=0.01,
+                                       value=float(p.get("exit_price") or p["entry"]),
+                                       step=0.01, key=f"fill_{p['id']}")
+                oc = st.radio("Outcome", ["WIN", "LOSS", "BREAKEVEN"], horizontal=True,
+                              index=0 if p.get("exit_reason") == "TARGET" else 1,
+                              key=f"oc_{p['id']}")
+                nt = st.text_input("Notes", key=f"nt_{p['id']}")
+                if st.button("📓 Close & log to journal", type="primary",
+                             key=f"close_{p['id']}"):
+                    close_position(p["id"], fill, oc, nt)
+                    st.success(f"{p['ticker']} closed and logged.")
+                    st.rerun()
+        st.divider()
+
+    # ── Currently open ──
+    live = [p for p in positions if p.get("status") == "OPEN"]
+    st.markdown(f"### Currently open ({len(live)})")
+    if not live:
+        st.info("No open positions. Log one below so the monitor can watch it.")
+    else:
+        for p in live:
+            with st.container(border=True):
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric("Ticker", p["ticker"])
+                c2.metric("Side", "Long" if p["trend"] == "Bullish" else "Short")
+                c3.metric("Entry", f"${p['entry']}")
+                c4.metric("Stop", f"${p['stop']}")
+                c5.metric("Target", f"${p['target']}")
+                st.caption(f"R:R {p['rr']} · opened {p['opened']}"
+                           + (f" · {p['qty']} {p.get('instrument','shares')}" if p.get("qty") else "")
+                           + (f" · {p['notes']}" if p.get("notes") else ""))
+                cc1, cc2 = st.columns([1, 3])
+                with cc1:
+                    if st.button("Close manually", key=f"man_{p['id']}"):
+                        st.session_state[f"closing_{p['id']}"] = True
+                if st.session_state.get(f"closing_{p['id']}"):
+                    mf = st.number_input("Exit fill price", min_value=0.01,
+                                         value=float(p["entry"]), step=0.01,
+                                         key=f"mf_{p['id']}")
+                    mo = st.radio("Outcome", ["WIN", "LOSS", "BREAKEVEN"],
+                                  horizontal=True, key=f"mo_{p['id']}")
+                    mn = st.text_input("Notes", key=f"mn_{p['id']}")
+                    if st.button("Confirm close", type="primary", key=f"cf_{p['id']}"):
+                        close_position(p["id"], mf, mo, mn)
+                        st.session_state.pop(f"closing_{p['id']}", None)
+                        st.success(f"{p['ticker']} closed and logged.")
+                        st.rerun()
+
+    st.divider()
+
+    # ── Log a new position ──
+    st.markdown("### ➕ Log a position you took")
+    _setups = st.session_state.get("all_setups", [])
+    _labels = ["— enter manually —"] + [
+        f"{s['ticker']} · {s['trend']} · {s['entry']}/{s['stop']}/{s['target']}"
+        for s in _setups if isinstance(s, dict) and "ticker" in s
+    ]
+    pick = st.selectbox("Prefill from last scan", _labels, key="pos_prefill")
+    pre = None
+    if pick != "— enter manually —":
+        pre = _setups[_labels.index(pick) - 1]
+
+    p1, p2 = st.columns(2)
+    with p1:
+        n_tkr = st.text_input("Ticker", value=(pre["ticker"] if pre else ""),
+                              key="np_tkr").strip().upper()
+        n_dir = st.radio("Direction", ["Long", "Short"], horizontal=True,
+                         index=0 if (not pre or pre["trend"] == "Bullish") else 1,
+                         key="np_dir")
+        n_inst = st.selectbox("Instrument", ["shares", "option contracts"], key="np_inst")
+        n_qty = st.number_input("Quantity", min_value=0.0, value=0.0, step=1.0,
+                                key="np_qty",
+                                help="Optional — shown in the alert so you know what to close.")
+    with p2:
+        n_entry = st.number_input("Entry fill", min_value=0.0, step=0.01,
+                                  value=float(pre["entry"]) if pre else 0.0, key="np_entry")
+        n_stop  = st.number_input("Stop", min_value=0.0, step=0.01,
+                                  value=float(pre["stop"]) if pre else 0.0, key="np_stop")
+        n_tgt   = st.number_input("Target", min_value=0.0, step=0.01,
+                                  value=float(pre["target"]) if pre else 0.0, key="np_tgt")
+    n_notes = st.text_input("Notes / thesis", key="np_notes")
+
+    if n_tkr and n_entry > 0 and n_stop > 0 and n_tgt > 0:
+        trend = "Bullish" if n_dir == "Long" else "Bearish"
+        coherent = (n_stop < n_entry < n_tgt) if trend == "Bullish" \
+            else (n_tgt < n_entry < n_stop)
+        if not coherent:
+            st.error(
+                f"Levels don't form a valid **{n_dir.lower()}** — need "
+                + ("stop < entry < target." if trend == "Bullish"
+                   else "target < entry < stop.")
+                + " The monitor would never trigger correctly with these."
+            )
+        else:
+            rr_prev = round(abs(n_tgt - n_entry) / abs(n_entry - n_stop), 2)
+            st.caption(f"R:R {rr_prev} · risk \\${abs(n_entry-n_stop):,.2f}/share")
+            if st.button("📍 Start monitoring this position", type="primary",
+                         key="np_save"):
+                open_position(n_tkr, trend, n_entry, n_stop, n_tgt,
+                              qty=n_qty, instrument=n_inst, notes=n_notes)
+                st.success(f"Now monitoring {n_tkr}. The scheduled run of "
+                           f"`exit_monitor.py` will alert you on stop/target.")
+                st.rerun()
+    else:
+        st.caption("Fill in ticker, entry, stop and target to begin monitoring.")
+
+    st.caption("⚠️ The monitor reports when a level was *touched*. It is not a "
+               "broker and does not place or confirm orders — your real fill "
+               "will differ, especially on gaps.")
+
+
+# ═══════════════════════════════════════════════
+# TAB — UNUSUAL ACTIVITY
 # ═══════════════════════════════════════════════
 with TAB_UNUSUAL:
     st.subheader("🌊 Unusual Options Activity Scanner")
