@@ -1,40 +1,49 @@
 """
-Trading Copilot ELITE — Exit Monitor
-====================================
-Watches the positions in open_positions.json and sends a Telegram alert when a
-stop or target is hit. Runs STANDALONE — it does not import the Streamlit app —
-so it works on a scheduler whether or not any browser tab is open.
+Trading Copilot ELITE — Option Exit Monitor
+===========================================
+Watches the OPTION positions in open_positions.json and sends a Telegram alert
+when an exit rule fires. Runs STANDALONE — it does not import the Streamlit app
+— so it works on a scheduler whether or not any browser tab is open.
 
-WHY THIS IS A SEPARATE SCRIPT
------------------------------
+WHY A SEPARATE SCRIPT
+---------------------
 A Streamlit app only executes while a browser session is active, and Streamlit
-Cloud sleeps idle apps. Any "check every 30 minutes" loop living inside the app
-silently stops the moment you close the tab or your phone locks — which is
-exactly when you'd be relying on it. An exit alert you might not receive is
-worse than no alert, because you stop watching manually. So the monitor lives
-here and is driven by an external scheduler (GitHub Actions cron, or plain cron).
+Cloud sleeps idle apps. A "check every 30 minutes" loop inside the app silently
+stops the moment you close the tab — exactly when you'd be relying on it. So
+the monitor lives here, driven by an external scheduler (GitHub Actions cron).
 
-WHY IT CHECKS BARS, NOT THE LAST PRICE
---------------------------------------
-Polling the current price every 30 minutes would MISS a stop that was touched
-and recovered inside the window — the single most important case to catch. The
-monitor instead pulls intraday bars covering the whole interval since the last
-check and tests the HIGH/LOW of that range. It also handles gap-through: if
-price opened beyond your stop, the realistic fill is the open, not the stop.
+THE FOUR EXIT TRIGGERS
+----------------------
+Price stops on the underlying fit options badly: an option can lose 40% while
+the stock barely moves, purely from theta and IV. These trigger on the things
+that actually govern an option position, and are checked in this priority:
+
+  1. STOP      — premium fell to −X% of what you paid (risk first)
+  2. TARGET    — premium rose to +Y%
+  3. TIME      — DTE at or below your floor; theta decay accelerates sharply
+                 in the final weeks and this is the rule people most often skip
+  4. THESIS    — the underlying invalidated the setup (closed the wrong side of
+                 its EMA20), so the reason you bought the contract is gone
+
+Each is optional per position. Set a rule to 0 / off to disable it.
+
+AN IMPORTANT LIMITATION, STATED PLAINLY
+---------------------------------------
+Premium checks use the CURRENT quoted mid, not intraday bars, because reliable
+per-contract intraday history isn't available from this data source. So a spike
+that hit your target and reverted BETWEEN two checks can be missed. Shorter
+intervals reduce but never eliminate this. The underlying-based THESIS check
+does use daily closes and is not affected. Option quotes are also delayed and
+can be wide or stale — treat the reported premium as indicative, not a fill.
 
 Run
 ---
     pip install yfinance pandas pytz requests
-    export TELEGRAM_BOT_TOKEN=...   # same bot as the app
+    export TELEGRAM_BOT_TOKEN=...
     export TELEGRAM_CHAT_ID=...
     python exit_monitor.py
 
-Options
--------
-    python exit_monitor.py --interval 30      # minutes of history to scan
-    python exit_monitor.py --dry-run          # print, don't send or mutate
-    python exit_monitor.py --force            # ignore market-hours gate
-    python exit_monitor.py --positions path/to/open_positions.json
+    python exit_monitor.py --dry-run --force   # safe test, sends nothing
 """
 from __future__ import annotations
 
@@ -44,8 +53,7 @@ import os
 import sys
 import time
 import logging
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import datetime, date
 
 import pandas as pd
 import pytz
@@ -59,24 +67,18 @@ try:
 except ImportError:
     raise SystemExit("Missing requests. Run: pip install requests")
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s %(levelname)s: %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("exit_monitor")
 
 ET = pytz.timezone("America/New_York")
 
-# Mirrors the app's calendar so the monitor doesn't fire on closed days.
 MARKET_HOLIDAYS = {
-    "2025-01-01", "2025-01-09", "2025-01-20", "2025-02-17", "2025-04-18",
-    "2025-05-26", "2025-06-19", "2025-07-04", "2025-09-01", "2025-11-27",
-    "2025-12-25",
-    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
-    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+    "2025-01-01","2025-01-09","2025-01-20","2025-02-17","2025-04-18",
+    "2025-05-26","2025-06-19","2025-07-04","2025-09-01","2025-11-27","2025-12-25",
+    "2026-01-01","2026-01-19","2026-02-16","2026-04-03","2026-05-25",
+    "2026-06-19","2026-07-03","2026-09-07","2026-11-26","2026-12-25",
 }
-MARKET_HALF_DAYS = {
-    "2025-07-03", "2025-11-28", "2025-12-24",
-    "2026-11-27", "2026-12-24",
-}
+MARKET_HALF_DAYS = {"2025-07-03","2025-11-28","2025-12-24","2026-11-27","2026-12-24"}
 
 
 def is_market_open(now: datetime | None = None) -> bool:
@@ -86,10 +88,9 @@ def is_market_open(now: datetime | None = None) -> bool:
     day = now.strftime("%Y-%m-%d")
     if day in MARKET_HOLIDAYS:
         return False
-    close_h, close_m = (13, 0) if day in MARKET_HALF_DAYS else (16, 0)
+    ch, cm = (13, 0) if day in MARKET_HALF_DAYS else (16, 0)
     return (now.replace(hour=9, minute=30, second=0, microsecond=0)
-            <= now <=
-            now.replace(hour=close_h, minute=close_m, second=0, microsecond=0))
+            <= now <= now.replace(hour=ch, minute=cm, second=0, microsecond=0))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -108,13 +109,11 @@ def send_telegram(message: str, dry_run: bool = False) -> bool:
                      "This is the most common reason no message arrives.")
         return False
     try:
-        resp = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data={"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            logger.error("Telegram API returned %s: %s", resp.status_code, resp.text[:200])
+        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                          data={"chat_id": chat_id, "text": message,
+                                "parse_mode": "HTML"}, timeout=10)
+        if r.status_code != 200:
+            logger.error("Telegram API %s: %s", r.status_code, r.text[:200])
             return False
         return True
     except Exception as e:
@@ -123,126 +122,157 @@ def send_telegram(message: str, dry_run: bool = False) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════
-# EXIT DETECTION
+# MARKET DATA
 # ══════════════════════════════════════════════════════════════════
-def fetch_window(ticker: str, since_epoch: float,
-                 interval_min: int) -> pd.DataFrame | None:
+def get_option_quote(ticker: str, expiry: str, strike: float,
+                     right: str) -> dict | None:
     """
-    Intraday bars covering everything since the last check.
+    Current quote for one specific contract.
 
-    We deliberately fetch a bit MORE than the interval (yfinance only offers
-    fixed periods, and a scheduler run can be late), then slice by timestamp.
-    Missing a bar is worse than re-checking one — a re-check is idempotent
-    because we compare against fixed stop/target levels.
+    Uses the bid/ask MID rather than lastPrice: lastPrice can be hours stale on
+    a quiet contract and would produce phantom exits. If there's no two-sided
+    market we fall back to lastPrice but flag it as unreliable.
     """
     try:
-        lookback_days = 1 if interval_min <= 240 else 5
-        df = yf.download(ticker, period=f"{lookback_days}d", interval="5m",
+        chain = yf.Ticker(ticker).option_chain(expiry)
+        df = chain.calls if right.upper() == "CALL" else chain.puts
+        if df is None or df.empty:
+            return None
+        row = df[(df["strike"] - float(strike)).abs() < 0.01]
+        if row.empty:
+            logger.warning("%s %s %s %s — strike not found in chain",
+                           ticker, expiry, strike, right)
+            return None
+        row = row.iloc[0]
+        bid = float(row.get("bid") or 0)
+        ask = float(row.get("ask") or 0)
+        last = float(row.get("lastPrice") or 0)
+        if bid > 0 and ask > 0:
+            return {"mid": round((bid + ask) / 2, 2), "bid": bid, "ask": ask,
+                    "reliable": True,
+                    "spread_pct": round((ask - bid) / ((bid + ask) / 2) * 100, 1)}
+        if last > 0:
+            return {"mid": round(last, 2), "bid": bid, "ask": ask,
+                    "reliable": False, "spread_pct": None}
+        return None
+    except Exception as e:
+        logger.warning("get_option_quote(%s) failed: %s", ticker, e)
+        return None
+
+
+def get_underlying_state(ticker: str) -> dict | None:
+    """Last daily close and EMA20, for the thesis-invalidation check."""
+    try:
+        df = yf.download(ticker, period="6mo", interval="1d",
                          progress=False, auto_adjust=False)
         if df is None or df.empty:
             return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-        df = df.dropna(subset=["Open", "High", "Low", "Close"])
-        if df.index.tz is None:
-            df.index = df.index.tz_localize("UTC")
-        df = df.tz_convert(ET)
-        cutoff = datetime.fromtimestamp(since_epoch, tz=ET)
-        window = df[df.index >= cutoff]
-        # If the slice is empty the scheduler may have run twice quickly —
-        # fall back to the most recent bar so we still have a price to report.
-        return window if not window.empty else df.tail(1)
+        df = df.dropna(subset=["Close"])
+        if len(df) < 25:
+            return None
+        # Matches the app's ta.trend.ema_indicator(window=20)
+        ema20 = df["Close"].ewm(span=20, adjust=False).mean()
+        return {"close": round(float(df["Close"].iloc[-1]), 2),
+                "ema20": round(float(ema20.iloc[-1]), 2)}
     except Exception as e:
-        logger.warning("fetch_window(%s) failed: %s", ticker, e)
+        logger.warning("get_underlying_state(%s) failed: %s", ticker, e)
         return None
 
 
-def check_position(pos: dict, interval_min: int) -> dict | None:
-    """
-    Decide whether this position hit its stop or target in the window.
-
-    Returns an exit event dict, or None if still open.
-
-    Conservative rules, matching backtest.py:
-      • If BOTH stop and target were touched in the same window, assume the
-        STOP filled first. We cannot know the intra-bar sequence, and assuming
-        the good outcome would flatter every ambiguous case.
-      • Gap-through: if a bar OPENED beyond the stop, the realistic fill is
-        that open, not the stop level. Reporting the stop would understate
-        the loss — the exact thing the app's gap-risk caption warns about.
-    """
-    df = fetch_window(pos["ticker"], pos.get("last_check_epoch", pos["opened_epoch"]),
-                      interval_min)
-    if df is None or df.empty:
+def days_to_expiry(expiry: str) -> int | None:
+    try:
+        return (datetime.strptime(expiry, "%Y-%m-%d").date() - date.today()).days
+    except Exception:
         return None
 
-    hi = float(df["High"].max())
-    lo = float(df["Low"].min())
-    last = float(df["Close"].iloc[-1])
-    stop, target = float(pos["stop"]), float(pos["target"])
-    long_side = pos["trend"] == "Bullish"
 
-    stop_hit   = (lo <= stop) if long_side else (hi >= stop)
-    target_hit = (hi >= target) if long_side else (lo <= target)
+# ══════════════════════════════════════════════════════════════════
+# EXIT RULES
+# ══════════════════════════════════════════════════════════════════
+def check_option_position(pos: dict) -> dict:
+    """
+    Evaluate every enabled exit rule. Priority: STOP, TARGET, TIME, THESIS —
+    risk before reward, and both before the softer signals.
+    Returns {"exit": bool, ...}.
+    """
+    rules = pos.get("rules", {}) or {}
+    entry_prem = float(pos["entry_premium"])
+    dte = days_to_expiry(pos["expiry"])
+    info = {"dte": dte}
 
-    if not stop_hit and not target_hit:
-        return {"still_open": True, "last": last, "high": hi, "low": lo}
-
-    # Stop takes precedence on ambiguity (conservative).
-    if stop_hit:
-        # Gap-through detection: find the first bar that breached the stop and
-        # check whether it OPENED already beyond it.
-        breach = df[df["Low"] <= stop] if long_side else df[df["High"] >= stop]
-        exit_px, gapped = stop, False
-        if not breach.empty:
-            first_open = float(breach["Open"].iloc[0])
-            if (long_side and first_open < stop) or ((not long_side) and first_open > stop):
-                exit_px, gapped = first_open, True
-        reason = "STOP"
+    quote = get_option_quote(pos["ticker"], pos["expiry"],
+                             pos["strike"], pos["right"])
+    if quote:
+        mid = quote["mid"]
+        pnl_pct = ((mid - entry_prem) / entry_prem * 100) if entry_prem > 0 else 0
+        info.update(mid=mid, pnl_pct=round(pnl_pct, 1),
+                    reliable=quote["reliable"], spread_pct=quote.get("spread_pct"))
     else:
-        breach = df[df["High"] >= target] if long_side else df[df["Low"] <= target]
-        exit_px, gapped = target, False
-        if not breach.empty:
-            first_open = float(breach["Open"].iloc[0])
-            if (long_side and first_open > target) or ((not long_side) and first_open < target):
-                exit_px, gapped = first_open, True
-        reason = "TARGET"
+        mid = pnl_pct = None
+        info.update(mid=None, pnl_pct=None, reliable=False)
 
-    risk = abs(pos["entry"] - stop)
-    r_mult = ((exit_px - pos["entry"]) / risk) if long_side else ((pos["entry"] - exit_px) / risk)
+    # 1. STOP — premium fell by more than the allowed %
+    sl = rules.get("sl_pct") or 0
+    if sl and pnl_pct is not None and pnl_pct <= -abs(sl):
+        return {**info, "exit": True, "reason": "STOP",
+                "detail": f"Premium {pnl_pct:+.1f}% (limit −{abs(sl):.0f}%)"}
 
-    return {
-        "still_open": False,
-        "reason":     reason,
-        "exit_price": round(exit_px, 2),
-        "gapped":     gapped,
-        "r_multiple": round(r_mult, 2),
-        "last":       last,
-        "high":       hi,
-        "low":        lo,
-    }
+    # 2. TARGET — premium rose past the take-profit
+    tp = rules.get("tp_pct") or 0
+    if tp and pnl_pct is not None and pnl_pct >= abs(tp):
+        return {**info, "exit": True, "reason": "TARGET",
+                "detail": f"Premium {pnl_pct:+.1f}% (target +{abs(tp):.0f}%)"}
+
+    # 3. TIME — theta decay accelerates in the final weeks
+    dte_floor = rules.get("dte_exit") or 0
+    if dte_floor and dte is not None and dte <= dte_floor:
+        return {**info, "exit": True, "reason": "TIME",
+                "detail": f"{dte} DTE left (floor {dte_floor}) — theta decay "
+                          f"accelerates from here regardless of P&L"}
+
+    # 4. THESIS — underlying invalidated the setup
+    if rules.get("invalidate_ema"):
+        u = get_underlying_state(pos["ticker"])
+        if u:
+            info.update(underlying=u["close"], ema20=u["ema20"])
+            broke = (u["close"] < u["ema20"]) if pos["right"].upper() == "CALL" \
+                else (u["close"] > u["ema20"])
+            if broke:
+                side = "below" if pos["right"].upper() == "CALL" else "above"
+                return {**info, "exit": True, "reason": "THESIS",
+                        "detail": f"{pos['ticker']} closed {u['close']} — {side} "
+                                  f"EMA20 {u['ema20']}. The setup that justified "
+                                  f"this {pos['right']} is no longer valid."}
+
+    return {**info, "exit": False}
 
 
 def format_alert(pos: dict, ev: dict) -> str:
-    icon = "🎯" if ev["reason"] == "TARGET" else "🛑"
-    side = "LONG" if pos["trend"] == "Bullish" else "SHORT"
-    lines = [
-        f"{icon} <b>EXIT {ev['reason']} — {pos['ticker']}</b> ({side})",
-        "",
-        f"Entry:  {pos['entry']}",
-        f"{'Target' if ev['reason']=='TARGET' else 'Stop'}: "
-        f"{pos['target'] if ev['reason']=='TARGET' else pos['stop']}",
-        f"Exit:   {ev['exit_price']}",
-        f"Result: {ev['r_multiple']:+.2f}R",
-    ]
-    if pos.get("qty"):
-        lines.append(f"Size:   {pos['qty']} {pos.get('instrument','shares')}")
-    if ev["gapped"]:
-        lines += ["", ("⚠️ GAPPED THROUGH the level — the fill shown is the bar "
-                       "open, which is worse than the level. Your actual fill may "
-                       "differ again.")]
-    lines += ["", f"Opened {pos['opened']}",
-              "", "Close the position in the app to log it to your journal."]
+    icons = {"TARGET": "🎯", "STOP": "🛑", "TIME": "⏳", "THESIS": "📉"}
+    icon = icons.get(ev["reason"], "⚠️")
+    contract = (f"{pos['ticker']} {pos['expiry']} "
+                f"${pos['strike']:g} {pos['right'].upper()}")
+    lines = [f"{icon} <b>EXIT {ev['reason']}</b>", "", f"<b>{contract}</b>", ""]
+    lines.append(f"Reason:  {ev['detail']}")
+    if ev.get("mid") is not None:
+        lines.append(f"Premium: {pos['entry_premium']:.2f} → {ev['mid']:.2f} "
+                     f"({ev['pnl_pct']:+.1f}%)")
+        if pos.get("contracts"):
+            n = float(pos["contracts"])
+            pnl_usd = (ev["mid"] - float(pos["entry_premium"])) * 100 * n
+            lines.append(f"P&L:     ${pnl_usd:+,.0f} on {n:g} contract(s)")
+    if ev.get("dte") is not None:
+        lines.append(f"DTE:     {ev['dte']}")
+    if ev.get("reliable") is False and ev.get("mid") is not None:
+        lines += ["", "⚠️ No two-sided market — price is last-traded and may be "
+                      "stale. Verify before acting."]
+    elif ev.get("spread_pct") and ev["spread_pct"] > 15:
+        lines += ["", f"⚠️ Wide spread ({ev['spread_pct']:.0f}% of mid) — the mid "
+                      f"shown is optimistic versus a real fill."]
+    lines += ["", f"Opened {pos.get('opened','')}",
+              "", "Close it in the app to log it to your journal."]
     return "\n".join(lines)
 
 
@@ -250,11 +280,11 @@ def format_alert(pos: dict, ev: dict) -> str:
 # MAIN
 # ══════════════════════════════════════════════════════════════════
 def run(args) -> int:
+    from pathlib import Path
     path = Path(args.positions)
     if not path.exists():
         logger.info("No positions file at %s — nothing to monitor.", path)
         return 0
-
     try:
         positions = json.loads(path.read_text())
     except Exception as e:
@@ -265,71 +295,70 @@ def run(args) -> int:
     if not open_pos:
         logger.info("No OPEN positions — nothing to check.")
         return 0
-
     if not args.force and not is_market_open():
-        logger.info("Market closed — skipping. (Use --force to override.)")
+        logger.info("Market closed — skipping. (--force to override.)")
         return 0
 
     logger.info("Checking %d open position(s)…", len(open_pos))
     now_epoch = time.time()
-    exits = 0
+    sent = 0
 
     for pos in positions:
         if pos.get("status") != "OPEN":
             continue
-        ev = check_position(pos, args.interval)
-        if ev is None:
-            logger.warning("%s — no data this run, leaving untouched.", pos["ticker"])
+        if not pos.get("right"):
+            logger.info("%s — not an option position, skipping.",
+                        pos.get("ticker", "?"))
             continue
 
-        if ev["still_open"]:
-            logger.info("%s open — last %.2f (window %.2f–%.2f), stop %.2f target %.2f",
-                        pos["ticker"], ev["last"], ev["low"], ev["high"],
-                        pos["stop"], pos["target"])
+        try:
+            ev = check_option_position(pos)
+        except Exception as e:
+            logger.exception("Check failed for %s: %s", pos.get("ticker"), e)
+            continue
+
+        tag = f"{pos['ticker']} {pos['expiry']} {pos['strike']:g}{pos['right'][0]}"
+        if not ev["exit"]:
+            prem = f"{ev['mid']:.2f} ({ev['pnl_pct']:+.1f}%)" if ev.get("mid") is not None else "no quote"
+            logger.info("%s open — premium %s, %s DTE", tag, prem, ev.get("dte"))
             if not args.dry_run:
                 pos["last_check_epoch"] = now_epoch
             continue
 
-        # Exit detected
-        logger.info("%s %s HIT at %.2f (%+.2fR)%s", pos["ticker"], ev["reason"],
-                    ev["exit_price"], ev["r_multiple"],
-                    " [GAPPED]" if ev["gapped"] else "")
+        logger.info("%s EXIT %s — %s", tag, ev["reason"], ev["detail"])
         if pos.get("exit_alerted"):
             logger.info("  already alerted — not re-sending.")
             continue
 
         if send_telegram(format_alert(pos, ev), dry_run=args.dry_run):
-            exits += 1
+            sent += 1
             if not args.dry_run:
-                pos["exit_alerted"]   = True
-                pos["status"]         = "EXIT_SIGNALLED"
-                pos["exit_reason"]    = ev["reason"]
-                pos["exit_price"]     = ev["exit_price"]
-                pos["exit_r"]         = ev["r_multiple"]
-                pos["exit_gapped"]    = ev["gapped"]
-                pos["exit_detected"]  = datetime.now(ET).strftime("%Y-%m-%d %H:%M ET")
-                pos["last_check_epoch"] = now_epoch
+                pos.update({
+                    "exit_alerted": True, "status": "EXIT_SIGNALLED",
+                    "exit_reason": ev["reason"], "exit_detail": ev["detail"],
+                    "exit_premium": ev.get("mid"), "exit_pnl_pct": ev.get("pnl_pct"),
+                    "exit_detected": datetime.now(ET).strftime("%Y-%m-%d %H:%M ET"),
+                    "last_check_epoch": now_epoch,
+                })
 
     if not args.dry_run:
         try:
             path.write_text(json.dumps(positions, indent=2, default=str))
         except Exception as e:
-            logger.error("Could not write %s: %s — alerts sent but state not saved, "
-                         "so you may get a duplicate next run.", path, e)
+            logger.error("Could not write %s: %s — alerts sent but state not "
+                         "saved, so expect a duplicate next run.", path, e)
 
-    logger.info("Done. %d exit alert(s) sent.", exits)
+    logger.info("Done. %d exit alert(s) sent.", sent)
     return 0
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Exit monitor for open positions")
+    p = argparse.ArgumentParser(description="Option exit monitor")
     p.add_argument("--positions", default="open_positions.json")
     p.add_argument("--interval", type=int, default=30,
-                   help="Minutes of history to scan (match your cron interval)")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Print alerts instead of sending; do not mutate state")
-    p.add_argument("--force", action="store_true",
-                   help="Run even when the market is closed")
+                   help="Scheduler interval in minutes (informational)")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--force", action="store_true")
     return p.parse_args()
 
 
