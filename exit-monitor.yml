@@ -80,6 +80,11 @@ jobs:
       - name: Persist position state
         # Without this the "already alerted" flag is lost between runs and you
         # get the same exit alert every 30 minutes until you close the trade.
+        #
+        # The Streamlit app ALSO writes this file (via the GitHub Contents API)
+        # whenever you log or close a position. If it committed between our
+        # checkout and our push, a plain push is rejected. --rebase replays our
+        # state change on top of yours instead of discarding either.
         if: ${{ !inputs.dry_run }}
         run: |
           if [[ -n "$(git status --porcelain open_positions.json)" ]]; then
@@ -87,7 +92,17 @@ jobs:
             git config user.email "actions@github.com"
             git add open_positions.json
             git commit -m "chore: update position state [skip ci]"
-            git push
+            for attempt in 1 2 3; do
+              if git pull --rebase --autostash origin "${GITHUB_REF_NAME}" && git push; then
+                echo "State pushed on attempt $attempt."
+                exit 0
+              fi
+              echo "Push attempt $attempt failed (app likely wrote concurrently) — retrying."
+              sleep 5
+            done
+            echo "::warning::Could not push position state after 3 attempts. \
+            Alerts were sent, but the already-alerted flag was not saved, so \
+            you may receive one duplicate on the next run."
           else
             echo "No state change to commit."
           fi
