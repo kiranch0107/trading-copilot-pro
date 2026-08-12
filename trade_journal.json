@@ -1,0 +1,19 @@
+[
+  {
+    "id": "OPT_NVDA_1786513425",
+    "date": "2026-08-12 01:43 ET",
+    "closed": "2026-08-12 10:25 ET",
+    "ticker": "NVDA 2026-08-21 230C",
+    "trend": "Bullish",
+    "entry": 1.36,
+    "stop": 0,
+    "target": 0,
+    "planned_rr": 0,
+    "exit_price": 2.3,
+    "outcome": "WIN",
+    "actual_rr": 0.69,
+    "contracts": 1.0,
+    "pnl_usd": 94.0,
+    "notes": ""
+  }
+]
