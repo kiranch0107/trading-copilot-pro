@@ -205,28 +205,36 @@ def save_positions(d: list) -> None:
     _save(POSITIONS_FILE, d)
 
 
-def open_position(ticker: str, trend: str, entry: float, stop: float,
-                  target: float, qty: float = 0, instrument: str = "shares",
-                  notes: str = "", source_alert_id: str | None = None) -> dict:
-    """Record a trade you actually took so the exit monitor can watch it."""
+def open_option_position(ticker: str, right: str, strike: float, expiry: str,
+                         contracts: float, entry_premium: float,
+                         rules: dict, notes: str = "") -> dict:
+    """
+    Record an OPTION contract you bought so the exit monitor can watch it.
+
+    Options need different exit logic than shares. A price stop on the
+    underlying fits badly: an option can lose 40% of its value while the stock
+    barely moves, purely from theta and IV. So each position carries its own
+    `rules` block, and the monitor checks them in this priority:
+        STOP   — premium fell to −sl_pct% of what you paid   (risk first)
+        TARGET — premium rose to +tp_pct%
+        TIME   — DTE at or below dte_exit (theta cliff)
+        THESIS — underlying closed the wrong side of its EMA20
+    Any rule set to 0 / False is disabled.
+    """
     positions = load_positions()
     now_epoch = time.time()
-    risk = abs(entry - stop)
     pos = {
-        "id":               source_alert_id or f"POS_{ticker}_{int(now_epoch)}",
+        "id":               f"OPT_{ticker}_{int(now_epoch)}",
         "ticker":           ticker,
-        "trend":            trend,
-        "entry":            round(float(entry), 2),
-        "stop":             round(float(stop), 2),
-        "target":           round(float(target), 2),
-        "rr":               round(abs(target - entry) / risk, 2) if risk > 0 else 0,
-        "qty":              qty,
-        "instrument":       instrument,
+        "right":            right.upper(),          # CALL | PUT
+        "strike":           float(strike),
+        "expiry":           expiry,                 # YYYY-MM-DD
+        "contracts":        float(contracts),
+        "entry_premium":    round(float(entry_premium), 2),
+        "rules":            rules,
         "notes":            notes,
         "opened":           datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d %H:%M ET"),
         "opened_epoch":     now_epoch,
-        # The monitor scans intraday bars from this timestamp forward, so a stop
-        # touched-and-recovered between checks is still caught.
         "last_check_epoch": now_epoch,
         "status":           "OPEN",
         "exit_alerted":     False,
@@ -236,19 +244,53 @@ def open_position(ticker: str, trend: str, entry: float, stop: float,
     return pos
 
 
-def close_position(position_id: str, exit_price: float, outcome: str,
+def close_position(position_id: str, exit_premium: float, outcome: str,
                    notes: str = "") -> None:
-    """Move a position out of the open store and into the journal."""
+    """
+    Move a position out of the open store and into the journal.
+
+    For options the R multiple is measured in PREMIUM terms — (exit − entry) /
+    entry — because that is what was actually at risk. On a long option your
+    maximum loss is the premium paid, so a total loss is exactly −1.0R.
+    """
     positions = load_positions()
     pos = next((p for p in positions if p["id"] == position_id), None)
     if pos is None:
         return
-    add_journal_trade(
-        alert_id=pos["id"], ticker=pos["ticker"], trend=pos["trend"],
-        entry=pos["entry"], stop=pos["stop"], target=pos["target"],
-        rr=pos["rr"], exit_price=exit_price, outcome=outcome,
-        notes=notes or pos.get("notes", ""), setup_date=pos["opened"],
-    )
+
+    if pos.get("right"):     # option position
+        entry_prem = float(pos["entry_premium"])
+        pnl_r = round((float(exit_premium) - entry_prem) / entry_prem, 2) \
+            if entry_prem > 0 else 0
+        journal = load_journal()
+        journal = [j for j in journal if j["id"] != position_id]
+        journal.append({
+            "id":         position_id,
+            "date":       pos["opened"],
+            "closed":     datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d %H:%M ET"),
+            "ticker":     f"{pos['ticker']} {pos['expiry']} {pos['strike']:g}{pos['right'][0]}",
+            "trend":      "Bullish" if pos["right"] == "CALL" else "Bearish",
+            "entry":      entry_prem,
+            "stop":       0,
+            "target":     0,
+            "planned_rr": 0,
+            "exit_price": round(float(exit_premium), 2),
+            "outcome":    outcome,
+            "actual_rr":  pnl_r,
+            "contracts":  pos.get("contracts"),
+            "pnl_usd":    round((float(exit_premium) - entry_prem) * 100
+                                * float(pos.get("contracts") or 0), 2),
+            "notes":      notes or pos.get("notes", ""),
+        })
+        save_journal(journal)
+    else:                     # legacy share position
+        add_journal_trade(
+            alert_id=pos["id"], ticker=pos["ticker"], trend=pos["trend"],
+            entry=pos["entry"], stop=pos["stop"], target=pos["target"],
+            rr=pos.get("rr", 0), exit_price=exit_premium, outcome=outcome,
+            notes=notes or pos.get("notes", ""), setup_date=pos["opened"],
+        )
+
     save_positions([p for p in positions if p["id"] != position_id])
 
 
@@ -2116,61 +2158,75 @@ with TAB_STOCK:
 # TAB — OPEN POSITIONS  (feeds the exit monitor)
 # ═══════════════════════════════════════════════
 with TAB_POSITIONS:
-    st.subheader("📍 Open Positions")
-    st.caption("Record trades you actually took. `exit_monitor.py` watches these "
-               "on a schedule and Telegrams you when a stop or target is hit.")
+    st.subheader("📍 Open Option Positions")
+    st.caption("Log the contracts you bought. `exit_monitor.py` watches them on "
+               "a schedule and Telegrams you when an exit rule fires.")
 
     positions = load_positions()
 
-    # ── How the monitoring actually works (be honest about the constraint) ──
     with st.expander("⚙️ How exit alerts work — read once", expanded=not positions):
         st.markdown(
             "**A Streamlit app only runs while a browser tab is open**, and "
-            "Streamlit Cloud sleeps idle apps. So this app *cannot* reliably "
-            "check your exits in the background — if your phone locks, checks "
-            "stop. An exit alert you might not receive is worse than none, "
+            "Streamlit Cloud sleeps idle apps. This app therefore *cannot* "
+            "reliably check exits in the background — if your phone locks, "
+            "checks stop. An alert you might not receive is worse than none, "
             "because you'd stop watching manually."
         )
         st.markdown(
-            f"`exit_monitor.py` solves this. It runs standalone on a scheduler "
-            f"(GitHub Actions cron is free), reads `open_positions.json`, and "
-            f"alerts you independently of this app. Current interval setting: "
-            f"**every {EXIT_CHECK_MINUTES} min** during market hours."
+            f"`exit_monitor.py` runs standalone on a scheduler (GitHub Actions "
+            f"cron is free), reads `open_positions.json`, and alerts you "
+            f"independently of this app. Interval: **{EXIT_CHECK_MINUTES} min** "
+            f"during market hours."
         )
-        st.code(
-            f"# one-off test (won't send or change anything)\n"
-            f"python exit_monitor.py --dry-run --force\n\n"
-            f"# real run\n"
-            f"export TELEGRAM_BOT_TOKEN=...\n"
-            f"export TELEGRAM_CHAT_ID=...\n"
-            f"python exit_monitor.py --interval {EXIT_CHECK_MINUTES}",
-            language="bash")
-        st.caption("It checks the intraday high/low across the whole interval, "
-                   "so a stop that was touched and recovered between checks is "
-                   "still caught — polling the last price would miss it.")
+        st.markdown("**The four exit triggers, checked in this order:**")
+        st.markdown(
+            "1. **STOP** — premium fell to −X% of what you paid *(risk first)*\n"
+            "2. **TARGET** — premium rose to +Y%\n"
+            "3. **TIME** — DTE hit your floor; theta decay accelerates sharply "
+            "in the final weeks and this is the rule most often skipped\n"
+            "4. **THESIS** — the underlying closed the wrong side of its EMA20, "
+            "so the reason you bought the contract is gone"
+        )
+        st.info(
+            "**Limitation, stated plainly:** premium checks use the current "
+            "quoted mid, not intraday bars — reliable per-contract intraday "
+            "history isn't available from this data source. A spike that hit "
+            "your target and reverted *between* two checks can be missed. "
+            "Shorter intervals reduce but never eliminate this. Option quotes "
+            "are also delayed and can be wide or stale."
+        )
+        st.code(f"python exit_monitor.py --dry-run --force   # safe test\n"
+                f"python exit_monitor.py --interval {EXIT_CHECK_MINUTES}",
+                language="bash")
 
-    # ── Positions the monitor has already flagged ──
+    # ── Exits the monitor has flagged ──
     signalled = [p for p in positions if p.get("status") == "EXIT_SIGNALLED"]
     if signalled:
         st.markdown("### 🔔 Exit signalled — close these")
         for p in signalled:
-            icon = "🎯" if p.get("exit_reason") == "TARGET" else "🛑"
+            icon = {"TARGET":"🎯","STOP":"🛑","TIME":"⏳","THESIS":"📉"}.get(
+                p.get("exit_reason"), "⚠️")
             with st.container(border=True):
                 st.markdown(
-                    f"{icon} **{p['ticker']}** {p['trend']} — **{p.get('exit_reason')}** hit "
-                    f"at \\${p.get('exit_price')} ({p.get('exit_r', 0):+.2f}R) "
-                    f"· detected {p.get('exit_detected','')}"
+                    f"{icon} **{p['ticker']} {p['expiry']} "
+                    f"\\${p['strike']:g} {p['right']}** — **{p.get('exit_reason')}**"
                 )
-                if p.get("exit_gapped"):
-                    st.warning("⚠️ Price **gapped through** the level — the fill shown is "
-                               "the bar open, worse than your stop. Your real fill may "
-                               "differ again.")
-                fill = st.number_input("Your actual fill price", min_value=0.01,
-                                       value=float(p.get("exit_price") or p["entry"]),
-                                       step=0.01, key=f"fill_{p['id']}")
-                oc = st.radio("Outcome", ["WIN", "LOSS", "BREAKEVEN"], horizontal=True,
-                              index=0 if p.get("exit_reason") == "TARGET" else 1,
-                              key=f"oc_{p['id']}")
+                st.caption(p.get("exit_detail", ""))
+                if p.get("exit_premium") is not None:
+                    st.caption(f"Premium \\${p['entry_premium']:.2f} → "
+                               f"\\${p['exit_premium']:.2f} "
+                               f"({p.get('exit_pnl_pct', 0):+.1f}%) · "
+                               f"detected {p.get('exit_detected','')}")
+                fill = st.number_input(
+                    "Your actual fill premium (per share)", min_value=0.0, step=0.01,
+                    value=float(p.get("exit_premium") or p["entry_premium"]),
+                    key=f"fill_{p['id']}")
+                pnl = (fill - p["entry_premium"]) * 100 * float(p.get("contracts") or 0)
+                st.caption(f"P&L at that fill: **\\${pnl:+,.0f}** "
+                           f"on {p.get('contracts')} contract(s)")
+                default_oc = 0 if p.get("exit_reason") == "TARGET" else 1
+                oc = st.radio("Outcome", ["WIN","LOSS","BREAKEVEN"], horizontal=True,
+                              index=default_oc, key=f"oc_{p['id']}")
                 nt = st.text_input("Notes", key=f"nt_{p['id']}")
                 if st.button("📓 Close & log to journal", type="primary",
                              key=f"close_{p['id']}"):
@@ -2183,28 +2239,45 @@ with TAB_POSITIONS:
     live = [p for p in positions if p.get("status") == "OPEN"]
     st.markdown(f"### Currently open ({len(live)})")
     if not live:
-        st.info("No open positions. Log one below so the monitor can watch it.")
+        st.info("No open positions. Log a contract below so the monitor can watch it.")
     else:
+        today = datetime.now(pytz.timezone("America/New_York")).date()
         for p in live:
             with st.container(border=True):
-                c1, c2, c3, c4, c5 = st.columns(5)
-                c1.metric("Ticker", p["ticker"])
-                c2.metric("Side", "Long" if p["trend"] == "Bullish" else "Short")
-                c3.metric("Entry", f"${p['entry']}")
-                c4.metric("Stop", f"${p['stop']}")
-                c5.metric("Target", f"${p['target']}")
-                st.caption(f"R:R {p['rr']} · opened {p['opened']}"
-                           + (f" · {p['qty']} {p.get('instrument','shares')}" if p.get("qty") else "")
-                           + (f" · {p['notes']}" if p.get("notes") else ""))
-                cc1, cc2 = st.columns([1, 3])
-                with cc1:
-                    if st.button("Close manually", key=f"man_{p['id']}"):
-                        st.session_state[f"closing_{p['id']}"] = True
+                try:
+                    dte = (datetime.strptime(p["expiry"], "%Y-%m-%d").date() - today).days
+                except Exception:
+                    dte = None
+                c1,c2,c3,c4,c5 = st.columns(5)
+                c1.metric("Contract", f"{p['ticker']} {p['right']}")
+                c2.metric("Strike",   f"${p['strike']:g}")
+                c3.metric("Expiry",   p["expiry"])
+                c4.metric("DTE",      dte if dte is not None else "—")
+                c5.metric("Paid",     f"${p['entry_premium']:.2f}")
+                r = p.get("rules", {})
+                bits = []
+                if r.get("tp_pct"):        bits.append(f"TP +{r['tp_pct']:g}%")
+                if r.get("sl_pct"):        bits.append(f"SL −{r['sl_pct']:g}%")
+                if r.get("dte_exit"):      bits.append(f"TIME ≤{r['dte_exit']:g} DTE")
+                if r.get("invalidate_ema"):bits.append("THESIS EMA20")
+                st.caption(f"{p.get('contracts')} contract(s) · cost "
+                           f"\\${p['entry_premium']*100*float(p.get('contracts') or 0):,.0f} · "
+                           f"opened {p['opened']}")
+                st.caption("Exit rules: " + (" · ".join(bits) if bits else
+                           "⚠️ none set — the monitor will never alert on this position"))
+                if p.get("notes"):
+                    st.caption(f"📝 {p['notes']}")
+                if dte is not None and r.get("dte_exit") and dte <= r["dte_exit"] + 3:
+                    st.warning(f"⏳ {dte} DTE — approaching your time-exit floor "
+                               f"of {r['dte_exit']:g}.")
+                if st.button("Close manually", key=f"man_{p['id']}"):
+                    st.session_state[f"closing_{p['id']}"] = True
                 if st.session_state.get(f"closing_{p['id']}"):
-                    mf = st.number_input("Exit fill price", min_value=0.01,
-                                         value=float(p["entry"]), step=0.01,
+                    mf = st.number_input("Exit fill premium (per share)",
+                                         min_value=0.0, step=0.01,
+                                         value=float(p["entry_premium"]),
                                          key=f"mf_{p['id']}")
-                    mo = st.radio("Outcome", ["WIN", "LOSS", "BREAKEVEN"],
+                    mo = st.radio("Outcome", ["WIN","LOSS","BREAKEVEN"],
                                   horizontal=True, key=f"mo_{p['id']}")
                     mn = st.text_input("Notes", key=f"mn_{p['id']}")
                     if st.button("Confirm close", type="primary", key=f"cf_{p['id']}"):
@@ -2215,65 +2288,87 @@ with TAB_POSITIONS:
 
     st.divider()
 
-    # ── Log a new position ──
-    st.markdown("### ➕ Log a position you took")
-    _setups = st.session_state.get("all_setups", [])
-    _labels = ["— enter manually —"] + [
-        f"{s['ticker']} · {s['trend']} · {s['entry']}/{s['stop']}/{s['target']}"
-        for s in _setups if isinstance(s, dict) and "ticker" in s
-    ]
-    pick = st.selectbox("Prefill from last scan", _labels, key="pos_prefill")
-    pre = None
-    if pick != "— enter manually —":
-        pre = _setups[_labels.index(pick) - 1]
+    # ── Log a new option position ──
+    st.markdown("### ➕ Log an option contract you bought")
+    o1, o2, o3 = st.columns(3)
+    with o1:
+        o_tkr = st.text_input("Underlying", placeholder="AAPL",
+                              key="op_tkr").strip().upper()
+        o_right = st.radio("Type", ["CALL","PUT"], horizontal=True, key="op_right")
+    with o2:
+        o_strike = st.number_input("Strike", min_value=0.0, step=0.5, key="op_strike")
+        o_expiry = st.date_input("Expiry", key="op_expiry")
+    with o3:
+        o_qty = st.number_input("Contracts", min_value=1, value=1, step=1, key="op_qty")
+        o_prem = st.number_input("Premium paid (per share)", min_value=0.0,
+                                 step=0.01, key="op_prem",
+                                 help="The quoted per-share price. One contract "
+                                      "costs this × 100.")
+    o_notes = st.text_input("Notes / thesis", key="op_notes")
 
-    p1, p2 = st.columns(2)
-    with p1:
-        n_tkr = st.text_input("Ticker", value=(pre["ticker"] if pre else ""),
-                              key="np_tkr").strip().upper()
-        n_dir = st.radio("Direction", ["Long", "Short"], horizontal=True,
-                         index=0 if (not pre or pre["trend"] == "Bullish") else 1,
-                         key="np_dir")
-        n_inst = st.selectbox("Instrument", ["shares", "option contracts"], key="np_inst")
-        n_qty = st.number_input("Quantity", min_value=0.0, value=0.0, step=1.0,
-                                key="np_qty",
-                                help="Optional — shown in the alert so you know what to close.")
-    with p2:
-        n_entry = st.number_input("Entry fill", min_value=0.0, step=0.01,
-                                  value=float(pre["entry"]) if pre else 0.0, key="np_entry")
-        n_stop  = st.number_input("Stop", min_value=0.0, step=0.01,
-                                  value=float(pre["stop"]) if pre else 0.0, key="np_stop")
-        n_tgt   = st.number_input("Target", min_value=0.0, step=0.01,
-                                  value=float(pre["target"]) if pre else 0.0, key="np_tgt")
-    n_notes = st.text_input("Notes / thesis", key="np_notes")
-
-    if n_tkr and n_entry > 0 and n_stop > 0 and n_tgt > 0:
-        trend = "Bullish" if n_dir == "Long" else "Bearish"
-        coherent = (n_stop < n_entry < n_tgt) if trend == "Bullish" \
-            else (n_tgt < n_entry < n_stop)
-        if not coherent:
-            st.error(
-                f"Levels don't form a valid **{n_dir.lower()}** — need "
-                + ("stop < entry < target." if trend == "Bullish"
-                   else "target < entry < stop.")
-                + " The monitor would never trigger correctly with these."
-            )
+    if o_prem > 0 and o_qty:
+        cost = o_prem * 100 * o_qty
+        pct_acct = cost / ACCOUNT_SIZE * 100
+        msg = (f"Total cost **\\${cost:,.0f}** — that is your **maximum loss** "
+               f"on a long option, and **{pct_acct:.1f}%** of your "
+               f"\\${ACCOUNT_SIZE:,} account.")
+        if pct_acct > RISK_PCT:
+            st.warning(f"⚠️ {msg} Your risk setting is {RISK_PCT}% "
+                       f"(\\${ACCOUNT_SIZE*RISK_PCT/100:,.0f}). Logging is still "
+                       f"allowed — this is a warning, not a block.")
         else:
-            rr_prev = round(abs(n_tgt - n_entry) / abs(n_entry - n_stop), 2)
-            st.caption(f"R:R {rr_prev} · risk \\${abs(n_entry-n_stop):,.2f}/share")
-            if st.button("📍 Start monitoring this position", type="primary",
-                         key="np_save"):
-                open_position(n_tkr, trend, n_entry, n_stop, n_tgt,
-                              qty=n_qty, instrument=n_inst, notes=n_notes)
-                st.success(f"Now monitoring {n_tkr}. The scheduled run of "
-                           f"`exit_monitor.py` will alert you on stop/target.")
-                st.rerun()
-    else:
-        st.caption("Fill in ticker, entry, stop and target to begin monitoring.")
+            st.success(f"✅ {msg}")
 
-    st.caption("⚠️ The monitor reports when a level was *touched*. It is not a "
-               "broker and does not place or confirm orders — your real fill "
-               "will differ, especially on gaps.")
+    st.markdown("**Exit rules** — the monitor needs at least one of these to alert you.")
+    r1, r2, r3, r4 = st.columns(4)
+    with r1:
+        rule_tp = st.number_input("Take profit +%", min_value=0, value=50, step=10,
+                                  key="op_tp",
+                                  help="Exit when the premium gains this %. 0 disables. "
+                                       "50-100% is a common convention.")
+    with r2:
+        rule_sl = st.number_input("Stop loss −%", min_value=0, max_value=100, value=50,
+                                  step=10, key="op_sl",
+                                  help="Exit when the premium loses this %. 0 disables. "
+                                       "Max loss on a long option is 100% regardless.")
+    with r3:
+        rule_dte = st.number_input("Time exit at DTE", min_value=0, value=7, step=1,
+                                   key="op_dte",
+                                   help="Exit when days-to-expiry falls to this. 0 "
+                                        "disables. Theta decay accelerates sharply "
+                                        "in the final weeks.")
+    with r4:
+        rule_thesis = st.checkbox("Thesis invalidation", value=True, key="op_thesis",
+                                  help="Exit if the underlying closes below EMA20 "
+                                       "(CALL) or above it (PUT) — the setup that "
+                                       "justified the trade is gone.")
+
+    if not (rule_tp or rule_sl or rule_dte or rule_thesis):
+        st.error("All exit rules are off — the monitor would never alert on this "
+                 "position. Enable at least one.")
+    elif o_tkr and o_strike > 0 and o_prem > 0:
+        st.caption(f"Will alert on: "
+                   + " · ".join(filter(None, [
+                       f"premium +{rule_tp}%" if rule_tp else "",
+                       f"premium −{rule_sl}%" if rule_sl else "",
+                       f"{rule_dte} DTE" if rule_dte else "",
+                       "EMA20 invalidation" if rule_thesis else ""])))
+        if st.button("📍 Start monitoring this contract", type="primary", key="op_save"):
+            open_option_position(
+                ticker=o_tkr, right=o_right, strike=o_strike,
+                expiry=o_expiry.strftime("%Y-%m-%d"), contracts=o_qty,
+                entry_premium=o_prem,
+                rules={"tp_pct": rule_tp, "sl_pct": rule_sl,
+                       "dte_exit": rule_dte, "invalidate_ema": rule_thesis},
+                notes=o_notes)
+            st.success(f"Now monitoring {o_tkr} {o_expiry} ${o_strike:g} {o_right}.")
+            st.rerun()
+    else:
+        st.caption("Fill in underlying, strike and premium to begin monitoring.")
+
+    st.caption("⚠️ The monitor reports when a rule was met on delayed quotes. It is "
+               "not a broker, places no orders, and your real fill will differ — "
+               "especially on wide spreads.")
 
 
 # ═══════════════════════════════════════════════
