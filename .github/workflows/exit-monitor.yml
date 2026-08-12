@@ -11,10 +11,9 @@
 # 1. Repo → Settings → Secrets and variables → Actions → New repository secret
 #       TELEGRAM_BOT_TOKEN   (same bot the app uses)
 #       TELEGRAM_CHAT_ID
-# 2. Repo → Settings → Actions → General → Workflow permissions
-#       select "Read and write permissions"   ← needed so the monitor can
-#       commit updated position state back (otherwise you get a duplicate
-#       alert every run, because it can't remember it already alerted).
+# 2. Write access is now declared in the `permissions:` block below, so no
+#    repo-level setting change is required. (If your org enforces read-only
+#    tokens, that policy overrides the block and you must relax it there.)
 # 3. Commit open_positions.json to the repo (the app writes it; even `[]` is fine).
 #
 # ── TESTING ─────────────────────────────────────────────────────────────
@@ -53,11 +52,24 @@ concurrency:
   group: exit-monitor
   cancel-in-progress: false
 
+permissions:
+  # Declared explicitly so the push works regardless of the repo-level
+  # "Workflow permissions" setting. Relying on that setting was the likely
+  # cause of "Could not push position state after 3 attempts": the default
+  # GITHUB_TOKEN is read-only, and a read-only token fails the push silently
+  # at the end, after alerts have already gone out.
+  contents: write
+
 jobs:
   monitor:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A shallow clone (the default, depth 1) has no history to rebase
+          # onto, so `git pull --rebase` fails outright. Full history is a
+          # couple of seconds for a repo this size.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -92,17 +104,25 @@ jobs:
             git config user.email "actions@github.com"
             git add open_positions.json
             git commit -m "chore: update position state [skip ci]"
+            BRANCH="${GITHUB_REF_NAME:-main}"
             for attempt in 1 2 3; do
-              if git pull --rebase --autostash origin "${GITHUB_REF_NAME}" && git push; then
+              # Explicit refspec: actions/checkout can leave HEAD detached, in
+              # which case a bare `git push` has no upstream and aborts.
+              if git pull --rebase --autostash origin "$BRANCH" \
+                 && git push origin "HEAD:$BRANCH"; then
                 echo "State pushed on attempt $attempt."
                 exit 0
               fi
-              echo "Push attempt $attempt failed (app likely wrote concurrently) — retrying."
+              echo "Push attempt $attempt failed — retrying in 5s."
+              git status --short || true
               sleep 5
             done
             echo "::warning::Could not push position state after 3 attempts. \
-            Alerts were sent, but the already-alerted flag was not saved, so \
-            you may receive one duplicate on the next run."
+            Any alerts that fired were still delivered, but last_check_epoch and \
+            the already-alerted flag were NOT saved — so that timestamp will look \
+            frozen and you may get one duplicate alert next run. Check that the \
+            job has contents:write permission."
+            exit 1
           else
             echo "No state change to commit."
           fi
