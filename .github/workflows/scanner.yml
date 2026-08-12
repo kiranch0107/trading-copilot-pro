@@ -55,6 +55,12 @@ concurrency:
   group: trading-scanner
   cancel-in-progress: false
 
+permissions:
+  # Needed so the alert-cooldown state can be committed back. Without it the
+  # dedup file is lost between runs and every qualifying setup re-alerts on
+  # each scan — the "13 identical messages a day" problem.
+  contents: write
+
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
@@ -110,6 +116,8 @@ jobs:
       - name: Checkout code
         if: steps.market.outputs.open == 'true' || inputs.force == true
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # full history so `git pull --rebase` works
 
       - name: Setup Python
         if: steps.market.outputs.open == 'true' || inputs.force == true
@@ -128,3 +136,29 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scanner.py
+
+      - name: Persist alert cooldown state
+        # scanner_state.json records when each ticker/direction last alerted.
+        # It must survive between runs or dedup does nothing.
+        if: steps.market.outputs.open == 'true' || inputs.force == true
+        run: |
+          if [[ -n "$(git status --porcelain scanner_state.json)" ]]; then
+            git config user.name  "trading-scanner"
+            git config user.email "actions@github.com"
+            git add scanner_state.json
+            git commit -m "chore: update scanner alert state [skip ci]"
+            BRANCH="${GITHUB_REF_NAME:-main}"
+            for attempt in 1 2 3; do
+              if git pull --rebase --autostash origin "$BRANCH" \
+                 && git push origin "HEAD:$BRANCH"; then
+                echo "State pushed on attempt $attempt."
+                exit 0
+              fi
+              echo "Push attempt $attempt failed — retrying in 5s."
+              sleep 5
+            done
+            echo "::warning::Could not push scanner state. Dedup will not carry \
+            over, so expect repeat alerts on the next run."
+          else
+            echo "No state change to commit."
+          fi
