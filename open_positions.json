@@ -19,26 +19,5 @@
     "last_check_epoch": 1786513354.0759523,
     "status": "OPEN",
     "exit_alerted": false
-  },
-  {
-    "id": "OPT_NVDA_1786513425",
-    "ticker": "NVDA",
-    "right": "CALL",
-    "strike": 230.0,
-    "expiry": "2026-08-21",
-    "contracts": 1.0,
-    "entry_premium": 1.36,
-    "rules": {
-      "tp_pct": 50,
-      "sl_pct": 50,
-      "dte_exit": 7,
-      "invalidate_ema": true
-    },
-    "notes": "",
-    "opened": "2026-08-12 01:43 ET",
-    "opened_epoch": 1786513425.9221613,
-    "last_check_epoch": 1786513425.9221613,
-    "status": "OPEN",
-    "exit_alerted": false
   }
 ]
