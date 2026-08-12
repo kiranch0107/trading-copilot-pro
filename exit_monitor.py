@@ -277,6 +277,138 @@ def format_alert(pos: dict, ev: dict) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════
+# DIAGNOSTICS
+#
+# Silent failure has been the recurring problem with this system, so this mode
+# reports exactly what the monitor can and cannot see, rather than leaving you
+# to infer it from a missing notification.
+# ══════════════════════════════════════════════════════════════════
+def diagnose(positions: list) -> None:
+    print("=" * 72)
+    print("EXIT MONITOR DIAGNOSTIC")
+    print("=" * 72)
+
+    # 1. Credentials
+    tok = os.environ.get("TELEGRAM_BOT_TOKEN")
+    cid = os.environ.get("TELEGRAM_CHAT_ID")
+    print("\n[1] TELEGRAM CREDENTIALS")
+    print(f"    TELEGRAM_BOT_TOKEN : {'set (' + tok[:8] + '…)' if tok else '*** MISSING ***'}")
+    print(f"    TELEGRAM_CHAT_ID   : {cid if cid else '*** MISSING ***'}")
+    if not tok or not cid:
+        print("    -> No alert can EVER be sent without both.")
+        print("       In GitHub Actions these are repo secrets and are SEPARATE")
+        print("       from your Streamlit secrets — setting one does not set the other.")
+
+    # 2. Market status
+    now = datetime.now(ET)
+    print("\n[2] MARKET STATUS")
+    print(f"    Now (ET)     : {now.strftime('%Y-%m-%d %H:%M')} ({now.strftime('%A')})")
+    print(f"    Market open  : {is_market_open()}")
+    if not is_market_open():
+        print("    -> A normal scheduled run would SKIP here. Option bid/ask are")
+        print("       also frequently 0 outside market hours, which makes premium")
+        print("       checks impossible. Use --force to test anyway.")
+
+    # 3. Positions
+    print(f"\n[3] POSITIONS FILE — {len(positions)} record(s)")
+    open_pos = [p for p in positions if p.get("status") == "OPEN"]
+    print(f"    OPEN            : {len(open_pos)}")
+    print(f"    EXIT_SIGNALLED  : {sum(1 for p in positions if p.get('status')=='EXIT_SIGNALLED')}")
+    if not open_pos:
+        print("    -> Nothing to check. If you logged a position in the app but it")
+        print("       is not here, the app is not syncing to this repo file.")
+        return
+
+    # 4. Per-position deep check
+    for p in open_pos:
+        print("\n" + "-" * 72)
+        print(f"[4] {p['ticker']} {p['expiry']} ${p['strike']:g} {p['right']}")
+        print(f"    Paid           : ${p['entry_premium']:.2f} x {p.get('contracts')} contract(s)")
+        rules = p.get("rules", {}) or {}
+        print(f"    Rules          : TP +{rules.get('tp_pct')}%  SL -{rules.get('sl_pct')}%  "
+              f"DTE<={rules.get('dte_exit')}  thesis={rules.get('invalidate_ema')}")
+        if not any([rules.get("tp_pct"), rules.get("sl_pct"),
+                    rules.get("dte_exit"), rules.get("invalidate_ema")]):
+            print("    -> ALL RULES DISABLED. This position can never alert.")
+            continue
+
+        dte = days_to_expiry(p["expiry"])
+        print(f"    DTE            : {dte}")
+
+        # Does the expiry exist in the chain at all?
+        try:
+            avail = list(yf.Ticker(p["ticker"]).options or [])
+        except Exception as e:
+            avail = []
+            print(f"    !! Could not list expiries: {e}")
+        if avail:
+            match = p["expiry"] in avail
+            print(f"    Expiry in chain: {match}")
+            if not match:
+                print(f"    -> '{p['expiry']}' is NOT a listed expiry. Nearest are:")
+                for a in avail[:6]:
+                    print(f"         {a}")
+                print("       The strike lookup cannot run, so premium rules are")
+                print("       skipped entirely and you get no alert.")
+                continue
+
+        # Strike present?
+        try:
+            chain = yf.Ticker(p["ticker"]).option_chain(p["expiry"])
+            df = chain.calls if p["right"].upper() == "CALL" else chain.puts
+            row = df[(df["strike"] - float(p["strike"])).abs() < 0.01]
+            if row.empty:
+                near = df.iloc[(df["strike"] - float(p["strike"])).abs().argsort()[:5]]
+                print(f"    Strike found   : NO")
+                print(f"    -> ${p['strike']:g} not in the {p['right']} chain. Nearest strikes:")
+                print(f"       {', '.join(str(s) for s in near['strike'].tolist())}")
+                print("       Premium rules are skipped. Check the strike you entered.")
+                continue
+            r0 = row.iloc[0]
+            bid, ask, last = (float(r0.get("bid") or 0), float(r0.get("ask") or 0),
+                              float(r0.get("lastPrice") or 0))
+            print(f"    Strike found   : YES")
+            print(f"    bid/ask/last   : {bid:.2f} / {ask:.2f} / {last:.2f}")
+            if bid > 0 and ask > 0:
+                mid = (bid + ask) / 2
+                src_ = "bid/ask mid (reliable)"
+            elif last > 0:
+                mid = last
+                src_ = "lastPrice (NO two-sided market — may be stale)"
+            else:
+                print("    -> No usable price at all (bid, ask and last are 0).")
+                print("       This is common when the market is closed or the")
+                print("       contract is illiquid. PREMIUM RULES ARE SKIPPED —")
+                print("       this is the most likely reason you got no alert.")
+                continue
+            pnl = (mid - float(p["entry_premium"])) / float(p["entry_premium"]) * 100
+            print(f"    Price used     : {mid:.2f}  [{src_}]")
+            print(f"    P&L            : {pnl:+.1f}%")
+
+            fired = []
+            if rules.get("sl_pct") and pnl <= -abs(rules["sl_pct"]): fired.append("STOP")
+            if rules.get("tp_pct") and pnl >= abs(rules["tp_pct"]):  fired.append("TARGET")
+            if rules.get("dte_exit") and dte is not None and dte <= rules["dte_exit"]:
+                fired.append("TIME")
+            print(f"    Would fire     : {', '.join(fired) if fired else 'nothing — all rules within limits'}")
+            if fired and p.get("exit_alerted"):
+                print("    -> Rule met BUT exit_alerted is already True, so no repeat")
+                print("       alert is sent. Close the position in the app.")
+        except Exception as e:
+            print(f"    !! Chain fetch failed: {e}")
+
+    print("\n" + "=" * 72)
+
+
+def test_telegram() -> int:
+    print("Sending a test message…")
+    ok = send_telegram("✅ <b>Exit monitor test</b>\n\nIf you can read this, "
+                       "credentials and delivery are working.")
+    print("Sent." if ok else "FAILED — see the error above.")
+    return 0 if ok else 1
+
+
+# ══════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════
 def run(args) -> int:
@@ -291,6 +423,10 @@ def run(args) -> int:
         logger.error("Could not read %s: %s", path, e)
         return 1
 
+    if args.diagnose:
+        diagnose(positions)
+        return 0
+
     open_pos = [p for p in positions if p.get("status") == "OPEN"]
     if not open_pos:
         logger.info("No OPEN positions — nothing to check.")
@@ -302,6 +438,7 @@ def run(args) -> int:
     logger.info("Checking %d open position(s)…", len(open_pos))
     now_epoch = time.time()
     sent = 0
+    unpriced: list[str] = []
 
     for pos in positions:
         if pos.get("status") != "OPEN":
@@ -319,8 +456,17 @@ def run(args) -> int:
 
         tag = f"{pos['ticker']} {pos['expiry']} {pos['strike']:g}{pos['right'][0]}"
         if not ev["exit"]:
-            prem = f"{ev['mid']:.2f} ({ev['pnl_pct']:+.1f}%)" if ev.get("mid") is not None else "no quote"
-            logger.info("%s open — premium %s, %s DTE", tag, prem, ev.get("dte"))
+            if ev.get("mid") is None:
+                # NOT harmless: with no price, the TP and SL rules are skipped
+                # entirely this run. Say so plainly rather than reporting the
+                # position as quietly fine.
+                logger.warning("%s — NO QUOTE available. Premium rules (TP/SL) "
+                               "were SKIPPED this run; only TIME/THESIS could "
+                               "have fired. Run --diagnose to see why.", tag)
+                unpriced.append(tag)
+            else:
+                logger.info("%s open — premium %.2f (%+.1f%%), %s DTE",
+                            tag, ev["mid"], ev["pnl_pct"], ev.get("dte"))
             if not args.dry_run:
                 pos["last_check_epoch"] = now_epoch
             continue
@@ -348,6 +494,9 @@ def run(args) -> int:
             logger.error("Could not write %s: %s — alerts sent but state not "
                          "saved, so expect a duplicate next run.", path, e)
 
+    if unpriced:
+        logger.warning("%d position(s) had NO PRICE this run: %s — their TP/SL "
+                       "rules did not run.", len(unpriced), ", ".join(unpriced))
     logger.info("Done. %d exit alert(s) sent.", sent)
     return 0
 
@@ -359,8 +508,16 @@ def parse_args():
                    help="Scheduler interval in minutes (informational)")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--force", action="store_true")
+    p.add_argument("--diagnose", action="store_true",
+                   help="Report exactly what the monitor can see and why an "
+                        "alert did or did not fire. Sends nothing.")
+    p.add_argument("--test-telegram", action="store_true",
+                   help="Send one test message to verify credentials.")
     return p.parse_args()
 
 
 if __name__ == "__main__":
-    sys.exit(run(parse_args()))
+    _args = parse_args()
+    if _args.test_telegram:
+        sys.exit(test_telegram())
+    sys.exit(run(_args))
