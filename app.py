@@ -252,7 +252,7 @@ def _save(path: Path, data: list) -> None:
 # ─────────────────────────────────────────────
 st.sidebar.header("⚙️ Scan Settings")
 
-WATCHLIST = ["TSLA","NVDA","AAPL","MSFT","AMZN","META","SPY","ROKU"]
+WATCHLIST = ["TSLA","NVDA","AAPL","MSFT","AMZN","META","ROKU"]
 
 # FIX #11: FAST_MODE exposed as sidebar toggle
 FAST_MODE  = st.sidebar.checkbox("Fast Mode (top 5 only)", value=True)
@@ -2516,15 +2516,26 @@ with TAB_POSITIONS:
     st.markdown("**Exit rules** — the monitor needs at least one of these to alert you.")
     r1, r2, r3, r4 = st.columns(4)
     with r1:
-        rule_tp = st.number_input("Take profit +%", min_value=0, value=50, step=10,
+        rule_tp = st.number_input("Take profit +%", min_value=0, value=100, step=25,
                                   key="op_tp",
-                                  help="Exit when the premium gains this %. 0 disables. "
-                                       "50-100% is a common convention.")
+                                  help="Exit when the premium gains this %. 0 disables.\n\n"
+                                       "DEFAULT RAISED FROM 50 TO 100. At TP+50/SL-50 the "
+                                       "payoff is 1:1, which needs a 50% win rate just to "
+                                       "break even — but this entry signal wins ~40% of the "
+                                       "time, giving -0.10 expected value per unit risked "
+                                       "BEFORE costs. TP+100/SL-50 is 2:1, breakeven at "
+                                       "33%, so the same signal turns positive. A "
+                                       "trend-following entry needs asymmetric exits; "
+                                       "capping winners at +50% throws away the property "
+                                       "that makes it work.")
     with r2:
         rule_sl = st.number_input("Stop loss −%", min_value=0, max_value=100, value=50,
                                   step=10, key="op_sl",
                                   help="Exit when the premium loses this %. 0 disables. "
-                                       "Max loss on a long option is 100% regardless.")
+                                       "Max loss on a long option is 100% regardless.\n\n"
+                                       "Keep this WELL BELOW your take-profit. The ratio "
+                                       "between them is what decides whether you make money: "
+                                       "breakeven win rate = SL / (TP + SL).")
     with r3:
         rule_dte = st.number_input("Time exit at DTE", min_value=0, value=7, step=1,
                                    key="op_dte",
@@ -2536,6 +2547,22 @@ with TAB_POSITIONS:
                                   help="Exit if the underlying closes below EMA20 "
                                        "(CALL) or above it (PUT) — the setup that "
                                        "justified the trade is gone.")
+
+    # Show the arithmetic the rules imply, so a losing payoff can't be set by accident.
+    if rule_tp and rule_sl:
+        payoff = rule_tp / rule_sl
+        breakeven = rule_sl / (rule_tp + rule_sl) * 100
+        ev_at_40 = 0.40 * (rule_tp / 100) - 0.60 * (rule_sl / 100)
+        line = (f"Payoff **{payoff:.1f}:1** → you need a **{breakeven:.0f}%** win rate "
+                f"to break even. At this strategy's measured ~40% win rate, expected "
+                f"value is **{ev_at_40:+.2f}** per unit risked (before costs).")
+        if breakeven >= 40:
+            st.error("⚠️ " + line + " These rules lose money at the win rate this "
+                     "signal actually achieves. Raise take-profit or lower stop-loss.")
+        elif ev_at_40 < 0.05:
+            st.warning("⚠️ " + line + " Thin — bid-ask spread alone could erase it.")
+        else:
+            st.success("✅ " + line)
 
     if not (rule_tp or rule_sl or rule_dte or rule_thesis):
         st.error("All exit rules are off — the monitor would never alert on this "
