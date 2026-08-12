@@ -1,28 +1,129 @@
+# Trading Scanner — scheduled watchlist scan
+# ─────────────────────────────────────────────────────────────────────────
+# Save to  .github/workflows/trading-scanner.yml
+#
+# WHAT CHANGED AND WHY
+#
+# The old schedule was:  '*/30 * * * *'
+# That is every 30 minutes, 24 hours a day, 7 days a week — about 336 runs a
+# week. The overwhelming majority fired overnight and at weekends, when no
+# price data can possibly have changed. It also spent Yahoo Finance rate limit
+# around the clock, which is the same budget the Options tab needs.
+#
+# Two fixes below:
+#   1. The cron now only covers weekday US market hours.
+#   2. A guard step checks the REAL market calendar before doing any work.
+#      GitHub cron is UTC-only and does not follow US daylight saving, so a
+#      hardcoded window is wrong for half the year. The cron is therefore
+#      deliberately a little wide (covers both EST and EDT) and the guard
+#      trims it precisely — including market holidays and half-days.
+#
+# WORTH CONSIDERING: is intraday scanning useful at all?
+#   The scanner analyses DAILY bars, and drop_partial_bar() discards today's
+#   in-progress bar while the market is open. So during the session it is
+#   always analysing yesterday's completed bar — which does not change. EMA,
+#   MACD, RSI, ADX and every level are identical at 9:35am and 3:55pm.
+#   The signal changes exactly once a day, at the close.
+#
+#   If you only care about the signal, use the once-daily cron below instead
+#   (5 runs/week instead of ~90). Keep the intraday schedule only if you also
+#   want fresh OPTIONS data, which does change through the session.
+
 name: Trading Scanner
 
 on:
   schedule:
-    - cron: '*/30 * * * *'   # runs every 30 minutes
-  workflow_dispatch:         # allows manual run
+    # Every 30 min, 13:00–21:00 UTC, Mon–Fri.
+    # That range covers 9:30am–4:00pm ET in BOTH EST and EDT; the guard step
+    # below discards the slots that fall outside real trading hours.
+    - cron: '0,30 13-21 * * 1-5'
+
+    # ── ALTERNATIVE: once daily, just after the close ──
+    # Recommended if you only want the daily signal. Comment out the line
+    # above and uncomment this one.
+    # - cron: '15 20 * * 1-5'      # 4:15pm ET (EDT) / 3:15pm ET (EST)
+
+  workflow_dispatch:               # manual run, always allowed
+    inputs:
+      force:
+        description: 'Run even if the market is closed'
+        type: boolean
+        default: false
+
+concurrency:
+  # A delayed run must never overlap the next scheduled one.
+  group: trading-scanner
+  cancel-in-progress: false
 
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
 
     steps:
+      # ── Guard: is the US market actually open right now? ──
+      # Runs before checkout so a closed-market slot costs a few seconds
+      # instead of a full install.
+      - name: Check market hours
+        id: market
+        run: |
+          python3 - <<'PY'
+          import os, datetime, zoneinfo
+          ET = zoneinfo.ZoneInfo("America/New_York")
+          now = datetime.datetime.now(ET)
+
+          # NYSE full closures and 1:00pm early closes (same list the app uses)
+          HOLIDAYS = {
+            "2025-01-01","2025-01-09","2025-01-20","2025-02-17","2025-04-18",
+            "2025-05-26","2025-06-19","2025-07-04","2025-09-01","2025-11-27",
+            "2025-12-25",
+            "2026-01-01","2026-01-19","2026-02-16","2026-04-03","2026-05-25",
+            "2026-06-19","2026-07-03","2026-09-07","2026-11-26","2026-12-25",
+          }
+          HALF_DAYS = {"2025-07-03","2025-11-28","2025-12-24",
+                       "2026-11-27","2026-12-24"}
+
+          day = now.strftime("%Y-%m-%d")
+          reason = ""
+          if now.weekday() >= 5:
+              is_open, reason = False, "weekend"
+          elif day in HOLIDAYS:
+              is_open, reason = False, "market holiday"
+          else:
+              ch, cm = (13, 0) if day in HALF_DAYS else (16, 0)
+              start = now.replace(hour=9, minute=30, second=0, microsecond=0)
+              end   = now.replace(hour=ch, minute=cm, second=0, microsecond=0)
+              is_open = start <= now <= end
+              if not is_open:
+                  reason = "outside 9:30-%02d:%02d ET" % (ch, cm)
+
+          print(f"Now (ET): {now:%Y-%m-%d %H:%M %A}")
+          print(f"Market open: {is_open}" + (f" ({reason})" if reason else ""))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"open={'true' if is_open else 'false'}\n")
+          PY
+
+      - name: Skip notice
+        if: steps.market.outputs.open != 'true' && inputs.force != true
+        run: echo "Market closed — nothing to scan. Exiting without using data quota."
+
       - name: Checkout code
-        uses: actions/checkout@v3
+        if: steps.market.outputs.open == 'true' || inputs.force == true
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        if: steps.market.outputs.open == 'true' || inputs.force == true
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
+          cache: pip
 
       - name: Install dependencies
-        run: |
-          pip install yfinance pandas ta requests pytz
+        if: steps.market.outputs.open == 'true' || inputs.force == true
+        run: pip install yfinance pandas ta requests pytz
 
       - name: Run scanner
+        if: steps.market.outputs.open == 'true' || inputs.force == true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
