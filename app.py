@@ -48,10 +48,12 @@ st.caption("Swing · Options · Alerts · Journal · ADX · Multi-TF · Earnings
 ALERT_LOG_FILE = Path("alert_history.json")
 JOURNAL_FILE   = Path("trade_journal.json")
 POSITIONS_FILE = Path("open_positions.json")
+SKIPPED_FILE   = Path("skipped_signals.json")
 
 _SS_ALERTS    = "_alerts_store"
 _SS_JOURNAL   = "_journal_store"
 _SS_POSITIONS = "_positions_store"
+_SS_SKIPPED   = "_skipped_store"
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -252,7 +254,7 @@ def _save(path: Path, data: list) -> None:
 # ─────────────────────────────────────────────
 st.sidebar.header("⚙️ Scan Settings")
 
-WATCHLIST = ["TSLA","NVDA","AAPL","MSFT","AMZN","META","ROKU"]
+WATCHLIST = ["TSLA","NVDA","AAPL","MSFT","AMZN","META","SPY","ROKU"]
 
 # FIX #11: FAST_MODE exposed as sidebar toggle
 FAST_MODE  = st.sidebar.checkbox("Fast Mode (top 5 only)", value=True)
@@ -397,6 +399,43 @@ def load_positions() -> list:
 def save_positions(d: list) -> None:
     st.session_state[_SS_POSITIONS] = d
     _save(POSITIONS_FILE, d)
+
+
+def load_skipped() -> list:
+    if _SS_SKIPPED not in st.session_state:
+        st.session_state[_SS_SKIPPED] = _load(SKIPPED_FILE)
+    return st.session_state[_SS_SKIPPED]
+
+
+def save_skipped(d: list) -> None:
+    st.session_state[_SS_SKIPPED] = d
+    _save(SKIPPED_FILE, d)
+
+
+def log_skipped_signal(ticker: str, trend: str, reason: str,
+                       notes: str = "", price: float = 0.0) -> None:
+    """
+    Record a signal you chose NOT to take.
+
+    This is not bookkeeping for its own sake. Trades you skip are the control
+    group: without them you only ever see the outcomes of decisions you made,
+    which is how people conclude "my instincts are good" from a biased sample.
+    Logging skips lets us later ask whether the ones you passed on would have
+    done better or worse than the ones you took — the single most useful thing
+    a 30-trade test can tell you about your own judgment.
+    """
+    skipped = load_skipped()
+    skipped.append({
+        "id":       f"SKIP_{ticker}_{int(time.time())}",
+        "ticker":   ticker,
+        "trend":    trend,
+        "price":    round(float(price), 2) if price else None,
+        "reason":   reason,
+        "notes":    notes,
+        "date":     datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d"),
+        "logged":   datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d %H:%M ET"),
+    })
+    save_skipped(skipped)
 
 
 def open_option_position(ticker: str, right: str, strike: float, expiry: str,
@@ -2587,6 +2626,49 @@ with TAB_POSITIONS:
     else:
         st.caption("Fill in underlying, strike and premium to begin monitoring.")
 
+    st.divider()
+
+    # ── Signals NOT taken ──
+    st.markdown("### 🚫 Log a signal you did NOT take")
+    st.caption("Skipped signals are the control group for your 30-trade test. "
+               "Without them you only see the outcomes of trades you chose, which "
+               "makes any judgment about your own selection look better than it is.")
+
+    sk1, sk2 = st.columns(2)
+    with sk1:
+        sk_tkr = st.text_input("Ticker", key="sk_tkr").strip().upper()
+        sk_dir = st.radio("Signal direction", ["Bullish", "Bearish"],
+                          horizontal=True, key="sk_dir")
+        sk_px  = st.number_input("Underlying price at signal", min_value=0.0,
+                                 step=0.01, key="sk_px")
+    with sk2:
+        sk_reason = st.selectbox("Why did you skip it?", [
+            "Contract too expensive for my risk rule",
+            "Spread too wide",
+            "Didn't like the chart / my own read",
+            "Already at max positions",
+            "Earnings or event risk",
+            "Missed it / saw too late",
+            "Daily loss or trade limit reached",
+            "Other",
+        ], key="sk_reason")
+        sk_notes = st.text_input("Notes (optional)", key="sk_notes")
+
+    if sk_tkr:
+        if st.button("🚫 Log skipped signal", key="sk_save"):
+            log_skipped_signal(sk_tkr, sk_dir, sk_reason, sk_notes, sk_px)
+            st.success(f"Logged skip: {sk_tkr} {sk_dir} — {sk_reason}")
+            st.rerun()
+
+    _skips = load_skipped()
+    if _skips:
+        with st.expander(f"Skipped signals logged ({len(_skips)})"):
+            for s in reversed(_skips[-25:]):
+                px = f" @ {s['price']}" if s.get("price") else ""
+                st.caption(f"**{s['ticker']}** {s['trend']}{px} · {s['date']} — "
+                           f"{s['reason']}" + (f" · {s['notes']}" if s.get("notes") else ""))
+
+    st.divider()
     st.caption("⚠️ The monitor reports when a rule was met on delayed quotes. It is "
                "not a broker, places no orders, and your real fill will differ — "
                "especially on wide spreads.")
@@ -2755,6 +2837,7 @@ with TAB_JOURNAL:
                 "journal":     journal,
                 "alerts":      alerts,
                 "positions":   load_positions(),
+                "skipped":     load_skipped(),
             }
             st.download_button(
                 "⬇️ Download backup (.json)",
@@ -2783,6 +2866,8 @@ with TAB_JOURNAL:
                         save_alerts(payload.get("alerts", []))
                         if "positions" in payload:
                             save_positions(payload.get("positions", []))
+                        if "skipped" in payload:
+                            save_skipped(payload.get("skipped", []))
                         st.success(f"Restored {n_j} trades, {n_a} alerts, "
                                    f"{n_p} position(s).")
                         st.rerun()
