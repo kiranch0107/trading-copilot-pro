@@ -71,6 +71,22 @@ MIN_RR             = 2.0
 ALERT_COOLDOWN_HRS = 4      # per ticker AND direction
 STATE_FILE         = Path("scanner_state.json")
 
+# ── Option suggestion ──
+# DTE window is centred on 30 deliberately: option_backtest.py measured this
+# strategy with a 30-DTE entry, so suggesting 7-DTE contracts would be
+# recommending something never tested. 21-45 keeps live trades comparable to
+# the backtest they are supposed to be validating.
+SUGGEST_OPTIONS  = True
+OPT_MIN_DTE      = 21
+OPT_MAX_DTE      = 45
+OPT_MAX_EXPIRIES = 3        # each expiry is one chain fetch — keep it lean
+OPT_MAX_SPREAD   = 15.0     # % of mid; above this the round trip eats the edge
+
+# Shown in the alert for context. NOT used to filter during the test phase —
+# you asked to see every suggestion and judge affordability yourself.
+ACCOUNT_SIZE = 1500
+RISK_PCT     = 5.0
+
 # Indicator warm-up — same reasoning as the Streamlit app
 FETCH_PERIOD          = "1y"
 INDICATOR_WARMUP_BARS = 100
@@ -192,6 +208,104 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ══════════════════════════════════════════════════════════════════
+# OPTION SUGGESTION
+#
+# Picks a liquid, near-the-money contract for the signal so the alert tells you
+# WHAT to buy, not just which way to lean. Ported from the app's selection
+# logic, with two differences: the DTE window is pinned to the range the
+# backtest used, and cost is reported against your account so you can see
+# affordability at a glance.
+#
+# Called ONLY after the cooldown check passes, so suppressed alerts never spend
+# option-chain API calls. That ordering matters: chains are the single most
+# rate-limit-expensive thing this script can do.
+# ══════════════════════════════════════════════════════════════════
+def suggest_option(ticker: str, price: float, trend: str,
+                   atr: float) -> dict | None:
+    try:
+        stock = yf.Ticker(ticker)
+        expiries = list(stock.options or [])
+        if not expiries:
+            return None
+
+        today = pd.Timestamp.today().normalize()
+        right = "CALL" if trend == "Bullish" else "PUT"
+
+        # Strike window sized to +-2 ATR, clamped to 3-12%. A flat 5% band means
+        # something very different on a 1%-ATR index than a 6%-ATR small cap.
+        band = min(max((atr * 2.0) / price, 0.03), 0.12) if price > 0 else 0.05
+        lo, hi = price * (1 - band), price * (1 + band)
+
+        best, best_score, checked = None, 0.0, 0
+        for exp in expiries:
+            if checked >= OPT_MAX_EXPIRIES:
+                break
+            try:
+                dte = (pd.Timestamp(exp) - today).days
+            except Exception:
+                continue
+            if not (OPT_MIN_DTE <= dte <= OPT_MAX_DTE):
+                continue
+            checked += 1
+            try:
+                time.sleep(0.5)
+                chain = stock.option_chain(exp)
+            except Exception as e:
+                logger.warning("%s chain %s failed: %s", ticker, exp, e)
+                continue
+
+            df = chain.calls if right == "CALL" else chain.puts
+            if df is None or df.empty:
+                continue
+            df = df[(df["strike"] >= lo) & (df["strike"] <= hi)].copy()
+            if df.empty:
+                continue
+
+            df["mid"]    = (df["bid"] + df["ask"]) / 2
+            df["spread"] = df["ask"] - df["bid"]
+            # bid>0 and volume>0 matter: a mid can look fine on a contract with
+            # no bid at all, and a zero-volume contract is untradeable however
+            # much open interest it carries.
+            df = df[(df["mid"] > 0) & (df["bid"] > 0) &
+                    (df["volume"].fillna(0) > 0) &
+                    (df["openInterest"].fillna(0) > 0)]
+            if df.empty:
+                continue
+            df["spread_pct"] = df["spread"] / df["mid"] * 100
+            df = df[df["spread_pct"] <= OPT_MAX_SPREAD]
+            if df.empty:
+                continue
+
+            df["score"] = ((df["volume"].fillna(0) + df["openInterest"].fillna(0))
+                           / (1 + df["spread_pct"] / 10))
+            top = df.sort_values("score", ascending=False).iloc[0]
+            if float(top["score"]) > best_score:
+                best_score = float(top["score"])
+                best = (top, exp, dte)
+
+        if best is None:
+            return None
+        row, exp, dte = best
+        mid  = float(row["mid"])
+        cost = mid * 100
+        budget = ACCOUNT_SIZE * RISK_PCT / 100
+        return {
+            "right": right, "strike": float(row["strike"]), "expiry": exp,
+            "dte": dte, "mid": round(mid, 2), "bid": float(row["bid"]),
+            "ask": float(row["ask"]),
+            "spread_pct": round(float(row["spread_pct"]), 1),
+            "volume": int(row["volume"] or 0), "oi": int(row["openInterest"] or 0),
+            "cost": round(cost, 2),
+            "pct_account": round(cost / ACCOUNT_SIZE * 100, 1),
+            "within_budget": cost <= budget,
+            "budget": round(budget, 2),
+        }
+    except Exception as e:
+        logger.warning("suggest_option(%s) failed: %s", ticker, e)
+        return None
+
+
+# ══════════════════════════════════════════════════════════════════
 # ANALYSIS
 # ══════════════════════════════════════════════════════════════════
 def analyze(df: pd.DataFrame, ticker: str) -> dict | None:
@@ -279,7 +393,8 @@ def analyze(df: pd.DataFrame, ticker: str) -> dict | None:
 
     return {"ticker": ticker, "trend": trend, "strength": strength,
             "rr": rr, "entry": entry, "stop": stop, "target": target,
-            "rsi": round(rsi, 1), "adx": round(adx, 1), "price": round(price, 2)}
+            "rsi": round(rsi, 1), "adx": round(adx, 1),
+            "price": round(price, 2), "atr": round(atr, 2)}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -310,10 +425,40 @@ def run(args) -> int:
                 skipped += 1
                 continue
 
-            msg = (f"🚨 TRADE ALERT\n"
-                   f"{r['ticker']} → {r['trend']} ({r['strength']})\n"
-                   f"Price: {r['price']} | RR: {r['rr']} | ADX: {r['adx']} | RSI: {r['rsi']}\n"
-                   f"Entry: {r['entry']} | Stop: {r['stop']} | Target: {r['target']}")
+            lines = [
+                "🚨 TRADE ALERT",
+                f"{r['ticker']} → {r['trend']} ({r['strength']})",
+                f"Price: {r['price']} | RR: {r['rr']} | ADX: {r['adx']} | RSI: {r['rsi']}",
+                f"Underlying: entry {r['entry']} | stop {r['stop']} | target {r['target']}",
+            ]
+
+            # Chain fetch happens here — AFTER the cooldown check — so
+            # suppressed alerts cost no API calls.
+            opt = suggest_option(tk, r["price"], r["trend"], r["atr"]) \
+                if SUGGEST_OPTIONS else None
+
+            if opt:
+                lines += [
+                    "",
+                    f"📄 CONTRACT: {tk} {opt['expiry']} ${opt['strike']:g} {opt['right']}",
+                    f"Mid ${opt['mid']:.2f}  (bid {opt['bid']:.2f} / ask {opt['ask']:.2f}, "
+                    f"spread {opt['spread_pct']:.0f}%)",
+                    f"Cost ${opt['cost']:,.0f} per contract = {opt['pct_account']:.1f}% of account",
+                    f"{opt['dte']} DTE · vol {opt['volume']:,} · OI {opt['oi']:,}",
+                ]
+                if not opt["within_budget"]:
+                    lines.append(f"⚠️ Above your ${opt['budget']:,.0f} risk budget "
+                                 f"({RISK_PCT:g}% of ${ACCOUNT_SIZE:,}) — on a long "
+                                 f"option the premium IS the max loss.")
+                if opt["spread_pct"] > 10:
+                    lines.append(f"⚠️ Spread {opt['spread_pct']:.0f}% of mid — a wide "
+                                 f"round trip can erase the edge on its own.")
+                lines += ["", "Test rules: TP +200% · SL −50% · exit at 7 DTE · thesis OFF"]
+            elif SUGGEST_OPTIONS:
+                lines += ["", "📄 No liquid contract found in the 21-45 DTE window "
+                              "(spread/volume/OI gates). Check the chain yourself."]
+
+            msg = "\n".join(lines)
             logger.info("ALERT %s %s rr=%s", tk, r["trend"], r["rr"])
             if send_alert(msg, dry_run=args.dry_run):
                 hits += 1
