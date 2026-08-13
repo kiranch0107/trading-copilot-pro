@@ -94,7 +94,23 @@ MIN_BARS_AFTER_WARMUP = 40
 
 # Politeness gap between Yahoo calls. 14 tickers hammered back-to-back is a
 # meaningful share of the same rate limit the options tooling needs.
-FETCH_GAP_SEC = 0.4
+FETCH_GAP_SEC = 0.6     # was 0.4 — a touch more spacing per ticker
+
+# Retry/backoff for Yahoo calls. Every OTHER Yahoo-calling function across this
+# project (the app's get_data, its options engine, exit_monitor.py) already
+# retries with escalating backoff. get_data() and suggest_option() here did
+# not — a single 429 failed the ticker outright with no second attempt. That
+# gap, combined with GitHub Actions running from a shared datacenter IP range
+# (heavily used by other jobs hitting Yahoo the same hour), is what produced
+# "always rate limited": no retry meant no chance to wait out a busy moment.
+YF_RETRY_ATTEMPTS = 4
+YF_RETRY_DELAY    = 3.0    # seconds; doubles each attempt (3 -> 6 -> 12)
+
+
+def _is_rate_limit_error(e: Exception) -> bool:
+    msg = str(e).lower()
+    return "too many requests" in msg or "rate limit" in msg or "429" in msg
+
 
 MARKET_HOLIDAYS = {
     "2025-01-01", "2025-01-09", "2025-01-20", "2025-02-17", "2025-04-18",
@@ -180,8 +196,34 @@ def send_alert(message: str, dry_run: bool = False) -> bool:
 # DATA + INDICATORS
 # ══════════════════════════════════════════════════════════════════
 def get_data(ticker: str) -> pd.DataFrame | None:
-    df = yf.download(ticker, period=FETCH_PERIOD, interval="1d",
-                     progress=False, auto_adjust=False)
+    """
+    BUG FIX: previously called yf.download() ONCE with no retry, unlike every
+    other Yahoo-calling function in this project. A single 429 failed the
+    ticker outright. Now retries with escalating backoff (3s -> 6s -> 12s)
+    before giving up, matching get_data() in app.py and exit_monitor.py.
+    """
+    delay = YF_RETRY_DELAY
+    last_err = None
+    for attempt in range(YF_RETRY_ATTEMPTS):
+        try:
+            df = yf.download(ticker, period=FETCH_PERIOD, interval="1d",
+                             progress=False, auto_adjust=False)
+            break
+        except Exception as e:
+            last_err = e
+            if _is_rate_limit_error(e) and attempt < YF_RETRY_ATTEMPTS - 1:
+                logger.warning("Rate limited get_data(%s); backoff %ss "
+                               "(attempt %d/%d)", ticker, delay, attempt + 1,
+                               YF_RETRY_ATTEMPTS)
+                time.sleep(delay)
+                delay *= 2
+                continue
+            logger.warning("get_data(%s) failed: %s", ticker, e)
+            return None
+    else:
+        logger.warning("get_data(%s) exhausted retries: %s", ticker, last_err)
+        return None
+
     if df is None or df.empty:
         return None
     if isinstance(df.columns, pd.MultiIndex):
@@ -224,7 +266,20 @@ def suggest_option(ticker: str, price: float, trend: str,
                    atr: float) -> dict | None:
     try:
         stock = yf.Ticker(ticker)
-        expiries = list(stock.options or [])
+        expiries = None
+        delay = YF_RETRY_DELAY
+        for attempt in range(YF_RETRY_ATTEMPTS):
+            try:
+                expiries = list(stock.options or [])
+                break
+            except Exception as e:
+                if _is_rate_limit_error(e) and attempt < YF_RETRY_ATTEMPTS - 1:
+                    logger.warning("Rate limited options(%s); backoff %ss", ticker, delay)
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                logger.warning("%s expiries fetch failed: %s", ticker, e)
+                return None
         if not expiries:
             return None
 
@@ -247,11 +302,24 @@ def suggest_option(ticker: str, price: float, trend: str,
             if not (OPT_MIN_DTE <= dte <= OPT_MAX_DTE):
                 continue
             checked += 1
-            try:
-                time.sleep(0.5)
-                chain = stock.option_chain(exp)
-            except Exception as e:
-                logger.warning("%s chain %s failed: %s", ticker, exp, e)
+            chain = None
+            c_delay = YF_RETRY_DELAY
+            for c_attempt in range(YF_RETRY_ATTEMPTS):
+                try:
+                    time.sleep(0.5)
+                    chain = stock.option_chain(exp)
+                    break
+                except Exception as e:
+                    if _is_rate_limit_error(e) and c_attempt < YF_RETRY_ATTEMPTS - 1:
+                        logger.warning("Rate limited chain %s %s; backoff %ss",
+                                       ticker, exp, c_delay)
+                        time.sleep(c_delay)
+                        c_delay *= 2
+                        continue
+                    logger.warning("%s chain %s failed: %s", ticker, exp, e)
+                    chain = None
+                    break
+            if chain is None:
                 continue
 
             df = chain.calls if right == "CALL" else chain.puts
