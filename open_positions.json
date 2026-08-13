@@ -16,8 +16,13 @@
     "notes": "",
     "opened": "2026-08-12 01:42 ET",
     "opened_epoch": 1786513354.0759523,
-    "last_check_epoch": 1786597801.122241,
-    "status": "OPEN",
-    "exit_alerted": false
+    "last_check_epoch": 1786630368.6556025,
+    "status": "EXIT_SIGNALLED",
+    "exit_alerted": true,
+    "exit_reason": "TARGET",
+    "exit_detail": "Premium +64.2% (target +50%)",
+    "exit_premium": 1.79,
+    "exit_pnl_pct": 64.2,
+    "exit_detected": "2026-08-13 10:12 ET"
   }
 ]
