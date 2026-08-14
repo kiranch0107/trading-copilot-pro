@@ -8,5 +8,15 @@
     "notes": "",
     "date": "2026-08-14",
     "logged": "2026-08-14 11:16 ET"
+  },
+  {
+    "id": "SKIP_NVDA_1786720638",
+    "ticker": "NVDA",
+    "trend": "Bullish",
+    "price": 230.0,
+    "reason": "Contract too expensive for my risk rule",
+    "notes": "8/28 at $6.08",
+    "date": "2026-08-14",
+    "logged": "2026-08-14 11:17 ET"
   }
 ]
