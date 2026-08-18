@@ -18,5 +18,15 @@
     "notes": "9/18 at $15.02 on 8/17",
     "date": "2026-08-17",
     "logged": "2026-08-17 14:42 ET"
+  },
+  {
+    "id": "SKIP_MSFT_1787074573",
+    "ticker": "MSFT",
+    "trend": "Bullish",
+    "price": 465.0,
+    "reason": "Contract too expensive for my risk rule",
+    "notes": "9/4 at $21.6 on 8/18",
+    "date": "2026-08-18",
+    "logged": "2026-08-18 13:36 ET"
   }
 ]
