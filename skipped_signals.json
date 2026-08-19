@@ -48,5 +48,15 @@
     "notes": "8/28 at $3.21 on 8/19",
     "date": "2026-08-19",
     "logged": "2026-08-19 14:19 ET"
+  },
+  {
+    "id": "SKIP_QQQ_1787163595",
+    "ticker": "QQQ",
+    "trend": "Bullish",
+    "price": 705.0,
+    "reason": "Contract too expensive for my risk rule",
+    "notes": "8/31 at $17.8 on 8/19",
+    "date": "2026-08-19",
+    "logged": "2026-08-19 14:19 ET"
   }
 ]
