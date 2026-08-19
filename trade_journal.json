@@ -32,5 +32,22 @@
     "contracts": 1.0,
     "pnl_usd": 143.0,
     "notes": "Closed on 8/13"
+  },
+  {
+    "id": "OPT_NVDA_1787164500",
+    "date": "2026-08-19 14:35 ET",
+    "closed": "2026-08-19 14:36 ET",
+    "ticker": "NVDA 2026-08-07 220C",
+    "trend": "Bullish",
+    "entry": 0.48,
+    "stop": 0,
+    "target": 0,
+    "planned_rr": 0,
+    "exit_price": 0.59,
+    "outcome": "WIN",
+    "actual_rr": 0.23,
+    "contracts": 1.0,
+    "pnl_usd": 11.0,
+    "notes": "Sold on 8/4"
   }
 ]
