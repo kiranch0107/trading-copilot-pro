@@ -49,5 +49,22 @@
     "contracts": 1.0,
     "pnl_usd": 11.0,
     "notes": "Sold on 8/4"
+  },
+  {
+    "id": "OPT_SPY_1787239810",
+    "date": "2026-08-20 11:30 ET",
+    "closed": "2026-08-20 15:54 ET",
+    "ticker": "SPY 2026-08-31 785C",
+    "trend": "Bullish",
+    "entry": 0.53,
+    "stop": 0,
+    "target": 0,
+    "planned_rr": 0,
+    "exit_price": 0.27,
+    "outcome": "LOSS",
+    "actual_rr": -0.49,
+    "contracts": 2.0,
+    "pnl_usd": -52.0,
+    "notes": "Bought on 8/20"
   }
 ]
