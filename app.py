@@ -2686,10 +2686,10 @@ with TAB_POSITIONS:
     st.markdown("**Exit rules** — the monitor needs at least one of these to alert you.")
     r1, r2, r3, r4 = st.columns(4)
     with r1:
-        rule_tp = st.number_input("Take profit +%", min_value=0, value=100, step=25,
+        rule_tp = st.number_input("Take profit +%", min_value=0, value=200, step=25,
                                   key="op_tp",
                                   help="Exit when the premium gains this %. 0 disables.\n\n"
-                                       "DEFAULT RAISED FROM 50 TO 100. At TP+50/SL-50 the "
+                                       "DEFAULT IS 200. At TP+50/SL-50 the "
                                        "payoff is 1:1, which needs a 50% win rate just to "
                                        "break even — but this entry signal wins ~40% of the "
                                        "time, giving -0.10 expected value per unit risked "
@@ -2713,7 +2713,7 @@ with TAB_POSITIONS:
                                         "disables. Theta decay accelerates sharply "
                                         "in the final weeks.")
     with r4:
-        rule_thesis = st.checkbox("Thesis invalidation", value=True, key="op_thesis",
+        rule_thesis = st.checkbox("Thesis invalidation", value=False, key="op_thesis",
                                   help="Exit if the underlying closes below EMA20 "
                                        "(CALL) or above it (PUT) — the setup that "
                                        "justified the trade is gone.")
@@ -2722,17 +2722,33 @@ with TAB_POSITIONS:
     if rule_tp and rule_sl:
         payoff = rule_tp / rule_sl
         breakeven = rule_sl / (rule_tp + rule_sl) * 100
-        ev_at_40 = 0.40 * (rule_tp / 100) - 0.60 * (rule_sl / 100)
-        line = (f"Payoff **{payoff:.1f}:1** → you need a **{breakeven:.0f}%** win rate "
-                f"to break even. At this strategy's measured ~40% win rate, expected "
-                f"value is **{ev_at_40:+.2f}** per unit risked (before costs).")
-        if breakeven >= 40:
+        # WIN RATE SOURCE — this was previously hardcoded at 40%, taken from the
+        # SHARE backtest (buy stock, exit at 3xATR or 1xATR). That number does
+        # NOT transfer to options: an option needs a far larger underlying move
+        # to gain 100% than a share needs to reach 3xATR, and theta works
+        # against you the whole time. option_backtest.py measured the actual
+        # option-level win rate at 23.8% (TP+100/SL-50, 5y, 7 tickers).
+        # Using 40% here made losing configurations look profitable.
+        OPT_WIN_RATE = 0.238
+        ev = OPT_WIN_RATE * (rule_tp / 100) - (1 - OPT_WIN_RATE) * (rule_sl / 100)
+        line = (f"Payoff **{payoff:.1f}:1** → breakeven win rate **{breakeven:.0f}%**. "
+                f"Measured option-level win rate for this signal is "
+                f"**{OPT_WIN_RATE*100:.1f}%**, giving expected value "
+                f"**{ev:+.2f}** per unit risked — before spread and commissions.")
+        if breakeven >= OPT_WIN_RATE * 100:
             st.error("⚠️ " + line + " These rules lose money at the win rate this "
-                     "signal actually achieves. Raise take-profit or lower stop-loss.")
-        elif ev_at_40 < 0.05:
+                     "signal actually achieves on OPTIONS. Widen take-profit, or "
+                     "accept that this is a data-collection trade rather than a "
+                     "positive-expectancy one.")
+        elif ev < 0.05:
             st.warning("⚠️ " + line + " Thin — bid-ask spread alone could erase it.")
         else:
             st.success("✅ " + line)
+        st.caption(
+            "Note: even the best configuration measured (TP+300, thesis off) came "
+            "out at −0.27% expectancy. No setting here makes this signal "
+            "profitable — the rules limit damage and enforce consistency."
+        )
 
     if not (rule_tp or rule_sl or rule_dte or rule_thesis):
         st.error("All exit rules are off — the monitor would never alert on this "
