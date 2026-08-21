@@ -339,7 +339,12 @@ st.sidebar.header("💰 Position Sizing")
 ACCOUNT_SIZE = int(st.sidebar.number_input("Account size ($)",   value=1500, min_value=100, step=500))
 RISK_PCT     = st.sidebar.number_input("Risk per trade (%)",     value=1.0,   min_value=0.1, max_value=10.0, step=0.1)
 
-COOLDOWN       = 600
+# Alert cooldown per ticker. Was 600s (10 min) — but nothing scans this app
+# every 10 minutes, so the cooldown never actually fired: a setup that stayed
+# valid all session produced ~13 identical Telegram messages a day. The
+# standalone scanner already uses 4 hours for exactly this reason; matching it
+# keeps the two alert paths consistent.
+COOLDOWN       = 4 * 3600
 # ─────────────────────────────────────────────
 # PERSISTENCE
 #
@@ -552,7 +557,12 @@ def log_alert(ticker, trend, strength, entry, stop, target, rr, price,
                 last_epoch = 0
         if now_epoch - float(last_epoch) < COOLDOWN:
             logger.info("Cooldown active for %s — alert suppressed", ticker)
-            return
+            # BUG FIX: this used to return None, indistinguishable from a
+            # successful write. The caller then sent a Telegram message anyway,
+            # so the cooldown suppressed the LOG entry but not the alert — the
+            # duplicate-notification problem it was built to prevent. Callers
+            # must branch on this boolean.
+            return False
 
     alerts.append({
         "id":             f"{ticker}_{int(now_epoch)}",
@@ -564,6 +574,7 @@ def log_alert(ticker, trend, strength, entry, stop, target, rr, price,
         "filters_passed": filters_passed, "journaled": False,
     })
     save_alerts(alerts)
+    return True
 
 
 def add_journal_trade(alert_id, ticker, trend, entry, stop, target,
@@ -2013,10 +2024,13 @@ with TAB_SCAN:
         weak         = [s for s in all_setups if not s["all_pass"]]
 
         for a in high_quality:
-            log_alert(ticker=a["ticker"], trend=a["trend"], strength=a["strength"],
-                      entry=a["entry"], stop=a["stop"], target=a["target"],
-                      rr=a["rr"], price=a["price"], filters_passed=a["filters"])
-            if market_open:
+            alert_created = log_alert(
+                ticker=a["ticker"], trend=a["trend"], strength=a["strength"],
+                entry=a["entry"], stop=a["stop"], target=a["target"],
+                rr=a["rr"], price=a["price"], filters_passed=a["filters"])
+            # Only notify when a NEW alert was actually recorded. Without this
+            # check the cooldown silenced the journal but not the phone.
+            if alert_created and market_open:
                 fs = " | ".join(f"{'✅' if f['pass'] else '❌'} {n}"
                                 for n,f in a["filters"].items())
                 send_telegram_alert(a["ticker"], (
