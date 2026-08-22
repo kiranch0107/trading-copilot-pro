@@ -254,7 +254,7 @@ def _save(path: Path, data: list) -> None:
 # ─────────────────────────────────────────────
 st.sidebar.header("⚙️ Scan Settings")
 
-WATCHLIST = ["TSLA","NVDA","AAPL","MSFT","AMZN","META","SPY","ROKU"]
+WATCHLIST = ["NVDA","META","MSFT"]
 
 # FIX #11: FAST_MODE exposed as sidebar toggle
 FAST_MODE  = st.sidebar.checkbox("Fast Mode (top 5 only)", value=True)
@@ -262,12 +262,12 @@ SCAN_LIST  = WATCHLIST[:5] if FAST_MODE else WATCHLIST
 st.sidebar.caption(f"Scanning: {', '.join(SCAN_LIST)}")
 st.sidebar.divider()
 
-ADX_MIN       = st.sidebar.number_input("ADX minimum",              value=25,   min_value=1,    max_value=100)
+ADX_MIN       = st.sidebar.number_input("ADX minimum",              value=35,   min_value=1,    max_value=100)
 EARNINGS_DAYS      = int(st.sidebar.number_input("Earnings blackout days",      value=3,   min_value=0, max_value=30))
 POST_EARNINGS_DAYS = int(st.sidebar.number_input("Post-earnings cooling (days)", value=1,   min_value=0, max_value=7,
     help="Also block signals N days AFTER earnings (avoids IV crush residual)"))
 BUDGET_MAX    = st.sidebar.number_input("Budget max (option mid)",   value=2.00, min_value=0.01, step=0.10)
-MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",   value=9,    min_value=1,
+MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",   value=12,   min_value=1,
     help="Minimum days-to-expiry to consider. Your swing target (2.5× ATR) usually needs "
          "~8 sessions to play out — a 1-2 DTE contract will lose to theta even if the "
          "trade thesis is correct. 7+ is a sane floor for swing trades."))
@@ -284,12 +284,17 @@ ATR_STOP_MULT = st.sidebar.number_input("ATR stop multiplier",       value=1.0, 
          "trade is deeper (more frequent small losses). 1.0 maximises expectancy; 1.25–1.5 "
          "trades some edge for a smoother equity curve. Pick based on your tolerance for "
          "consecutive small losses.")
-ATR_TGT_MULT  = st.sidebar.number_input("ATR target multiplier",     value=3.0,  min_value=1.0, max_value=6.0, step=0.25,
+ATR_TGT_MULT  = st.sidebar.number_input("ATR target multiplier",     value=4.0,  min_value=1.0, max_value=6.0, step=0.25,
     help="Target distance = this × ATR. Backtested across 300 simulated market series, "
          "3.0 lifted per-trade expectancy ~29% over 2.5 (+0.196 → +0.252 R) with the same "
          "stop and same trade count — the edge in trend-following comes from letting "
          "winners run. Win rate drops slightly (you reach a farther target less often) but "
          "the larger average win more than compensates.")
+MAX_HOLD      = int(st.sidebar.number_input("Max hold (sessions)",   value=30,   min_value=0, max_value=250, step=5,
+    help="Bar-count time stop, mirroring backtest.py --max-hold. Counted in "
+         "TRADING SESSIONS, not calendar days, so weekends and holidays do not "
+         "burn the clock. 0 disables it. Applied to new positions only — "
+         "contracts already being monitored keep the rules they were opened with."))
 st.sidebar.divider()
 
 # MIN_DTE and ATR_TGT_MULT are coupled: the theta check needs roughly
@@ -456,6 +461,7 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
         STOP   — premium fell to −sl_pct% of what you paid   (risk first)
         TARGET — premium rose to +tp_pct%
         TIME   — DTE at or below dte_exit (theta cliff)
+        HOLD   — max_hold_bars trading sessions elapsed
         THESIS — underlying closed the wrong side of its EMA20
     Any rule set to 0 / False is disabled.
     """
@@ -2422,6 +2428,12 @@ with TAB_STOCK:
                                         q_dte = st.number_input(
                                             "Time exit at DTE", min_value=0, value=7,
                                             step=1, key=f"qbuy_dte_{_qkey}")
+                                        q_hold = int(st.number_input(
+                                            "Max hold (sessions)", min_value=0,
+                                            value=MAX_HOLD, step=5,
+                                            key=f"qbuy_hold_{_qkey}",
+                                            help="Trading sessions, not calendar "
+                                                 "days. 0 disables."))
                                         q_thesis = st.checkbox(
                                             "Thesis invalidation (EMA20)", value=False,
                                             key=f"qbuy_thesis_{_qkey}",
@@ -2437,7 +2449,7 @@ with TAB_STOCK:
                                             f"maximum loss on this contract "
                                             f"({cost/ACCOUNT_SIZE*100:.1f}% of "
                                             f"\\${ACCOUNT_SIZE:,}).")
-                                        if not (q_tp or q_sl or q_dte or q_thesis):
+                                        if not (q_tp or q_sl or q_dte or q_hold or q_thesis):
                                             st.error("All exit rules are off — the "
                                                      "monitor would never alert on "
                                                      "this position.")
@@ -2453,6 +2465,7 @@ with TAB_STOCK:
                                                     entry_premium=q_prem,
                                                     rules={"tp_pct": q_tp, "sl_pct": q_sl,
                                                            "dte_exit": q_dte,
+                                                           "max_hold_bars": q_hold,
                                                            "invalidate_ema": q_thesis},
                                                     notes=q_notes)
                                                 st.session_state[f"qbuy_open_{_qkey}"] = False
@@ -2637,6 +2650,7 @@ with TAB_POSITIONS:
                 if r.get("tp_pct"):        bits.append(f"TP +{r['tp_pct']:g}%")
                 if r.get("sl_pct"):        bits.append(f"SL −{r['sl_pct']:g}%")
                 if r.get("dte_exit"):      bits.append(f"TIME ≤{r['dte_exit']:g} DTE")
+                if r.get("max_hold_bars"): bits.append(f"HOLD ≤{r['max_hold_bars']:g} sessions")
                 if r.get("invalidate_ema"):bits.append("THESIS EMA20")
                 st.caption(f"{p.get('contracts')} contract(s) · cost "
                            f"\\${p['entry_premium']*100*float(p.get('contracts') or 0):,.0f} · "
@@ -2726,6 +2740,12 @@ with TAB_POSITIONS:
                                    help="Exit when days-to-expiry falls to this. 0 "
                                         "disables. Theta decay accelerates sharply "
                                         "in the final weeks.")
+        rule_hold = int(st.number_input("Max hold (sessions)", min_value=0,
+                                        value=MAX_HOLD, step=5, key="op_hold",
+                                        help="Exit after this many TRADING SESSIONS "
+                                             "held — weekends and holidays do not "
+                                             "count. 0 disables. Mirrors backtest.py "
+                                             "--max-hold."))
     with r4:
         rule_thesis = st.checkbox("Thesis invalidation", value=False, key="op_thesis",
                                   help="Exit if the underlying closes below EMA20 "
@@ -2764,7 +2784,7 @@ with TAB_POSITIONS:
             "profitable — the rules limit damage and enforce consistency."
         )
 
-    if not (rule_tp or rule_sl or rule_dte or rule_thesis):
+    if not (rule_tp or rule_sl or rule_dte or rule_hold or rule_thesis):
         st.error("All exit rules are off — the monitor would never alert on this "
                  "position. Enable at least one.")
     elif o_tkr and o_strike > 0 and o_prem > 0:
@@ -2773,6 +2793,7 @@ with TAB_POSITIONS:
                        f"premium +{rule_tp}%" if rule_tp else "",
                        f"premium −{rule_sl}%" if rule_sl else "",
                        f"{rule_dte} DTE" if rule_dte else "",
+                       f"{rule_hold} sessions held" if rule_hold else "",
                        "EMA20 invalidation" if rule_thesis else ""])))
         if st.button("📍 Start monitoring this contract", type="primary", key="op_save"):
             open_option_position(
@@ -2780,7 +2801,8 @@ with TAB_POSITIONS:
                 expiry=o_expiry.strftime("%Y-%m-%d"), contracts=o_qty,
                 entry_premium=o_prem,
                 rules={"tp_pct": rule_tp, "sl_pct": rule_sl,
-                       "dte_exit": rule_dte, "invalidate_ema": rule_thesis},
+                       "dte_exit": rule_dte, "max_hold_bars": rule_hold,
+                       "invalidate_ema": rule_thesis},
                 notes=o_notes)
             st.success(f"Now monitoring {o_tkr} {o_expiry} ${o_strike:g} {o_right}.")
             st.rerun()
