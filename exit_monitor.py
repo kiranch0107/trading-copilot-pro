@@ -53,7 +53,7 @@ import os
 import sys
 import time
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 import pandas as pd
 import pytz
@@ -79,6 +79,11 @@ MARKET_HOLIDAYS = {
     "2026-06-19","2026-07-03","2026-09-07","2026-11-26","2026-12-25",
 }
 MARKET_HALF_DAYS = {"2025-07-03","2025-11-28","2025-12-24","2026-11-27","2026-12-24"}
+
+# Bar-count time stop. Mirrors backtest.py --max-hold. Positions opened
+# before this rule existed have no max_hold_bars in their rules block and
+# are simply not subject to it.
+MAX_HOLD_BARS_DEFAULT = 30
 
 
 def is_market_open(now: datetime | None = None) -> bool:
@@ -181,6 +186,65 @@ def get_underlying_state(ticker: str) -> dict | None:
         return None
 
 
+def trading_sessions_between(start: date, end: date) -> int:
+    """
+    Count completed trading sessions from `start` (exclusive) to `end`
+    (inclusive), skipping weekends and known market holidays.
+
+    A bar-count time stop only means anything in sessions. Calendar days
+    would make a Friday entry "3 bars old" by Monday morning, which would
+    fire the stop early on every weekend the position is held.
+
+    MARKET_HOLIDAYS only covers 2025-2026; beyond that the count drifts
+    slightly long (holidays get counted as sessions), which is the safe
+    direction — it holds a position marginally longer rather than exiting
+    on a day the market was shut.
+    """
+    if end <= start:
+        return 0
+    sessions = 0
+    cur = start
+    one = timedelta(days=1)
+    while cur < end:
+        cur += one
+        if cur.weekday() >= 5:
+            continue
+        if cur.strftime("%Y-%m-%d") in MARKET_HOLIDAYS:
+            continue
+        sessions += 1
+    return sessions
+
+
+def bars_held(pos: dict) -> int | None:
+    """
+    Sessions elapsed since the position was opened.
+
+    Prefers `opened_epoch` (unambiguous). Falls back to parsing the
+    `opened` string, which app.py writes as "%Y-%m-%d %H:%M ET" — note the
+    literal "ET" is not a parseable timezone, so only the date part is used.
+    Returns None if neither field is usable, which disables the rule rather
+    than guessing.
+    """
+    opened_date = None
+    epoch = pos.get("opened_epoch")
+    if epoch:
+        try:
+            opened_date = datetime.fromtimestamp(float(epoch), ET).date()
+        except Exception:
+            opened_date = None
+    if opened_date is None:
+        raw = (pos.get("opened") or "").replace(" ET", "").strip()
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                opened_date = datetime.strptime(raw, fmt).date()
+                break
+            except ValueError:
+                continue
+    if opened_date is None:
+        return None
+    return trading_sessions_between(opened_date, datetime.now(ET).date())
+
+
 def days_to_expiry(expiry: str) -> int | None:
     try:
         return (datetime.strptime(expiry, "%Y-%m-%d").date() - date.today()).days
@@ -193,8 +257,12 @@ def days_to_expiry(expiry: str) -> int | None:
 # ══════════════════════════════════════════════════════════════════
 def check_option_position(pos: dict) -> dict:
     """
-    Evaluate every enabled exit rule. Priority: STOP, TARGET, TIME, THESIS —
-    risk before reward, and both before the softer signals.
+    Evaluate every enabled exit rule. Priority: STOP, TARGET, TIME, HOLD,
+    THESIS — risk before reward, and both before the softer signals.
+
+    HOLD sits after TIME because the theta cliff is the more urgent of the
+    two clocks: a contract at 5 DTE needs out today regardless of how many
+    sessions it has been held.
     Returns {"exit": bool, ...}.
     """
     rules = pos.get("rules", {}) or {}
@@ -232,7 +300,22 @@ def check_option_position(pos: dict) -> dict:
                 "detail": f"{dte} DTE left (floor {dte_floor}) — theta decay "
                           f"accelerates from here regardless of P&L"}
 
-    # 4. THESIS — underlying invalidated the setup
+    # 4. HOLD — position has consumed its allotted sessions
+    #
+    # The premise of a swing setup is that it resolves within a bounded number
+    # of bars. Past that, the thesis has not been proven wrong so much as it
+    # has failed to be proven right, and the capital is better freed than left
+    # bleeding theta on a trade that is going nowhere.
+    max_bars = rules.get("max_hold_bars") or 0
+    held = bars_held(pos) if max_bars else None
+    if held is not None:
+        info["bars_held"] = held
+    if max_bars and held is not None and held >= max_bars:
+        return {**info, "exit": True, "reason": "HOLD",
+                "detail": f"{held} sessions held (limit {max_bars:g}) — the setup "
+                          f"has had its window and has not resolved."}
+
+    # 5. THESIS — underlying invalidated the setup
     if rules.get("invalidate_ema"):
         u = get_underlying_state(pos["ticker"])
         if u:
@@ -250,7 +333,8 @@ def check_option_position(pos: dict) -> dict:
 
 
 def format_alert(pos: dict, ev: dict) -> str:
-    icons = {"TARGET": "🎯", "STOP": "🛑", "TIME": "⏳", "THESIS": "📉"}
+    icons = {"TARGET": "🎯", "STOP": "🛑", "TIME": "⏳", "HOLD": "📆",
+             "THESIS": "📉"}
     icon = icons.get(ev["reason"], "⚠️")
     contract = (f"{pos['ticker']} {pos['expiry']} "
                 f"${pos['strike']:g} {pos['right'].upper()}")
@@ -265,6 +349,8 @@ def format_alert(pos: dict, ev: dict) -> str:
             lines.append(f"P&L:     ${pnl_usd:+,.0f} on {n:g} contract(s)")
     if ev.get("dte") is not None:
         lines.append(f"DTE:     {ev['dte']}")
+    if ev.get("bars_held") is not None:
+        lines.append(f"Held:    {ev['bars_held']} sessions")
     if ev.get("reliable") is False and ev.get("mid") is not None:
         lines += ["", "⚠️ No two-sided market — price is last-traded and may be "
                       "stale. Verify before acting."]
