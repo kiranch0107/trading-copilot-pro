@@ -16,9 +16,9 @@ class Config:
     recent_alert_window_minutes: int = 7 * 24 * 60  # 7 days
 
     # Option selection thresholds
-    min_dte: int = 1
+    min_dte: int = 12          # raised from 9: coupled to a 4.0x ATR target
     max_dte: int = 30
-    min_adx: int = 25
+    min_adx: int = 35          # raised from 25 to match app.py sidebar default
     min_option_volume: int = 50
     min_option_oi: int = 20
 
@@ -37,5 +37,7 @@ class Config:
             raise ValueError("recent_alert_window_minutes must be >= 0")
         if self.min_dte < 0 or self.max_dte < 0:
             raise ValueError("DTE bounds must be non-negative")
+        if self.min_dte > self.max_dte:
+            raise ValueError("min_dte must not exceed max_dte")
         if self.min_option_volume < 0 or self.min_option_oi < 0:
             raise ValueError("Option liquidity thresholds must be non-negative")
