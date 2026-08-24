@@ -85,18 +85,40 @@ CANDIDATE_POOL = [
 # Data
 # ---------------------------------------------------------------------------
 
-def fetch_history(tickers: list[str], as_of: date, lookback_sessions: int) -> dict:
+def sessions_to_calendar_days(sessions: int) -> int:
+    """
+    Calendar days needed to contain `sessions` trading days, with slack for
+    holidays. ~5 sessions per 7 calendar days, plus a 45-day cushion.
+
+    This is the arithmetic that broke the first version: the window was sized
+    from RS_LOOKBACK alone (167 days, ~119 sessions) while MIN_HISTORY demanded
+    200, so every ticker including the benchmark was silently dropped for short
+    history and the ranker reported "no SPY data".
+    """
+    return int(sessions * 7 / 5) + 45
+
+
+def fetch_history(tickers: list[str], as_of: date,
+                  lookback_sessions: int, verbose: bool = False) -> dict:
     """
     Daily bars ending on or before `as_of`.
 
     Everything downstream slices to `as_of`, so a backtest run for a past date
     never sees a bar that had not printed yet. That is the whole point — a
     universe built with future data would be worthless.
+
+    The window must cover the LONGEST requirement, not just the RS lookback:
+    the 200-SMA gate needs MIN_HISTORY sessions of its own.
     """
     import yfinance as yf
-    start = as_of - timedelta(days=int(lookback_sessions * 1.7) + 60)
+    need_sessions = max(MIN_HISTORY, lookback_sessions + 1)
+    start = as_of - timedelta(days=sessions_to_calendar_days(need_sessions))
     end = as_of + timedelta(days=1)
-    out = {}
+    if verbose:
+        print(f"  window: {start} -> {as_of}  "
+              f"(need {need_sessions} sessions)")
+
+    out, stats = {}, {"missing": [], "short": [], "ok": 0}
     try:
         raw = yf.download(tickers, start=start, end=end, interval="1d",
                           progress=False, group_by="ticker", auto_adjust=False)
@@ -105,20 +127,41 @@ def fetch_history(tickers: list[str], as_of: date, lookback_sessions: int) -> di
         return out
 
     if raw is None or raw.empty:
+        print("  ! download returned nothing at all — check connectivity",
+              file=sys.stderr)
         return out
 
     for t in tickers:
         try:
-            df = raw[t].copy() if isinstance(raw.columns, pd.MultiIndex) else raw.copy()
+            if isinstance(raw.columns, pd.MultiIndex):
+                if t not in raw.columns.get_level_values(0):
+                    stats["missing"].append(t)
+                    continue
+                df = raw[t].copy()
+            else:
+                df = raw.copy()
             df = df.dropna(subset=["Close", "Volume"])
             if df.empty:
+                stats["missing"].append(t)
                 continue
             df.index = pd.to_datetime(df.index).tz_localize(None).normalize()
             df = df[df.index <= pd.Timestamp(as_of)]
-            if len(df) >= MIN_HISTORY:
-                out[t] = df
+            if len(df) < need_sessions:
+                stats["short"].append((t, len(df)))
+                continue
+            out[t] = df
+            stats["ok"] += 1
         except Exception:
-            continue
+            stats["missing"].append(t)
+
+    if verbose or not out:
+        print(f"  fetched: {stats['ok']} usable, "
+              f"{len(stats['short'])} too short, {len(stats['missing'])} no data")
+        if stats["short"]:
+            worst = sorted(stats["short"], key=lambda x: x[1])[:5]
+            detail = ", ".join(f"{t}={n}" for t, n in worst)
+            print(f"  short-history examples (sessions returned): {detail}")
+            print(f"  -> the fetch window is not covering {need_sessions} sessions")
     return out
 
 
@@ -179,10 +222,14 @@ def select_universe(as_of: date | None = None, top_n: int = TOP_N,
     """
     as_of = as_of or date.today()
     pool = pool or CANDIDATE_POOL
-    bars = fetch_history(pool + [BENCHMARK], as_of, RS_LOOKBACK)
+    bars = fetch_history(pool + [BENCHMARK], as_of, RS_LOOKBACK,
+                         verbose=verbose)
     bench = bars.get(BENCHMARK)
     if bench is None:
-        print(f"  ! no {BENCHMARK} data — cannot rank", file=sys.stderr)
+        print(f"\n  ! no {BENCHMARK} data — cannot rank.", file=sys.stderr)
+        print("    Every candidate is scored RELATIVE to the benchmark, so "
+              "without it\n    nothing can be ranked. See the fetch counts "
+              "above for the cause.", file=sys.stderr)
         return []
 
     rows = []
@@ -272,7 +319,7 @@ def selftest() -> int:
     fake = {"STRONG": strong, "MID": make(0.0008), "WEAK": weak, BENCHMARK: bench}
     global fetch_history
     real = fetch_history
-    fetch_history = lambda t, a, l: fake
+    fetch_history = lambda t, a, l, verbose=False: fake
     try:
         picked = select_universe(as_of=date(2025, 2, 1), top_n=2, pool=pool)
         print(f"\nranked top 2   : {picked}  (expect ['STRONG', 'MID'])")
@@ -283,6 +330,18 @@ def selftest() -> int:
         assert keep_weak[-1] == "WEAK"
     finally:
         fetch_history = real
+
+    # The bug the first version shipped with: the fetch window was sized from
+    # RS_LOOKBACK only and could not contain MIN_HISTORY sessions, so every
+    # ticker was dropped for short history. Assert the window is big enough.
+    need = max(MIN_HISTORY, RS_LOOKBACK + 1)
+    days = sessions_to_calendar_days(need)
+    approx_sessions = int(days * 5 / 7)
+    print(f"\nfetch window   : {days} calendar days ~ {approx_sessions} sessions")
+    print(f"required       : {need} sessions")
+    assert approx_sessions >= need, (
+        f"fetch window holds ~{approx_sessions} sessions but {need} are required")
+    print("window covers requirement: OK")
 
     print("\nAll self-tests passed.")
     return 0
