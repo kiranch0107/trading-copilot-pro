@@ -255,12 +255,72 @@ def _save(path: Path, data: list) -> None:
 # ─────────────────────────────────────────────
 st.sidebar.header("⚙️ Scan Settings")
 
-WATCHLIST = ["NVDA","META","MSFT"]
+# ── Watchlist source ────────────────────────────────────────────────
+# STATIC is the frozen baseline: the config selected by the Aug 2026 sweep.
+# It is kept as the default because it is the best-DEFINED hypothesis tested,
+# not because it is profitable — the 591-trade out-of-sample validation says
+# it is not (-0.014 R, PF 0.98).
+#
+# DYNAMIC ranks a broad candidate pool by relative strength as of today. That
+# removes survivorship bias from the universe (NVDA/META/MSFT are on the
+# static list BECAUSE they already went up), but it changes only WHICH stocks
+# get scanned — the entry logic is untouched and still has to earn its keep.
+STATIC_WATCHLIST = ["NVDA","META","MSFT"]
+
+
+@st.cache_data(ttl=21600, show_spinner="Ranking universe by relative strength...")
+def _fetch_dynamic_universe(as_of_key: str) -> tuple[list, str]:
+    """
+    Returns (tickers, status). Cached for 6h and keyed by date so the 67-ticker
+    download runs at most a couple of times a day.
+
+    NOTE: universe.py calls yf.download directly and does NOT go through this
+    module's RateLimiter. Ranking pulls ~67 symbols in one batch, so run it
+    sparingly — the cache is what keeps it from competing with the scanner for
+    Yahoo's unofficial rate budget.
+
+    Any failure returns the static list. A universe fetch must never take the
+    app down.
+    """
+    try:
+        import universe as _u
+    except Exception as e:
+        return STATIC_WATCHLIST, f"universe.py unavailable ({e}) — using static list"
+    try:
+        picked = _u.select_universe()
+        if not picked:
+            return STATIC_WATCHLIST, "nothing passed the gates — using static list"
+        return picked, f"ranked {len(picked)} names as of {as_of_key}"
+    except Exception as e:
+        logger.exception("Dynamic universe failed: %s", e)
+        return STATIC_WATCHLIST, f"ranking failed ({e}) — using static list"
+
+
+USE_DYNAMIC = st.sidebar.checkbox(
+    "Dynamic universe (RS-ranked)", value=False,
+    help="OFF: scan the fixed NVDA/META/MSFT baseline. ON: scan the top names "
+         "by 63-session relative strength vs SPY, sector-capped, from "
+         "universe.py. Changing this mid-test makes the sample harder to "
+         "interpret — finish the current trade run before switching.")
+
+if USE_DYNAMIC:
+    _uni, _uni_status = _fetch_dynamic_universe(
+        datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d"))
+    WATCHLIST = _uni
+    if _uni is STATIC_WATCHLIST:
+        st.sidebar.warning(f"Dynamic universe: {_uni_status}")
+    else:
+        st.sidebar.caption(f"Dynamic universe — {_uni_status}")
+else:
+    WATCHLIST = STATIC_WATCHLIST
 
 # FIX #11: FAST_MODE exposed as sidebar toggle
 FAST_MODE  = st.sidebar.checkbox("Fast Mode (top 5 only)", value=True)
 SCAN_LIST  = WATCHLIST[:5] if FAST_MODE else WATCHLIST
 st.sidebar.caption(f"Scanning: {', '.join(SCAN_LIST)}")
+if USE_DYNAMIC and FAST_MODE and len(WATCHLIST) > 5:
+    st.sidebar.caption(f"Fast Mode is trimming {len(WATCHLIST) - 5} name(s) "
+                       f"off the bottom of the ranking.")
 st.sidebar.divider()
 
 ADX_MIN       = st.sidebar.number_input("ADX minimum",              value=35,   min_value=1,    max_value=100)
