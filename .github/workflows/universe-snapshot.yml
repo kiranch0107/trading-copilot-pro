@@ -1,0 +1,118 @@
+name: Weekly universe snapshot
+
+# Runs Monday pre-market and commits the snapshot back to the repo.
+#
+# TIMING: GitHub cron is UTC and does NOT follow US daylight saving, so a
+# fixed UTC time drifts an hour against ET twice a year. 12:30 UTC lands at
+# 08:30 ET in summer and 07:30 ET in winter — both comfortably before the
+# 09:30 open, so a single cron works year round without a DST dance.
+#
+# Running pre-market is what makes the snapshot reproducible: no bar has
+# printed for today yet, so the ranking uses Friday's settled close. A run
+# during market hours would rank partly on a live, still-forming bar and two
+# runs on the same day would disagree.
+
+on:
+  schedule:
+    - cron: "30 12 * * 1"     # Mondays, 12:30 UTC
+  workflow_dispatch:           # manual trigger for testing
+
+permissions:
+  contents: write              # needed to commit the snapshot back
+
+concurrency:
+  group: universe-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas
+
+      - name: Guard — refuse to run during market hours
+        # Belt and braces. If the scheduler is delayed or someone triggers
+        # this manually mid-session, the snapshot would be taken on a partial
+        # bar and would not be reproducible. Better to skip than to record a
+        # number that quietly disagrees with itself.
+        id: guard
+        run: |
+          python - <<'PY'
+          import os, sys
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          now = datetime.now(ZoneInfo("America/New_York"))
+          open_min  = 9 * 60 + 30
+          close_min = 16 * 60
+          cur = now.hour * 60 + now.minute
+          in_session = now.weekday() < 5 and open_min <= cur <= close_min
+          print(f"ET now: {now:%Y-%m-%d %H:%M %Z} | in session: {in_session}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"skip={'true' if in_session else 'false'}\n")
+          if in_session:
+              print("::warning::Market is open — skipping to avoid a partial bar.")
+          PY
+
+      - name: Take snapshot
+        if: steps.guard.outputs.skip != 'true'
+        id: snap
+        run: |
+          set -o pipefail
+          python churn_tracker.py 2>&1 | tee snapshot_output.txt
+          echo "---"
+          python churn_tracker.py --history 2>&1 | tee -a snapshot_output.txt
+        continue-on-error: true    # an existing snapshot exits 1; not a failure
+
+      - name: Commit snapshot
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -z "$(git status --porcelain universe_history/)" ]; then
+            echo "No new snapshot to commit."
+            exit 0
+          fi
+          git add universe_history/
+          git commit -m "Universe snapshot $(date -u +%Y-%m-%d)"
+          # Rebase in case another job pushed since checkout.
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Universe snapshot"
+            echo ""
+            if [ "${{ steps.guard.outputs.skip }}" = "true" ]; then
+              echo "Skipped — market was open, snapshot would have used a partial bar."
+            elif [ -f snapshot_output.txt ]; then
+              echo '```'
+              cat snapshot_output.txt
+              echo '```'
+            else
+              echo "No output produced."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-output
+          path: snapshot_output.txt
+          if-no-files-found: ignore
+          retention-days: 90
