@@ -108,5 +108,15 @@
     "notes": "",
     "date": "2026-08-24",
     "logged": "2026-08-24 13:14 ET"
+  },
+  {
+    "id": "SKIP_META_1787591706",
+    "ticker": "META",
+    "trend": "Bearish",
+    "price": 549.9,
+    "reason": "Contract too expensive for my risk rule",
+    "notes": "9/18 at $16.1 on 8/24",
+    "date": "2026-08-24",
+    "logged": "2026-08-24 13:15 ET"
   }
 ]
