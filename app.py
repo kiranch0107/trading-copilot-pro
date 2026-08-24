@@ -9,6 +9,7 @@ import os
 import json
 import logging
 import requests
+import math
 import time
 import threading
 from datetime import datetime
@@ -476,6 +477,7 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
         "contracts":        float(contracts),
         "entry_premium":    round(float(entry_premium), 2),
         "rules":            rules,
+        "entry_features":   capture_entry_features(ticker),
         "notes":            notes,
         "opened":           datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d %H:%M ET"),
         "opened_epoch":     now_epoch,
@@ -486,6 +488,81 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
     positions.append(pos)
     save_positions(positions)
     return pos
+
+
+def capture_entry_features(ticker: str) -> dict:
+    """
+    Snapshot indicator state at the moment a position is opened.
+
+    COLLECT ONLY. These fields exist so that, once there are enough trades to
+    support it, you can ask which conditions the winners shared. They are NOT
+    read by any filter and do not affect whether a signal fires.
+
+    Deliberately not analysed yet: slicing 30 trades by ADX bucket will always
+    produce a bucket that looks good, because that is what random data does.
+    Wait for a few hundred, and write down the question before looking.
+
+    Returns {} on any failure — a missing snapshot must never block a trade.
+    """
+    try:
+        df = get_data(ticker)
+        if df is None or df.empty:
+            return {}
+        df = compute(df)
+        df, _ = drop_partial_bar(df)
+        if df.empty:
+            return {}
+        last = df.iloc[-1]
+
+        def _num(v):
+            try:
+                v = float(v)
+                return round(v, 4) if math.isfinite(v) else None
+            except (TypeError, ValueError):
+                return None
+
+        feats = {
+            "adx":        _num(last.get("ADX")),
+            "rsi":        _num(last.get("RSI")),
+            "atr":        _num(last.get("ATR")),
+            "close":      _num(last.get("Close")),
+            "ema20":      _num(last.get("EMA20")),
+            "ema50":      _num(last.get("EMA50")),
+            "volume":     _num(last.get("Volume")),
+            "vol_avg20":  _num(last.get("VOL_AVG20")),
+        }
+
+        # Relative volume — today's volume against its own 20-day average.
+        if feats["volume"] and feats["vol_avg20"]:
+            feats["rvol"] = round(feats["volume"] / feats["vol_avg20"], 3)
+        else:
+            feats["rvol"] = None
+
+        # Price extension above EMA20, expressed in ATR — how stretched the
+        # entry was. A large value means chasing.
+        if feats["close"] and feats["ema20"] and feats["atr"]:
+            feats["ext_atr"] = round((feats["close"] - feats["ema20"]) / feats["atr"], 3)
+        else:
+            feats["ext_atr"] = None
+
+        # Relative strength vs SPY over 20 sessions. Recorded, not filtered on.
+        try:
+            spy = get_data("SPY")
+            if spy is not None and len(spy) > 21 and len(df) > 21:
+                t_ret = float(df["Close"].iloc[-1]) / float(df["Close"].iloc[-21]) - 1
+                s_ret = float(spy["Close"].iloc[-1]) / float(spy["Close"].iloc[-21]) - 1
+                feats["rs_20d"] = round(t_ret - s_ret, 4)
+            else:
+                feats["rs_20d"] = None
+        except Exception:
+            feats["rs_20d"] = None
+
+        feats["regime"] = (get_spy_regime() or {}).get("regime")
+        feats["captured"] = datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d %H:%M ET")
+        return feats
+    except Exception as e:
+        logger.warning("Feature capture failed for %s (%s)", ticker, e)
+        return {}
 
 
 def close_position(position_id: str, exit_premium: float, outcome: str,
@@ -524,6 +601,7 @@ def close_position(position_id: str, exit_premium: float, outcome: str,
             "contracts":  pos.get("contracts"),
             "pnl_usd":    round((float(exit_premium) - entry_prem) * 100
                                 * float(pos.get("contracts") or 0), 2),
+            "entry_features": pos.get("entry_features", {}),
             "notes":      notes or pos.get("notes", ""),
         })
         save_journal(journal)
