@@ -1,0 +1,77 @@
+{
+  "as_of": "2026-08-24",
+  "taken_at": "2026-08-24T23:40:50",
+  "tickers": [
+    "TMO",
+    "TGT",
+    "PANW",
+    "ABT",
+    "NOW",
+    "DE",
+    "MU",
+    "BAC"
+  ],
+  "passed_gates": 45,
+  "pool_size": 66,
+  "sector_mix": {
+    "Health": 2,
+    "ConsDisc": 1,
+    "Tech": 2,
+    "Industrials": 1,
+    "Semis": 1,
+    "Financials": 1
+  },
+  "rs_lookback": 63,
+  "top_n": 8,
+  "max_per_sector": 2,
+  "detail": [
+    {
+      "ticker": "TMO",
+      "rs": 37.86,
+      "price": 628.74,
+      "dollar_vol_m": 1117.1
+    },
+    {
+      "ticker": "TGT",
+      "rs": 32.87,
+      "price": 169.89,
+      "dollar_vol_m": 711.1
+    },
+    {
+      "ticker": "PANW",
+      "rs": 32.27,
+      "price": 350.9,
+      "dollar_vol_m": 2028.7
+    },
+    {
+      "ticker": "ABT",
+      "rs": 31.08,
+      "price": 116.67,
+      "dollar_vol_m": 899.3
+    },
+    {
+      "ticker": "NOW",
+      "rs": 22.99,
+      "price": 128.05,
+      "dollar_vol_m": 2434.3
+    },
+    {
+      "ticker": "DE",
+      "rs": 20.19,
+      "price": 648.64,
+      "dollar_vol_m": 755.1
+    },
+    {
+      "ticker": "MU",
+      "rs": 18.84,
+      "price": 910.43,
+      "dollar_vol_m": 33765.0
+    },
+    {
+      "ticker": "BAC",
+      "rs": 17.94,
+      "price": 62.33,
+      "dollar_vol_m": 1720.0
+    }
+  ]
+}
