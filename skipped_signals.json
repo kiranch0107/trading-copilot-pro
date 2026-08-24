@@ -98,5 +98,15 @@
     "notes": "9/18 at $8.7 on 8/10 after hours",
     "date": "2026-08-20",
     "logged": "2026-08-20 18:07 ET"
+  },
+  {
+    "id": "SKIP_LABU_1787591644",
+    "ticker": "LABU",
+    "trend": "Bullish",
+    "price": 317.2,
+    "reason": "Contract too expensive for my risk rule",
+    "notes": "",
+    "date": "2026-08-24",
+    "logged": "2026-08-24 13:14 ET"
   }
 ]
