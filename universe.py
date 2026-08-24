@@ -59,6 +59,36 @@ MIN_DOLLAR_VOLUME = 50e6   # liquidity floor: options need a real underlying
 MIN_PRICE = 20.0           # sub-$20 names have poor option chains
 MIN_HISTORY = 200          # sessions required, so the 200-SMA is meaningful
 BENCHMARK = "SPY"
+MAX_PER_SECTOR = 2         # risk control, not a performance knob — eight names
+                           # that are all healthcare are not eight independent
+                           # bets. Capping concentration is the point; do not
+                           # tune this against backtest results.
+
+# Static sector labels for the candidate pool. Static is fine here: a company's
+# sector is stable on the timescale that matters, so this introduces no
+# lookahead the way a price-derived label would.
+SECTORS = {
+    "AAPL": "Tech", "MSFT": "Tech", "GOOGL": "Tech", "AMZN": "ConsDisc",
+    "META": "Tech", "NVDA": "Semis", "AVGO": "Semis", "ORCL": "Tech",
+    "CRM": "Tech", "ADBE": "Tech", "AMD": "Semis", "QCOM": "Semis",
+    "TXN": "Semis", "INTC": "Semis", "MU": "Semis", "AMAT": "Semis",
+    "LRCX": "Semis", "KLAC": "Semis", "NOW": "Tech", "PANW": "Tech",
+    "SNPS": "Tech", "CDNS": "Tech", "INTU": "Tech", "IBM": "Tech",
+    "CSCO": "Tech",
+    "NFLX": "Comms", "DIS": "Comms", "TSLA": "ConsDisc", "HD": "ConsDisc",
+    "LOW": "ConsDisc", "NKE": "ConsDisc", "SBUX": "ConsDisc",
+    "MCD": "ConsDisc", "COST": "Staples", "TGT": "ConsDisc",
+    "WMT": "Staples", "PG": "Staples", "KO": "Staples", "PEP": "Staples",
+    "JPM": "Financials", "BAC": "Financials", "GS": "Financials",
+    "MS": "Financials", "V": "Financials", "MA": "Financials",
+    "AXP": "Financials", "BLK": "Financials",
+    "CAT": "Industrials", "DE": "Industrials", "HON": "Industrials",
+    "GE": "Industrials", "BA": "Industrials", "UNP": "Industrials",
+    "UPS": "Industrials",
+    "UNH": "Health", "JNJ": "Health", "LLY": "Health", "ABBV": "Health",
+    "MRK": "Health", "PFE": "Health", "TMO": "Health", "ABT": "Health",
+    "XOM": "Energy", "CVX": "Energy", "COP": "Energy", "SLB": "Energy",
+}
 
 # The candidate pool. This is the one judgement call that cannot be fully
 # mechanised without a survivorship-free historical index membership feed
@@ -211,6 +241,7 @@ def score_ticker(df: pd.DataFrame, bench: pd.DataFrame,
 def select_universe(as_of: date | None = None, top_n: int = TOP_N,
                     pool: list[str] | None = None,
                     require_uptrend: bool = True,
+                    max_per_sector: int = MAX_PER_SECTOR,
                     verbose: bool = False) -> list[str]:
     """
     Return the top `top_n` tickers by relative strength as of `as_of`.
@@ -245,27 +276,70 @@ def select_universe(as_of: date | None = None, top_n: int = TOP_N,
         rows.append({"ticker": t, **sc})
 
     rows.sort(key=lambda r: r["rs"], reverse=True)
+    picked = apply_sector_cap(rows, top_n, max_per_sector)
     if verbose:
-        _print_table(rows, as_of, top_n)
-    return [r["ticker"] for r in rows[:top_n]]
+        _print_table(rows, as_of, top_n, picked)
+    return [r["ticker"] for r in picked]
 
 
-def _print_table(rows: list[dict], as_of: date, top_n: int) -> None:
-    W = 74
+def apply_sector_cap(rows: list[dict], top_n: int,
+                     max_per_sector: int = MAX_PER_SECTOR) -> list[dict]:
+    """
+    Walk the RS ranking in order, skipping any name whose sector is already
+    full. Ranking still decides WHO gets in; the cap only decides how many of
+    a kind.
+
+    If the cap cannot fill top_n (a small pool, or most sectors exhausted),
+    the shortfall is returned as-is rather than backfilled past the cap — a
+    smaller, genuinely diversified universe beats a full but concentrated one.
+    """
+    if max_per_sector <= 0:
+        return rows[:top_n]
+    counts, picked = {}, []
+    for r in rows:
+        sec = SECTORS.get(r["ticker"], "Other")
+        if counts.get(sec, 0) >= max_per_sector:
+            continue
+        counts[sec] = counts.get(sec, 0) + 1
+        picked.append({**r, "sector": sec})
+        if len(picked) >= top_n:
+            break
+    return picked
+
+
+def _print_table(rows: list[dict], as_of: date, top_n: int,
+                 picked: list[dict]) -> None:
+    W = 82
+    chosen = {r["ticker"] for r in picked}
     print("=" * W)
     print(f"UNIVERSE SELECTION — as of {as_of}")
     print("=" * W)
     print(f"Ranked by {RS_LOOKBACK}-session return vs {BENCHMARK}. "
           f"Liquidity floor ${MIN_DOLLAR_VOLUME/1e6:.0f}M/day.")
+    print(f"Sector cap: max {MAX_PER_SECTOR} per sector.")
     print(f"{len(rows)} of {len(CANDIDATE_POOL)} candidates passed the gates.\n")
-    print(f"  {'#':>3} {'Ticker':<8}{'Price':>9}{'Ret%':>8}{'RS%':>8}{'$Vol M':>9}  Trend")
-    for i, r in enumerate(rows[:max(top_n * 2, 15)], 1):
-        mark = "*" if i <= top_n else " "
-        trend = "above 200SMA" if r["above_200sma"] else "BELOW 200SMA"
-        print(f"  {i:>3}{mark}{r['ticker']:<8}{r['price']:>9.2f}{r['return']:>8.2f}"
-              f"{r['rs']:>8.2f}{r['dollar_vol_m']:>9.1f}  {trend}")
-    print(f"\n  * = selected ({top_n} names). Benchmark return over the same "
-          f"window: {rows[0]['bench_return'] if rows else 0:.2f}%")
+    print(f"  {'#':>3} {'Ticker':<8}{'Sector':<12}{'Price':>9}{'Ret%':>8}"
+          f"{'RS%':>8}{'$Vol M':>9}  Note")
+    counts = {}
+    for i, r in enumerate(rows[:max(top_n * 3, 20)], 1):
+        sec = SECTORS.get(r["ticker"], "Other")
+        if r["ticker"] in chosen:
+            mark, note = "*", ""
+            counts[sec] = counts.get(sec, 0) + 1
+        elif counts.get(sec, 0) >= MAX_PER_SECTOR:
+            mark, note = " ", f"skipped — {sec} full"
+        else:
+            mark, note = " ", "below cut"
+        print(f"  {i:>3}{mark}{r['ticker']:<8}{sec:<12}{r['price']:>9.2f}"
+              f"{r['return']:>8.2f}{r['rs']:>8.2f}{r['dollar_vol_m']:>9.1f}  {note}")
+
+    print(f"\n  * = selected ({len(picked)} of {top_n} requested). "
+          f"Benchmark over the same window: "
+          f"{rows[0]['bench_return'] if rows else 0:.2f}%")
+    by_sec = {}
+    for r in picked:
+        by_sec[r.get("sector", "Other")] = by_sec.get(r.get("sector", "Other"), 0) + 1
+    print(f"  Sector mix: " + ", ".join(f"{k} {v}" for k, v in sorted(by_sec.items())))
     print("\n" + "-" * W)
     print("This picks the universe. It does not make the entry signal work —")
     print("that is a separate question the out-of-sample test answered no to.")
@@ -321,11 +395,14 @@ def selftest() -> int:
     real = fetch_history
     fetch_history = lambda t, a, l, verbose=False: fake
     try:
-        picked = select_universe(as_of=date(2025, 2, 1), top_n=2, pool=pool)
+        # cap off here: these synthetic tickers all fall in "Other", so the
+        # sector cap would clamp them to 2 and mask the ranking check.
+        picked = select_universe(as_of=date(2025, 2, 1), top_n=2, pool=pool,
+                                 max_per_sector=0)
         print(f"\nranked top 2   : {picked}  (expect ['STRONG', 'MID'])")
         assert picked == ["STRONG", "MID"], picked
         keep_weak = select_universe(as_of=date(2025, 2, 1), top_n=3, pool=pool,
-                                    require_uptrend=False)
+                                    require_uptrend=False, max_per_sector=0)
         print(f"uptrend off    : {keep_weak}  (WEAK now included, ranked last)")
         assert keep_weak[-1] == "WEAK"
     finally:
@@ -343,6 +420,25 @@ def selftest() -> int:
         f"fetch window holds ~{approx_sessions} sessions but {need} are required")
     print("window covers requirement: OK")
 
+    # Sector cap: three Semis ranked 1-3 must not all be selected
+    fake_rows = [
+        {"ticker": "NVDA", "rs": 40.0}, {"ticker": "AMD", "rs": 35.0},
+        {"ticker": "MU", "rs": 30.0},   {"ticker": "JPM", "rs": 25.0},
+        {"ticker": "TMO", "rs": 20.0},  {"ticker": "ABT", "rs": 15.0},
+    ]
+    capped = [r["ticker"] for r in apply_sector_cap(fake_rows, top_n=4,
+                                                    max_per_sector=2)]
+    print(f"\nsector cap     : {capped}")
+    print("                 (MU dropped — Semis already had NVDA and AMD)")
+    assert capped == ["NVDA", "AMD", "JPM", "TMO"], capped
+    uncapped = [r["ticker"] for r in apply_sector_cap(fake_rows, top_n=4,
+                                                      max_per_sector=0)]
+    assert uncapped == ["NVDA", "AMD", "MU", "JPM"], uncapped
+    print(f"cap disabled   : {uncapped}  (pure RS order)")
+    assert all(t in SECTORS for t in CANDIDATE_POOL), \
+        [t for t in CANDIDATE_POOL if t not in SECTORS]
+    print(f"sector coverage: all {len(CANDIDATE_POOL)} candidates labelled")
+
     print("\nAll self-tests passed.")
     return 0
 
@@ -356,6 +452,8 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--as-of", default=None, help="YYYY-MM-DD (default: today)")
     ap.add_argument("--top", type=int, default=TOP_N)
+    ap.add_argument("--max-per-sector", type=int, default=MAX_PER_SECTOR,
+                    help=f"sector concentration cap (default {MAX_PER_SECTOR}, 0=off)")
     ap.add_argument("--no-uptrend-filter", action="store_true",
                     help="keep names below their 200-SMA")
     ap.add_argument("--json", default=None, help="write the selected list here")
@@ -376,6 +474,7 @@ def main() -> int:
     print(f"Fetching {len(CANDIDATE_POOL)} candidates + {BENCHMARK}...\n")
     picked = select_universe(as_of=as_of, top_n=args.top,
                              require_uptrend=not args.no_uptrend_filter,
+                             max_per_sector=args.max_per_sector,
                              verbose=True)
     if not picked:
         print("\nNothing passed the gates.")
