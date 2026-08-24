@@ -101,6 +101,8 @@ def parse_trade(j: dict) -> dict | None:
 
     return {
         "id": j.get("id", ""),
+        "trade_type": classify(entry_date, exit_date, j.get("notes", "")),
+        "features": j.get("entry_features") or {},
         "underlying": underlying,
         "is_option": is_option,
         "expiry": expiry,
@@ -115,6 +117,25 @@ def parse_trade(j: dict) -> dict | None:
         "premium_r": _f(j.get("actual_rr")),
         "notes": j.get("notes", ""),
     }
+
+
+DAY_TOKEN = re.compile(r"\bDAY\b", re.IGNORECASE)
+
+
+def classify(entry_date, exit_date, notes: str) -> str:
+    """
+    DAY or SWING.
+
+    Same-session open and close is hard evidence and wins over anything in the
+    notes — a position that opened and closed on one date was a day trade
+    whatever the note says. Otherwise the DAY token in the notes decides.
+    Default is SWING, matching the convention that only day trades get marked.
+    """
+    if entry_date == exit_date:
+        return "DAY"
+    if notes and DAY_TOKEN.search(notes):
+        return "DAY"
+    return "SWING"
 
 
 def _f(v):
@@ -185,6 +206,11 @@ def measure(trade: dict, df: pd.DataFrame) -> dict | None:
     if x_pos < e_pos:
         x_pos = e_pos
 
+    # A same-session trade cannot be measured on daily bars: entry and exit
+    # resolve to the same close, so realised move is 0 and efficiency is
+    # meaningless. Say so rather than reporting zeros as if they were results.
+    same_bar = (x_pos == e_pos)
+
     entry_px = float(df["Close"].iloc[e_pos])
     exit_px = float(df["Close"].iloc[x_pos])
     atr_entry = atr.iloc[e_pos]
@@ -226,6 +252,7 @@ def measure(trade: dict, df: pd.DataFrame) -> dict | None:
 
     return {
         **trade,
+        "daily_bar_measurable": not same_bar,
         "bars_held": x_pos - e_pos + 1,
         "entry_px": round(entry_px, 2),
         "exit_px": round(exit_px, 2),
@@ -269,36 +296,99 @@ def report(rows: list[dict]) -> None:
         print("No measurable trades. Need `date`, `closed` and a ticker on each row.")
         return
 
-    n = len(rows)
-    print(f"\nTrades measured : {n}")
-    print(f"R unit          : {ATR_STOP_MULT:g} x ATR({ATR_WINDOW}) at entry\n")
+    day = [r for r in rows if r["trade_type"] == "DAY"]
+    swing = [r for r in rows if r["trade_type"] == "SWING"]
+
+    print(f"\nTrades          : {len(rows)}  ({len(swing)} SWING, {len(day)} DAY)")
+    print(f"R unit          : {ATR_STOP_MULT:g} x ATR({ATR_WINDOW}) at entry")
+    print("\nSWING and DAY are reported separately and never pooled. They differ")
+    print("in theta exposure, gap risk and how many independent bets they")
+    print("represent, so an average across both describes neither.")
+
+    if swing:
+        _section("SWING", swing)
+    if day:
+        _day_section(day)
+
+    if swing and len(swing) < 30:
+        print()
+        print("!" * W)
+        print(f"n={len(swing)} SWING trades. Standard error on a per-trade mean is")
+        print(f"roughly {1.5/math.sqrt(len(swing)):.2f} R — wide enough to contain almost any")
+        print("conclusion. Read the numbers above as description, not as findings.")
+        print("!" * W)
+
+
+def _day_section(rows: list[dict]) -> None:
+    W = 78
+    print("\n" + "=" * W)
+    print(f"DAY TRADES ({len(rows)})")
+    print("=" * W)
+    print("NOT MEASURED. Daily bars cannot resolve an intraday entry and exit —")
+    print("both collapse to the same close, which is why realised move and exit")
+    print("efficiency would read 0.00 for every row. Those would be artifacts,")
+    print("not results, so they are omitted rather than printed.")
+    print()
+    print("Measuring these needs intraday bars. yfinance serves 1-minute data")
+    print("for the trailing 30 days and 5-minute for 60 — so it is possible, but")
+    print("only within that window. Trades older than that can no longer be")
+    print("reconstructed at all.")
+    print()
+    print(f"  {'Ticker':<8}{'Dir':<6}{'Entry':<12}{'PremR':>8}  Outcome")
+    for r in sorted(rows, key=lambda x: x["entry_date"]):
+        pr = f"{r['premium_r']:+.2f}" if r["premium_r"] is not None else "n/a"
+        print(f"  {r['underlying']:<8}{r['direction']:<6}{str(r['entry_date']):<12}"
+              f"{pr:>8}  {r['outcome']}")
+    prem = [r["premium_r"] for r in rows if r["premium_r"] is not None]
+    if prem:
+        m = mean(prem)
+        print(f"\n  Mean premium R  : {m:+.3f} over {len(prem)} trade(s)")
+        if len(prem) < 30:
+            print(f"  At n={len(prem)} this is noise. It is shown so the trades are not")
+            print("  invisible, not because it means anything yet.")
+
+
+def _section(label: str, rows: list[dict]) -> None:
+    W = 78
+    print("\n" + "=" * W)
+    print(f"{label} TRADES ({len(rows)})")
+    print("=" * W)
+
+    measurable = [r for r in rows if r.get("daily_bar_measurable", True)]
+    if len(measurable) < len(rows):
+        print(f"({len(rows) - len(measurable)} row(s) resolved to a single daily bar "
+              f"and were dropped.)\n")
+    if not measurable:
+        print("Nothing measurable on daily bars.")
+        return
 
     print(f"  {'Ticker':<8}{'Dir':<6}{'Bars':>5}{'MFE R':>8}{'MAE R':>8}"
           f"{'Real R':>8}{'Eff':>7}{'Post R':>8}  Outcome")
-    for r in sorted(rows, key=lambda x: x["entry_date"]):
+    for r in sorted(measurable, key=lambda x: x["entry_date"]):
         eff_s = f"{r['efficiency']:.2f}" if r["efficiency"] is not None else "n/a"
         post_s = f"{r['post_exit_r']:.2f}" if r["post_exit_r"] is not None else "n/a"
         print(f"  {r['underlying']:<8}{r['direction']:<6}{r['bars_held']:>5}"
               f"{r['mfe_r']:>8.2f}{r['mae_r']:>8.2f}{r['realised_r']:>8.2f}"
               f"{eff_s:>7}{post_s:>8}  {r['outcome']}")
 
-    mfe, mae = mean([r["mfe_r"] for r in rows]), mean([r["mae_r"] for r in rows])
+    mfe, mae = mean([r["mfe_r"] for r in measurable]), mean([r["mae_r"] for r in measurable])
     print("\n" + "-" * W)
     print("EDGE RATIO")
     print("-" * W)
-    print(f"  Mean MFE            : {mfe:.3f} R" if mfe is not None else "  n/a")
-    print(f"  Mean MAE            : {mae:.3f} R" if mae is not None else "  n/a")
+    if mfe is not None and mae is not None:
+        print(f"  Mean MFE            : {mfe:.3f} R")
+        print(f"  Mean MAE            : {mae:.3f} R")
     if mfe and mae and mae > 1e-9:
         ratio = mfe / mae
         print(f"  Edge ratio MFE/MAE  : {ratio:.2f}")
         print()
         if ratio > 1.15:
-            print("  Above 1.0 — favourable excursion exceeded adverse. Weak evidence")
-            print("  the entries carry directional information. At n=%d this is" % n)
-            print("  suggestive only; it is not a significance test.")
+            print("  Above 1.0 — favourable excursion exceeded adverse. Suggestive")
+            print("  that entries carry directional information. Not a significance")
+            print("  test, and not a substitute for the out-of-sample result.")
         elif ratio < 0.87:
-            print("  Below 1.0 — adverse excursion exceeded favourable. The entries")
-            print("  went the wrong way more than the right way.")
+            print("  Below 1.0 — adverse excursion exceeded favourable. Entries went")
+            print("  the wrong way more than the right way.")
         else:
             print("  Near 1.0 — favourable and adverse excursions are balanced, which")
             print("  is what a signal with no directional information looks like.")
@@ -306,24 +396,23 @@ def report(rows: list[dict]) -> None:
     print("\n" + "-" * W)
     print("EXIT QUALITY")
     print("-" * W)
-    eff = [r["efficiency"] for r in rows if r["efficiency"] is not None]
+    eff = [r["efficiency"] for r in measurable if r["efficiency"] is not None]
     if eff:
         print(f"  Mean efficiency     : {mean(eff):.2f}   (1.0 = exited at the high)")
         print(f"  Median efficiency   : {median(eff):.2f}")
         print(f"  Exits above 0.7     : {sum(1 for e in eff if e > 0.7)}/{len(eff)}")
         print(f"  Exits below 0.3     : {sum(1 for e in eff if e < 0.3)}/{len(eff)}")
-    post = [r["post_exit_r"] for r in rows if r["post_exit_r"] is not None]
+    post = [r["post_exit_r"] for r in measurable if r["post_exit_r"] is not None]
     if post:
         print(f"\n  Mean post-exit run  : {mean(post):+.2f} R in the "
               f"{POST_EXIT_SESSIONS} sessions after exit")
         print("  (How far it kept going your way AFTER you were out. Large and")
-        print("   positive means exits were early; near zero means they were timed")
-        print("   about right.)")
+        print("   positive means exits were early; near zero means about right.)")
 
     print("\n" + "-" * W)
     print("SIGNAL vs STRUCTURE")
     print("-" * W)
-    both = [r for r in rows if r["premium_r"] is not None]
+    both = [r for r in measurable if r["premium_r"] is not None]
     if both:
         good_move_bad_pnl = [r for r in both if r["realised_r"] > 0.25 and r["premium_r"] < 0]
         bad_move = [r for r in both if r["mfe_r"] < 0.5]
@@ -336,20 +425,29 @@ def report(rows: list[dict]) -> None:
     else:
         print("  No premium data on these rows — cannot separate the two.")
 
-    print("\n" + "=" * W)
-    se_note = 1.5 / math.sqrt(n)
-    print(f"At n={n}, the standard error on a per-trade mean is roughly "
-          f"{se_note:.2f} R.")
-    print("Every number above carries a confidence interval wide enough to")
-    print("contain conclusions you would not like. Read this as a description")
-    print("of what happened, not as a parameter to tune.")
-    print("=" * W)
+    feat = [r for r in measurable if r.get("features")]
+    if feat:
+        print("\n" + "-" * W)
+        print(f"ENTRY FEATURES CAPTURED — {len(feat)}/{len(measurable)} trades")
+        print("-" * W)
+        keys = ("adx", "rsi", "rvol", "ext_atr", "rs_20d")
+        for k in keys:
+            vals = [r["features"].get(k) for r in feat]
+            m = mean([v for v in vals if v is not None])
+            if m is not None:
+                print(f"  mean {k:<10}: {m:+.3f}")
+        print()
+        print("  Logged only. No breakdown by outcome is shown, and that is")
+        print(f"  deliberate: slicing {len(feat)} trades by ADX or RSI bucket will")
+        print("  always surface a bucket that looks good, because that is what")
+        print("  random data does. Revisit at a few hundred trades, with the")
+        print("  question written down before you look.")
 
 
 def write_csv(rows, path):
     if not rows:
         return
-    cols = ["underlying", "direction", "entry_date", "exit_date", "bars_held",
+    cols = ["trade_type", "underlying", "direction", "entry_date", "exit_date", "bars_held",
             "entry_px", "exit_px", "atr_entry", "mfe_r", "mae_r", "realised_r",
             "efficiency", "post_exit_r", "premium_r", "outcome"]
     pd.DataFrame([{c: r.get(c) for c in cols} for r in rows]).to_csv(path, index=False)
