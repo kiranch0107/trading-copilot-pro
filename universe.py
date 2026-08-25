@@ -354,6 +354,7 @@ def _print_table(rows: list[dict], as_of: date, top_n: int,
 HISTORY_DIR = "universe_history"
 MAX_AGE_DAYS = 14
 ENV_TOGGLE = "USE_DYNAMIC_UNIVERSE"
+DEFAULT_DYNAMIC = True     # the code default; env var overrides either way
 
 
 def dynamic_enabled() -> bool:
@@ -362,10 +363,20 @@ def dynamic_enabled() -> bool:
 
     app.py and scanner.py must never disagree about which universe is live: if
     the scanner alerts on RS leaders while the app scans the fixed baseline,
-    you get Telegram alerts for tickers the app will not show you. A single
-    environment variable makes that disagreement impossible.
+    you get Telegram alerts for tickers the app will not show you.
+
+    The DEFAULT lives here in code rather than in an env var, because the two
+    consumers run in different places (Streamlit Cloud and GitHub Actions) and
+    keeping an env var in sync across both is exactly the kind of manual step
+    that drifts. Set USE_DYNAMIC_UNIVERSE=0 to force the static baseline, or
+    =1 to force dynamic; unset means DEFAULT_DYNAMIC.
     """
-    return os.environ.get(ENV_TOGGLE, "").strip().lower() in ("1", "true", "yes", "on")
+    raw = os.environ.get(ENV_TOGGLE, "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return DEFAULT_DYNAMIC
 
 
 def latest_snapshot(history_dir: str = HISTORY_DIR) -> tuple[dict | None, str]:
@@ -562,11 +573,13 @@ def selftest() -> int:
     assert src == "fallback" and tk == fb
 
     for var, want in [("1", True), ("true", True), ("ON", True),
-                      ("0", False), ("", False)]:
+                      ("0", False), ("false", False), ("OFF", False)]:
         os.environ[ENV_TOGGLE] = var
         assert dynamic_enabled() is want, (var, want)
     os.environ.pop(ENV_TOGGLE, None)
-    print(f"env toggle     : 1/true/ON on, 0/unset off")
+    assert dynamic_enabled() is DEFAULT_DYNAMIC
+    print(f"env toggle     : 1/true/ON -> on, 0/false/OFF -> off, "
+          f"unset -> {DEFAULT_DYNAMIC}")
 
     print("\nAll self-tests passed.")
     return 0
