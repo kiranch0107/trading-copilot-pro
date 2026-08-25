@@ -121,6 +121,40 @@ def drop_partial_bar(df: pd.DataFrame,
 # The signal
 # ---------------------------------------------------------------------------
 
+def _norm_trend(v: str | None) -> str | None:
+    """
+    Normalise trend vocabulary.
+
+    app.py's get_spy_regime() emits "Bull"/"Bear"/"Neutral"/"Unknown"; other
+    callers naturally write "Bullish"/"Bearish". An earlier version of this
+    module compared raw strings, so "Bear" never matched "Bearish" and the
+    regime filter passed EVERY time — a filter that looks active and does
+    nothing is worse than no filter at all. Normalising here means a caller
+    cannot break the gate by choosing different words.
+    """
+    if not v:
+        return None
+    t = str(v).strip().lower()
+    if t.startswith("bull"):
+        return "Bullish"
+    if t.startswith("bear"):
+        return "Bearish"
+    return None
+
+
+def _check_regime(trend: str, spy_regime: dict) -> tuple[bool, str]:
+    """Counter-regime gate. Unknown/Neutral does not block — it is not a view."""
+    raw = spy_regime.get("regime", "Unknown")
+    reg = _norm_trend(raw)
+    if reg is None:
+        return True, f"Regime {raw} — no filter applied"
+    if trend == "Bullish" and reg == "Bearish":
+        return False, "Counter-regime: long setup in a bearish SPY market"
+    if trend == "Bearish" and reg == "Bullish":
+        return False, "Counter-regime: short setup in a bullish SPY market"
+    return True, f"Regime aligned: {trend} in {raw} market"
+
+
 def evaluate(df: pd.DataFrame,
              ticker: str,
              params: SignalParams = DEFAULTS,
@@ -190,22 +224,22 @@ def evaluate(df: pd.DataFrame,
     if not params.weekly_confirm:
         mtf_ok, mtf_detail = True, "Weekly confirmation disabled"
     elif weekly_trend is None:
-        mtf_ok, mtf_detail = True, "Weekly trend unavailable — not blocking"
+        # BLOCKING when unavailable, matching app.py's original behaviour. An
+        # earlier version of this module treated None as non-blocking, which
+        # silently loosened the app every time the weekly fetch failed.
+        mtf_ok, mtf_detail = False, "Weekly data unavailable"
+    elif _norm_trend(weekly_trend) == trend:
+        mtf_ok, mtf_detail = True, f"Weekly {weekly_trend} aligned"
     else:
-        mtf_ok = (weekly_trend == trend)
-        mtf_detail = f"Weekly {weekly_trend} vs daily {trend}"
+        mtf_ok = False
+        mtf_detail = f"Daily {trend} vs Weekly {weekly_trend} — misaligned"
     filters["Multi-TF Alignment"] = {"pass": mtf_ok, "detail": mtf_detail}
 
     earnings_ok, earnings_detail = earnings
     filters["Earnings Blackout"] = {"pass": earnings_ok, "detail": earnings_detail}
 
     if params.spy_regime_on and spy_regime:
-        reg = spy_regime.get("regime", "")
-        if trend == "Bullish":
-            regime_ok = reg != "Bearish"
-        else:
-            regime_ok = reg != "Bullish"
-        regime_detail = f"SPY regime {reg or 'unknown'} vs {trend} setup"
+        regime_ok, regime_detail = _check_regime(trend, spy_regime)
     else:
         regime_ok, regime_detail = True, "Regime filter disabled"
     filters["Macro Regime"] = {"pass": regime_ok, "detail": regime_detail}
@@ -365,11 +399,25 @@ def selftest() -> int:
     assert r["high_quality"] is False
     print(f"earnings blackout         : filter fails, high_quality=False")
 
-    # regime conflict
-    r = evaluate(_frame(), "TEST", spy_regime={"regime": "Bearish"},
-                 weekly_trend="Bullish")
-    assert r["filters"]["Macro Regime"]["pass"] is False
-    print(f"regime conflict           : filter fails")
+    # REGRESSION: app.py emits "Bull"/"Bear", not "Bullish"/"Bearish".
+    # Raw string comparison made the regime filter pass every time.
+    for word in ("Bear", "Bearish", "bear", "BEARISH"):
+        r = evaluate(_frame(), "TEST", spy_regime={"regime": word},
+                     weekly_trend="Bullish")
+        assert r["filters"]["Macro Regime"]["pass"] is False, word
+    print(f"regime conflict           : blocks on Bear/Bearish/bear/BEARISH")
+
+    for word in ("Neutral", "Unknown", ""):
+        r = evaluate(_frame(), "TEST", spy_regime={"regime": word},
+                     weekly_trend="Bullish")
+        assert r["filters"]["Macro Regime"]["pass"] is True, word
+    print(f"regime neutral/unknown    : does not block")
+
+    # REGRESSION: weekly unavailable must BLOCK, as app.py always did.
+    r = evaluate(_frame(), "TEST", spy_regime={"regime": "Bull"},
+                 weekly_trend=None)
+    assert r["filters"]["Multi-TF Alignment"]["pass"] is False
+    print(f"weekly unavailable        : blocks (not silently permissive)")
 
     # weekly disagreement
     r = evaluate(_frame(), "TEST", spy_regime={"regime": "Bullish"},
