@@ -110,16 +110,25 @@ def resolve_watchlist() -> list[str]:
 
 WATCHLIST = resolve_watchlist()
 
+import signal_core as sc
+
 # ── Tunables ──
+# These now come from signal_core.DEFAULTS so app.py and scanner.py cannot
+# drift again. Overriding any of them here would recreate the exact bug this
+# refactor removed, so don't — change signal_core.SignalParams instead.
+PARAMS             = sc.DEFAULTS
+
 # FIX: these had drifted from app.py, which meant Telegram alerts were firing
 # on a looser configuration than the app scanned with — ADX 25 vs 35, target
 # 3.0x vs 4.0x, R:R 2.0 vs 0.5. Two systems disagreeing about what counts as a
 # signal is worse than either being wrong, because you cannot tell which one
 # produced a given trade. Now matched to app.py's frozen baseline.
-ADX_MIN            = 35     # was 25 — matches app.py
-ATR_STOP_MULT      = 1.0
-ATR_TGT_MULT       = 4.0    # was 3.0 — matches app.py
-MIN_RR             = 0.5    # was 2.0 — matches app.py
+ADX_MIN            = PARAMS.adx_min
+ATR_STOP_MULT      = PARAMS.atr_stop_mult
+ATR_TGT_MULT       = PARAMS.atr_tgt_mult
+MIN_RR             = PARAMS.min_rr
+EARNINGS_BLACKOUT_DAYS = 3   # matches app.py sidebar default
+POST_EARNINGS_DAYS     = 1   # matches app.py sidebar default
 ALERT_COOLDOWN_HRS = 4      # per ticker AND direction
 STATE_FILE         = Path("scanner_state.json")
 
@@ -146,7 +155,15 @@ MIN_BARS_AFTER_WARMUP = 40
 
 # Politeness gap between Yahoo calls. 14 tickers hammered back-to-back is a
 # meaningful share of the same rate limit the options tooling needs.
-FETCH_GAP_SEC = 0.6     # was 0.4 — a touch more spacing per ticker
+FETCH_GAP_SEC = 1.2     # was 0.6. The shared-signal refactor added the weekly,
+                        # earnings and regime fetches the scanner previously
+                        # skipped, taking a scan from ~1 call per ticker to ~3
+                        # plus one SPY call — roughly 3x the Yahoo traffic.
+                        # At 8 tickers that is ~25 calls; 1.2s spacing spreads
+                        # them over ~30s, which is nothing against the job's
+                        # timeout and cheap insurance against a limiter trip.
+                        # Rate limiting costs a whole scan cycle; 15 extra
+                        # seconds costs nothing.
 
 # Retry/backoff for Yahoo calls. Every OTHER Yahoo-calling function across this
 # project (the app's get_data, its options engine, exit_monitor.py) already
@@ -428,98 +445,131 @@ def suggest_option(ticker: str, price: float, trend: str,
 # ══════════════════════════════════════════════════════════════════
 # ANALYSIS
 # ══════════════════════════════════════════════════════════════════
-def analyze(df: pd.DataFrame, ticker: str) -> dict | None:
+def get_weekly_trend(ticker: str) -> str | None:
+    """
+    Weekly-timeframe direction, for the multi-timeframe filter.
+
+    app.py has always applied this; the scanner never did, which is one of the
+    four gates the scanner was missing. Returns None on any failure — the
+    shared core treats None as non-blocking rather than guessing.
+    """
+    try:
+        time.sleep(FETCH_GAP_SEC)
+        wdf = yf.download(ticker, period="2y", interval="1wk",
+                          progress=False, auto_adjust=False)
+        if wdf is None or wdf.empty or len(wdf) < 30:
+            return None
+        if isinstance(wdf.columns, pd.MultiIndex):
+            wdf.columns = wdf.columns.get_level_values(0)
+        close = wdf["Close"]
+        ema20 = close.ewm(span=20, adjust=False).mean()
+        price_w, ema_w = float(close.iloc[-1]), float(ema20.iloc[-1])
+        return "Bullish" if price_w > ema_w else "Bearish"
+    except Exception as e:
+        logger.debug("Weekly trend unavailable for %s (%s)", ticker, e)
+        return None
+
+
+def check_earnings_blackout(ticker: str) -> tuple[bool, str]:
+    """
+    (ok, detail). False when earnings fall inside the blackout window either
+    side of today. Fails OPEN — an unavailable calendar must not silence every
+    signal, so an error returns ok=True with the reason stated.
+    """
+    try:
+        time.sleep(FETCH_GAP_SEC)
+        cal = yf.Ticker(ticker).calendar
+        dates = None
+        if isinstance(cal, dict):
+            dates = cal.get("Earnings Date")
+        elif cal is not None and hasattr(cal, "empty") and not cal.empty:
+            if "Earnings Date" in cal.index:
+                dates = cal.loc["Earnings Date"].tolist()
+        if not dates:
+            return True, "No earnings date available"
+        if not isinstance(dates, (list, tuple)):
+            dates = [dates]
+        today = datetime.now().date()
+        for d in dates:
+            try:
+                ed = pd.Timestamp(d).date()
+            except Exception:
+                continue
+            delta = (ed - today).days
+            if -POST_EARNINGS_DAYS <= delta <= EARNINGS_BLACKOUT_DAYS:
+                return False, f"Earnings {ed} ({delta:+d}d) inside blackout"
+        return True, "Outside earnings blackout"
+    except Exception as e:
+        logger.debug("Earnings check failed for %s (%s)", ticker, e)
+        return True, f"Earnings check unavailable ({e})"
+
+
+def get_spy_regime() -> dict | None:
+    """SPY vs its 200-SMA — the macro regime gate app.py applies."""
+    try:
+        time.sleep(FETCH_GAP_SEC)
+        spy = yf.download("SPY", period="2y", interval="1d",
+                          progress=False, auto_adjust=False)
+        if spy is None or spy.empty or len(spy) < 200:
+            return None
+        if isinstance(spy.columns, pd.MultiIndex):
+            spy.columns = spy.columns.get_level_values(0)
+        close = spy["Close"]
+        price = float(close.iloc[-1])
+        sma200 = float(close.tail(200).mean())
+        return {"regime": "Bullish" if price > sma200 else "Bearish",
+                "price": round(price, 2), "sma200": round(sma200, 2)}
+    except Exception as e:
+        logger.warning("SPY regime unavailable (%s)", e)
+        return None
+
+
+def analyze(df: pd.DataFrame, ticker: str,
+            spy_regime: dict | None = None) -> dict | None:
+    """
+    Thin adapter over signal_core.evaluate().
+
+    THIS USED TO BE A SECOND IMPLEMENTATION. It applied four gates — trend
+    stack, MACD, ADX, R:R — while app.py applied those plus volume, weekly
+    alignment, earnings blackout and macro regime. The scanner was structurally
+    looser, so on 2026-08-25 it alerted on TGT, ABT and TMO while the app
+    rejected all three. Syncing the CONSTANTS did not help, because the LOGIC
+    was duplicated.
+
+    Now there is one implementation and this function only translates its
+    output into the shape send_alert() expects. Returns None when no tradeable
+    signal fires, matching the previous contract.
+    """
     if len(df) < MIN_BARS_AFTER_WARMUP:
         logger.info("%s — only %d usable bars after warm-up; skipping.",
                     ticker, len(df))
         return None
 
-    latest = df.iloc[-1]
-    price  = float(latest["Close"])
-    ema20  = float(latest["EMA20"])
-    ema50  = float(latest["EMA50"])
-    rsi    = float(latest["RSI"])
-    macd   = float(latest["MACD"])
-    signal = float(latest["Signal"])
-    atr    = float(latest["ATR"])
-    adx    = float(latest["ADX"])
-
-    if price > ema20 > ema50 and macd > signal:
-        trend = "Bullish"
-    elif price < ema20 < ema50 and macd < signal:
-        trend = "Bearish"
-    else:
+    r = sc.evaluate(
+        df, ticker, PARAMS,
+        weekly_trend=get_weekly_trend(ticker) if PARAMS.weekly_confirm else None,
+        earnings=check_earnings_blackout(ticker),
+        spy_regime=spy_regime,
+    )
+    if r["blocked"]:
+        logger.debug("%s — no signal (%s)", ticker, r.get("block_reason"))
         return None
 
-    # FIX 1: direction-aware. The old rule demanded RSI>60 for shorts too,
-    # which is near-impossible in a downtrend, so shorts never fired.
-    if trend == "Bullish":
-        strength = "Strong" if (rsi > 60 and macd > signal) else "Normal"
-    else:
-        strength = "Strong" if (rsi < 40 and macd < signal) else "Normal"
-
-    if adx < ADX_MIN:
+    # Alerts fire on the high-quality tier only, exactly as app.py defines it.
+    if not r["high_quality"]:
+        logger.debug("%s — signal but not high-quality (rr %.2f, %s, "
+                     "filters %d/%d)", ticker, r["rr"], r["strength"],
+                     r["filters_pass"], r["filters_total"])
         return None
 
-    # FIX 2: single reference point. Entry, stop and target all anchor to the
-    # current price, so they are internally coherent. Structure informs the
-    # stop; the resistance/support cap only applies when the level is genuinely
-    # beyond the entry, never behind it.
-    swing_low_10  = float(df["Low"].tail(10).min())
-    swing_high_10 = float(df["High"].tail(10).max())
-    entry = round(price, 2)
+    return {
+        "ticker": ticker, "trend": r["trend"], "strength": r["strength"],
+        "price": r["price"], "entry": r["entry"], "stop": r["stop"],
+        "target": r["target"], "rr": r["rr"], "rsi": r["rsi"],
+        "adx": r["adx"], "atr": r["atr"],
+        "filters_pass": r["filters_pass"], "filters_total": r["filters_total"],
+    }
 
-    if trend == "Bullish":
-        atr_stop   = price - atr * ATR_STOP_MULT
-        structural = swing_low_10 - atr * 0.10
-        stop = max(structural, atr_stop) if structural < price else atr_stop
-        stop = round(min(stop, entry - 0.01), 2)
-
-        raw_target = price + atr * ATR_TGT_MULT
-        resistance = float(df["High"].tail(20).max())
-        target = round(min(raw_target, resistance * 0.995), 2) \
-            if resistance >= entry + atr else round(raw_target, 2)
-        target = round(max(target, entry + 0.02), 2)
-    else:
-        atr_stop   = price + atr * ATR_STOP_MULT
-        structural = swing_high_10 + atr * 0.10
-        stop = min(structural, atr_stop) if structural > price else atr_stop
-        stop = round(max(stop, entry + 0.01), 2)
-
-        raw_target = price - atr * ATR_TGT_MULT
-        support    = float(df["Low"].tail(20).min())
-        target = round(max(raw_target, support * 1.005), 2) \
-            if support <= entry - atr else round(raw_target, 2)
-        target = round(min(target, entry - 0.02), 2)
-
-    # FIX 5: risk gate relative to price, which also removes the
-    # ZeroDivisionError path entirely.
-    risk = abs(entry - stop)
-    if risk < max(0.05, price * 0.003):
-        return None
-
-    rr = round(abs(target - entry) / risk, 2)
-
-    # Sanity: with a single reference this cannot invert, but assert it rather
-    # than trusting abs() to paper over a future regression.
-    if (trend == "Bullish" and not (stop < entry < target)) or \
-       (trend == "Bearish" and not (target < entry < stop)):
-        logger.warning("%s — incoherent levels, discarding: %s/%s/%s",
-                       ticker, entry, stop, target)
-        return None
-
-    if rr < MIN_RR or strength != "Strong":
-        return None
-
-    return {"ticker": ticker, "trend": trend, "strength": strength,
-            "rr": rr, "entry": entry, "stop": stop, "target": target,
-            "rsi": round(rsi, 1), "adx": round(adx, 1),
-            "price": round(price, 2), "atr": round(atr, 2)}
-
-
-# ══════════════════════════════════════════════════════════════════
-# MAIN
-# ══════════════════════════════════════════════════════════════════
 def run(args) -> int:
     if not args.force and not is_market_open():
         logger.info("Market closed — skipping.")
@@ -528,6 +578,12 @@ def run(args) -> int:
     state = load_state()
     hits, skipped, failed = 0, 0, []
 
+    # Fetched ONCE for the whole scan, not per ticker.
+    spy_regime = get_spy_regime() if PARAMS.spy_regime_on else None
+    if PARAMS.spy_regime_on:
+        logger.info("SPY regime: %s",
+                    (spy_regime or {}).get("regime", "unavailable"))
+
     for tk in WATCHLIST:
         try:
             time.sleep(FETCH_GAP_SEC)
@@ -535,7 +591,15 @@ def run(args) -> int:
             if df is None:
                 failed.append(f"{tk} (no data)")
                 continue
-            r = analyze(compute(df), tk)
+            # BUG FIX: the scanner used to analyse df.iloc[-1] directly, so a
+            # mid-session run read TODAY'S PARTIAL BAR — a Close that is just
+            # the live price and a Volume only partly accumulated. That is why
+            # the 12:30 run alerted on names the app rejected an hour later.
+            cdf = compute(df)
+            cdf, dropped = sc.drop_partial_bar(cdf, now=datetime.now(ET))
+            if dropped:
+                logger.debug("%s — dropped today's partial bar", tk)
+            r = analyze(cdf, tk, spy_regime=spy_regime)
             if not r:
                 continue
 
