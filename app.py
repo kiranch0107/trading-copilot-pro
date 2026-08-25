@@ -1603,8 +1603,22 @@ def check_manual_contract(ticker: str, right: str, strike: float,
         out["error"] = f"Could not parse expiry {expiry!r} (use YYYY-MM-DD)"
         return out
 
-    add("DTE within bounds", MIN_DTE <= dte <= MAX_DTE,
-        f"{dte} DTE (bounds {MIN_DTE}-{MAX_DTE})")
+    # BUG FIX: this referenced a MAX_DTE that does not exist in this app. The
+    # scanner enforces a LOWER bound only (MIN_DTE) and then looks at the
+    # nearest _OPT_MAX_EXPIRIES expiries past it — there is no upper DTE rule
+    # to mirror. Inventing one here would make the checker stricter than the
+    # thing it is supposed to be checking against, which defeats the purpose.
+    add("DTE at or above minimum", dte >= MIN_DTE,
+        f"{dte} DTE (minimum {MIN_DTE})")
+
+    # Informational: the scanner would never surface a contract this far out,
+    # since it only looks at the nearest few expiries. Not a rule violation —
+    # just a note that this is outside what the scanner explores.
+    if dte > 120:
+        add("Within the scanner's usual horizon", False,
+            f"{dte} DTE — the scanner only examines the nearest "
+            f"{_OPT_MAX_EXPIRIES} expiries past {MIN_DTE} DTE, so it would "
+            f"never propose this contract itself", blocking=False)
 
     atr = a.get("atr")
     days_needed = max(5, int(ATR_TGT_MULT * 3)) if (atr and atr > 0) else 10
