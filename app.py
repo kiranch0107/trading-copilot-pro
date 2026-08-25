@@ -274,15 +274,17 @@ def _resolve_universe(_cache_key: str) -> tuple[list, str, int, str]:
     Thin cached wrapper over universe.load_universe — the SAME function
     scanner.py calls, so the two can never drift apart on freshness rules.
 
-    allow_live=True here (unlike the scanner) because the app is interactive:
-    if there is no snapshot yet, a one-off ranking is better than silently
-    showing the baseline. It is cached for an hour and warned about loudly.
+    allow_live=False, matching scanner.py exactly. An earlier version let the
+    app rank live when no snapshot existed — but the scanner cannot do that
+    (it must not spend ~67 Yahoo calls before its own scan), so the two would
+    resolve to DIFFERENT universes precisely when the snapshot was missing.
+    Both now fall back to the same static baseline and say so loudly.
     """
     try:
         import universe as _u
     except Exception as e:
         return STATIC_WATCHLIST, f"universe.py unavailable ({e})", -1, "fallback"
-    return _u.load_universe(STATIC_WATCHLIST, allow_live=True)
+    return _u.load_universe(STATIC_WATCHLIST, allow_live=False)
 
 
 def _dynamic_default() -> bool:
@@ -313,23 +315,30 @@ if USE_DYNAMIC:
     elif _uni_src == "snapshot-stale":
         st.sidebar.warning(f"{_uni_status}. Check the Actions tab. "
                            f"Scanning it anyway.")
-    elif _uni_src == "live":
-        st.sidebar.warning("No snapshot yet — ranked live. This pulls ~67 "
-                           "symbols and can trigger Yahoo rate limits. Run the "
-                           "weekly job to avoid it.")
     else:
-        st.sidebar.error(f"Dynamic universe unavailable ({_uni_status}). "
-                         f"Using the static baseline.")
+        st.sidebar.error(
+            f"No usable universe snapshot ({_uni_status}) — scanning the "
+            f"static baseline. scanner.py is doing the same, so the two stay "
+            f"in sync. Run the weekly job to restore the dynamic universe.")
 else:
     WATCHLIST = STATIC_WATCHLIST
 
 # FIX #11: FAST_MODE exposed as sidebar toggle
-FAST_MODE  = st.sidebar.checkbox("Fast Mode (top 5 only)", value=True)
+# Defaults OFF whenever the dynamic universe is active: it slices WATCHLIST[:5],
+# and scanner.py has no equivalent, so leaving it on would have the app scan 5
+# names while the scanner alerts on all 8 — a silent desync in the other
+# direction from the one above.
+FAST_MODE  = st.sidebar.checkbox(
+    "Fast Mode (top 5 only)", value=not USE_DYNAMIC,
+    help="Scans only the first 5 tickers. Leave OFF with the dynamic universe "
+         "on, or the app and the scanner cover different lists.")
 SCAN_LIST  = WATCHLIST[:5] if FAST_MODE else WATCHLIST
 st.sidebar.caption(f"Scanning: {', '.join(SCAN_LIST)}")
 if USE_DYNAMIC and FAST_MODE and len(WATCHLIST) > 5:
-    st.sidebar.caption(f"Fast Mode is trimming {len(WATCHLIST) - 5} name(s) "
-                       f"off the bottom of the ranking.")
+    st.sidebar.warning(
+        f"Fast Mode is trimming {len(WATCHLIST) - 5} name(s) off the ranking. "
+        f"scanner.py scans all {len(WATCHLIST)}, so alerts may arrive for "
+        f"tickers this scan skipped.")
 st.sidebar.divider()
 
 ADX_MIN       = st.sidebar.number_input("ADX minimum",              value=35,   min_value=1,    max_value=100)
