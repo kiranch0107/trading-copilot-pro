@@ -1534,6 +1534,142 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
             "is_budget":row["mid"]<=BUDGET_MAX}
 
 
+def check_manual_contract(ticker: str, right: str, strike: float,
+                          expiry: str, entry_premium: float) -> dict:
+    """
+    Evaluate a contract YOU picked against the same rules the scanner applies.
+
+    WHAT THIS ANSWERS: "does this contract meet my stated criteria?"
+    WHAT IT DOES NOT ANSWER: "is this a good trade?"
+
+    Those are different questions and only the first one is checkable. The
+    591-trade out-of-sample validation found no measurable edge in this entry
+    logic (-0.014 R, PF 0.98), so a PASS means "this matches the pattern that
+    was tested and found nothing in" — not "this will work". Treat it as a
+    checklist, never as a forecast.
+
+    Every rule is read from the SAME sidebar values and the SAME analyze()
+    output the scanner uses. Nothing is reimplemented here — a second copy of
+    "does this pass" would drift within a month, exactly as scanner.py drifted
+    to ADX 25 while the app ran 35.
+    """
+    out = {"ticker": ticker.upper(), "right": right.upper(),
+           "strike": float(strike), "expiry": expiry,
+           "entry_premium": float(entry_premium),
+           "checks": [], "signal": None, "contract": None, "error": None}
+
+    def add(name, passed, detail, blocking=True):
+        out["checks"].append({"name": name, "pass": bool(passed),
+                              "detail": detail, "blocking": blocking})
+
+    # ── A. Underlying signal — reuse analyze() verbatim ──
+    try:
+        df = get_data(ticker)
+        if df is None or df.empty:
+            out["error"] = f"No price data for {ticker}"
+            return out
+        df = compute(df)
+        df, _ = drop_partial_bar(df)
+        spy_regime = get_spy_regime()
+        # fetch_options=False: analyze() would otherwise pick its OWN best
+        # contract, which is wasted work and irrelevant — we are evaluating
+        # the specific strike the user chose, not looking for a better one.
+        a = analyze(df, ticker.upper(), f"{ticker.upper()}_{df.index[-1]}",
+                    get_settings_key(), spy_regime=spy_regime,
+                    fetch_options=False)
+    except Exception as e:
+        out["error"] = f"Analysis failed: {e}"
+        return out
+
+    out["signal"] = a
+    sig_trend = (a.get("trend") or "").strip()
+    want = "Bullish" if out["right"] == "CALL" else "Bearish"
+
+    if a.get("signal"):
+        add("Signal fires", True,
+            f"{sig_trend} {a.get('strength','')} — ADX {a.get('adx',0):.1f}")
+        add("Direction matches contract", sig_trend == want,
+            f"signal is {sig_trend}, you are buying a {out['right']}")
+    else:
+        why = a.get("reason") or "conditions not met"
+        add("Signal fires", False, f"no signal on {ticker.upper()} — {why}")
+        add("Direction matches contract", False,
+            "cannot match direction without a signal")
+
+    # ── B. The contract itself ──
+    try:
+        dte = (pd.Timestamp(expiry) - pd.Timestamp.today().normalize()).days
+    except Exception:
+        out["error"] = f"Could not parse expiry {expiry!r} (use YYYY-MM-DD)"
+        return out
+
+    add("DTE within bounds", MIN_DTE <= dte <= MAX_DTE,
+        f"{dte} DTE (bounds {MIN_DTE}-{MAX_DTE})")
+
+    atr = a.get("atr")
+    days_needed = max(5, int(ATR_TGT_MULT * 3)) if (atr and atr > 0) else 10
+    add("Theta adequate for target", dte >= days_needed,
+        f"a {ATR_TGT_MULT:g}x ATR target needs ~{days_needed} sessions; "
+        f"this has {dte}")
+
+    # Live quote for THIS contract — liquidity is a property of the strike,
+    # not of the underlying, so it has to be fetched specifically.
+    row = None
+    try:
+        chain_data = get_full_chain_data(ticker, 1)
+        if chain_data.get("error"):
+            add("Contract found on chain", False, chain_data["error"])
+        else:
+            for entry in chain_data["expiries"]:
+                if entry["expiry"] != expiry:
+                    continue
+                side = entry["calls"] if out["right"] == "CALL" else entry["puts"]
+                hit = side[abs(side["strike"] - out["strike"]) < 0.01]
+                if not hit.empty:
+                    row = hit.iloc[0]
+                break
+            if row is None:
+                add("Contract found on chain", False,
+                    f"no {out['right']} at ${out['strike']:g} expiring {expiry}")
+    except Exception as e:
+        add("Contract found on chain", False, f"chain fetch failed ({e})")
+
+    if row is not None:
+        bid, ask = float(row.get("bid", 0)), float(row.get("ask", 0))
+        mid = (bid + ask) / 2
+        spread = ask - bid
+        vol, oi = int(row.get("volume", 0) or 0), int(row.get("openInterest", 0) or 0)
+        spread_pct = (spread / mid * 100) if mid > 0 else 999.0
+        out["contract"] = {"bid": bid, "ask": ask, "mid": round(mid, 2),
+                           "spread": round(spread, 2),
+                           "spread_pct": round(spread_pct, 1),
+                           "volume": vol, "oi": oi, "dte": dte,
+                           "last": float(row.get("lastPrice", 0) or 0)}
+        add("Contract found on chain", True,
+            f"bid ${bid:.2f} / ask ${ask:.2f}, mid ${mid:.2f}")
+        add("Bid is live", bid > 0, f"bid ${bid:.2f}")
+        add("Volume > 0", vol > 0, f"{vol} contracts today")
+        add("Open interest > 0", oi > 0, f"{oi} open")
+        add("Spread <= 15% of mid", spread_pct <= 15.0,
+            f"${spread:.2f} = {spread_pct:.1f}% of mid")
+
+        # Non-blocking: your fill vs the current market. Being outside the
+        # spread is not a rule violation, but it changes the trade's maths.
+        if mid > 0:
+            slip = (out["entry_premium"] - mid) / mid * 100
+            add("Entry near mid", abs(slip) <= 10,
+                f"paid ${out['entry_premium']:.2f} vs mid ${mid:.2f} "
+                f"({slip:+.1f}%)", blocking=False)
+
+    # ── C. Verdict ──
+    blocking = [c for c in out["checks"] if c["blocking"]]
+    out["n_pass"] = sum(1 for c in blocking if c["pass"])
+    out["n_total"] = len(blocking)
+    out["passed"] = all(c["pass"] for c in blocking)
+    out["failures"] = [c["name"] for c in blocking if not c["pass"]]
+    return out
+
+
 # ─────────────────────────────────────────────
 # UNUSUAL ACTIVITY ENGINE
 # ─────────────────────────────────────────────
@@ -2118,8 +2254,9 @@ def get_market_context() -> dict:
 # ─────────────────────────────────────────────
 # TOP-LEVEL TABS
 # ─────────────────────────────────────────────
-TAB_SCAN, TAB_STOCK, TAB_POSITIONS, TAB_UNUSUAL, TAB_ALERTS, TAB_JOURNAL = st.tabs([
-    "📡 Watchlist Scan", "🔍 Stock Analysis", "📍 Positions",
+(TAB_SCAN, TAB_STOCK, TAB_CHECK, TAB_POSITIONS, TAB_UNUSUAL,
+ TAB_ALERTS, TAB_JOURNAL) = st.tabs([
+    "📡 Watchlist Scan", "🔍 Stock Analysis", "✅ Contract Check", "📍 Positions",
     "🌊 Unusual Activity", "🔔 Alert History", "📓 Trade Journal",
 ])
 
@@ -3341,3 +3478,143 @@ with TAB_JOURNAL:
             st.rerun()
 
     st.caption("⚠️ Not financial advice. Journal is for personal tracking only.")
+
+
+# ═══════════════════════════════════════════════
+# TAB — CONTRACT CHECK
+# ═══════════════════════════════════════════════
+with TAB_CHECK:
+    st.subheader("Contract Check")
+    st.caption(
+        "Check a contract you picked yourself against the same rules the "
+        "scanner applies. This answers *does this meet my criteria* — not "
+        "*is this a good trade*. Nothing is logged unless you choose to log it."
+    )
+
+    cc1, cc2, cc3 = st.columns([2, 1, 1])
+    with cc1:
+        chk_ticker = st.text_input("Ticker", key="chk_ticker",
+                                   placeholder="NVDA").strip().upper()
+    with cc2:
+        chk_right = st.selectbox("Type", ["CALL", "PUT"], key="chk_right")
+    with cc3:
+        chk_strike = st.number_input("Strike", min_value=0.0, step=1.0,
+                                     value=0.0, key="chk_strike")
+
+    cc4, cc5 = st.columns(2)
+    with cc4:
+        chk_expiry = st.text_input(
+            "Expiry (YYYY-MM-DD)", key="chk_expiry", placeholder="2026-09-18",
+            help="Must be an expiry that actually exists on the chain.")
+    with cc5:
+        chk_premium = st.number_input(
+            "Entry premium (per share)", min_value=0.0, step=0.05, value=0.0,
+            key="chk_premium",
+            help="What you paid, or would pay. Compared against the current "
+                 "mid — a fill far from mid changes the trade's maths even "
+                 "when every rule passes.")
+
+    if st.button("Check contract", type="primary", key="chk_run"):
+        if not chk_ticker or chk_strike <= 0 or not chk_expiry:
+            st.warning("Ticker, strike and expiry are all required.")
+        else:
+            with st.spinner(f"Checking {chk_ticker} {chk_expiry} "
+                            f"${chk_strike:g} {chk_right}..."):
+                st.session_state["chk_result"] = check_manual_contract(
+                    chk_ticker, chk_right, chk_strike, chk_expiry, chk_premium)
+
+    res = st.session_state.get("chk_result")
+    if res:
+        if res.get("error"):
+            st.error(res["error"])
+        else:
+            label = (f"{res['ticker']} {res['expiry']} "
+                     f"${res['strike']:g} {res['right']}")
+            if res["passed"]:
+                st.success(f"PASS — {label} meets all "
+                           f"{res['n_total']} rules")
+                st.caption(
+                    "This means the contract matches your stated criteria. It "
+                    "is not a prediction: the 591-trade out-of-sample test "
+                    "found no measurable edge in this entry logic, so a pass "
+                    "carries no expectancy claim."
+                )
+            else:
+                st.error(f"FAIL — {label} misses "
+                         f"{len(res['failures'])} of {res['n_total']} rules")
+                st.caption("Failed: " + ", ".join(res["failures"]))
+
+            st.markdown("---")
+            for c in res["checks"]:
+                icon = "✅" if c["pass"] else "❌"
+                suffix = "" if c["blocking"] else "  *(informational)*"
+                css = "filter-pass" if c["pass"] else "filter-fail"
+                st.markdown(
+                    f'<div class="{css}">{icon} <b>{c["name"]}</b> — '
+                    f'{c["detail"]}{suffix}</div>', unsafe_allow_html=True)
+
+            ct = res.get("contract")
+            if ct:
+                st.markdown("---")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Mid", f"${ct['mid']:.2f}")
+                m2.metric("Spread", f"{ct['spread_pct']:.1f}%")
+                m3.metric("Vol / OI", f"{ct['volume']} / {ct['oi']}")
+                m4.metric("DTE", ct["dte"])
+
+            st.markdown("---")
+            if res["passed"]:
+                st.markdown("**Log this position?**")
+                lg1, lg2, lg3, lg4 = st.columns(4)
+                with lg1:
+                    chk_contracts = int(st.number_input(
+                        "Contracts", min_value=1, value=1, step=1,
+                        key="chk_contracts"))
+                with lg2:
+                    chk_tp = st.number_input("Take profit %", min_value=0,
+                                             value=200, step=25, key="chk_tp")
+                with lg3:
+                    chk_sl = st.number_input("Stop loss %", min_value=0,
+                                             value=50, step=5, key="chk_sl")
+                with lg4:
+                    chk_dte_exit = st.number_input("Exit at DTE", min_value=0,
+                                                   value=7, step=1,
+                                                   key="chk_dte_exit")
+                chk_hold = int(st.number_input(
+                    "Max hold (sessions)", min_value=0, value=MAX_HOLD, step=5,
+                    key="chk_hold"))
+                chk_notes = st.text_input(
+                    "Notes", key="chk_notes",
+                    placeholder="DAY if this is a day trade — see the journal "
+                                "convention")
+
+                if st.button("Log position", key="chk_log"):
+                    if not (chk_tp or chk_sl or chk_dte_exit or chk_hold):
+                        st.warning("At least one exit rule is required — a "
+                                   "position with no exit rule is never "
+                                   "monitored.")
+                    else:
+                        try:
+                            open_option_position(
+                                ticker=res["ticker"], expiry=res["expiry"],
+                                strike=res["strike"], right=res["right"],
+                                entry_premium=res["entry_premium"] or
+                                              (ct["mid"] if ct else 0.0),
+                                contracts=chk_contracts,
+                                rules={"tp_pct": chk_tp, "sl_pct": chk_sl,
+                                       "dte_exit": chk_dte_exit,
+                                       "max_hold_bars": chk_hold,
+                                       "invalidate_ema": False},
+                                notes=chk_notes)
+                            st.success("Logged. The exit monitor will track it "
+                                       "from the next run.")
+                            st.session_state.pop("chk_result", None)
+                        except Exception as e:
+                            st.error(f"Could not log position: {e}")
+            else:
+                st.info(
+                    "Not logging a failed check. If you take this trade "
+                    "anyway, that is your call — but it is worth noticing "
+                    "that you overrode your own rules, because that is the "
+                    "kind of thing a journal is for."
+                )
