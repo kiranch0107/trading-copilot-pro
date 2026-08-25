@@ -16,6 +16,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import pytz
+import signal_core as sc
 
 # ─────────────────────────────────────────────
 # LOGGING
@@ -1236,12 +1237,6 @@ def get_weekly_trend(ticker: str) -> str | None:
         return None
 
 
-def check_weekly_alignment(daily: str, weekly: str | None) -> tuple[bool, str]:
-    if weekly is None:     return False, "Weekly data unavailable"
-    if daily == weekly:    return True,  f"Weekly {weekly} ✓"
-    return False, f"Daily {daily} vs Weekly {weekly} — misaligned"
-
-
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_next_earnings(ticker: str) -> str | None:
     try:
@@ -1321,16 +1316,6 @@ def get_spy_regime() -> dict:
     except Exception as e:
         logger.exception("get_spy_regime: %s", e)
         return {"regime":"Unknown","reasoning":str(e)}
-
-
-def check_regime_alignment(daily_trend: str, spy_regime: dict) -> tuple[bool, str]:
-    regime = spy_regime.get("regime","Unknown")
-    if regime == "Unknown":           return True,  "Regime unknown — no filter applied"
-    if daily_trend=="Bullish" and regime=="Bear":
-        return False, "Counter-regime: going Long in SPY Bear market"
-    if daily_trend=="Bearish" and regime=="Bull":
-        return False, "Counter-regime: going Short in SPY Bull market"
-    return True, f"Regime aligned: {daily_trend} in {regime} market ✓"
 
 
 # ─────────────────────────────────────────────
@@ -1758,236 +1743,63 @@ def check_pick_unusual_activity(ticker: str, opt: dict) -> dict | None:
 # exactly WHY — base conditions / filters / RR.
 # Never returns bare None anymore.
 # ─────────────────────────────────────────────
+def _signal_params() -> "sc.SignalParams":
+    """
+    Build the shared parameter object from the sidebar.
+
+    scanner.py uses sc.DEFAULTS. The app lets you move these live, but both
+    read the SAME dataclass, so a field cannot exist in one and not the other.
+    """
+    return sc.SignalParams(
+        adx_min=float(ADX_MIN),
+        min_rr=float(MIN_RR),
+        hq_min_rr=float(HQ_MIN_RR),
+        volume_mult=float(VOLUME_MULT),
+        atr_stop_mult=float(ATR_STOP_MULT),
+        atr_tgt_mult=float(ATR_TGT_MULT),
+        weekly_confirm=bool(WEEKLY_CONFIRM),
+        spy_regime_on=bool(SPY_REGIME),
+    )
+
+
 def _analyze_uncached(df: pd.DataFrame, ticker: str,
                       spy_regime: dict | None = None,
                       fetch_options: bool = True) -> dict:
-    latest  = df.iloc[-1]
-    price   = float(latest["Close"])
-    ema20   = float(latest["EMA20"])
-    ema50   = float(latest["EMA50"])
-    rsi     = float(latest["RSI"])
-    macd    = float(latest["MACD"])
-    signal  = float(latest["Signal"])
-    atr     = float(latest["ATR"])
-    volume  = float(latest["Volume"])
-    vol_avg = float(latest["VOL_AVG20"])
+    """
+    Adapter over signal_core.evaluate().
 
-    vol_ok      = volume >= vol_avg * VOLUME_MULT
-    vol_soft_ok = volume >= vol_avg * 0.70
+    The signal logic used to live here, and scanner.py had its own separate
+    copy. They disagreed — the scanner missed the volume, weekly, earnings and
+    regime gates entirely — which produced alerts the app then rejected. Both
+    now call one implementation; this function only supplies the fetches
+    (weekly trend, earnings, ADX) and bolts the option chain onto the result.
 
-    # ── Base conditions ──
-    if price > ema20 > ema50 and macd > signal and 30 < rsi < 75 and vol_soft_ok:
-        trend = "Bullish"
-    elif price < ema20 < ema50 and macd < signal and 25 < rsi < 70 and vol_soft_ok:
-        trend = "Bearish"
-    else:
-        # Base conditions failed — return diagnostic so UI can show exactly what failed
-        return {
-            "blocked":       True,
-            "block_reason":  "base",
-            "price":         round(price, 2),
-            "ema20":         round(ema20, 2),
-            "ema50":         round(ema50, 2),
-            "rsi":           round(rsi, 1),
-            "macd":          round(macd, 4),
-            "signal_line":   round(signal, 4),
-            "vol_ratio":     round(volume / vol_avg, 2) if vol_avg else 0,
-            "filters":       {},
-        }
-
-    strength = "Strong" if (
-        ((rsi > 60 and trend == "Bullish") or (rsi < 40 and trend == "Bearish")) and vol_ok
-    ) else "Normal"
-
-    # ── 4 Enhancement filters ──
-    filters: dict[str, dict] = {}
+    Kept identical in shape to the old return dict so every caller and every
+    UI renderer downstream continues to work unchanged.
+    """
+    params = _signal_params()
     adx_ok, adx_val = check_adx(df)
-    filters["ADX Trend Strength"] = {"pass": adx_ok,
-        "detail": f"ADX {adx_val} {'≥' if adx_ok else '<'} {ADX_MIN} threshold"}
 
-    weekly = get_weekly_trend(ticker) if WEEKLY_CONFIRM else None
-    mtf_ok, mtf_detail = check_weekly_alignment(trend, weekly)
-    filters["Multi-TF Alignment"] = {"pass": mtf_ok, "detail": mtf_detail}
+    r = sc.evaluate(
+        df, ticker, params,
+        adx_value=adx_val,
+        weekly_trend=get_weekly_trend(ticker) if WEEKLY_CONFIRM else None,
+        earnings=check_earnings_blackout(ticker),
+        spy_regime=spy_regime,
+    )
+    if r["blocked"]:
+        return r
 
-    earnings_ok, earnings_detail = check_earnings_blackout(ticker)
-    filters["Earnings Blackout"] = {"pass": earnings_ok, "detail": earnings_detail}
+    # Option chain stays here: it is app-specific, rate-limit sensitive, and
+    # irrelevant to whether the SIGNAL fired.
+    r["option"] = (get_option_data(ticker, r["price"], r["trend"],
+                                   r["strength"], atr=r["atr"])
+                   if fetch_options else
+                   {"error": "Not fetched during scan — open the Stock "
+                             "Analysis tab for options."})
+    r["signal"] = True
+    return r
 
-    if SPY_REGIME and spy_regime:
-        regime_ok, regime_detail = check_regime_alignment(trend, spy_regime)
-    else:
-        regime_ok, regime_detail = True, "Regime filter disabled"
-    filters["Macro Regime"] = {"pass": regime_ok, "detail": regime_detail}
-
-    n_pass   = sum(1 for f in filters.values() if f["pass"])
-    n_total  = len(filters)
-    all_pass = (n_pass == n_total)
-
-    # ── Entry / stop / target ──
-    #
-    # ROOT-CAUSE FIX: the old code mixed reference points, which made almost
-    # every setup fail MIN_RR:
-    #
-    #   entry  = lookback_high            <- a PAST bar's high
-    #   stop   = min(swing_low, price-atr)<- based on CURRENT price
-    #   target = min(price+2.5atr, res*.99) <- based on CURRENT price
-    #
-    # Two failure modes resulted:
-    #   1) In an uptrend price runs ABOVE the 5-bar lookback high, so `entry`
-    #      sat BELOW price. Reward (target-entry) collapsed toward zero.
-    #   2) The resistance cap `res_20 * 0.99` is BELOW price whenever price is
-    #      at/near the 20-bar high — i.e. on the strongest breakouts — pulling
-    #      the target BELOW the entry and giving R:R ~0.03. The logic actively
-    #      penalised the exact setups it should reward.
-    #
-    # New approach: ALL THREE levels are anchored to the SAME reference —
-    # current price — so they're internally coherent. Structure (swing levels)
-    # informs the stop, and the resistance/support cap is only applied when it
-    # is actually beyond the entry (i.e. a real obstacle), never behind it.
-
-    swing_low_10  = float(df["Low"].tail(10).min())
-    swing_high_10 = float(df["High"].tail(10).max())
-
-    if trend == "Bullish":
-        # Enter at market — trend/momentum conditions already confirmed.
-        entry = round(price, 2)
-
-        # Stop: prefer the structural level (just under the 10-bar swing low),
-        # but ONLY if that level is actually below price. On a gap-down the
-        # 10-bar low can sit ABOVE current price, which makes it meaningless
-        # as a stop — in that case fall back to the pure ATR stop.
-        #
-        # BUG (fixed): the old `max(structural_stop, atr_stop)` would pick the
-        # invalid above-price structural value, then the entry-0.01 clamp jammed
-        # risk to one cent, producing phantom setups with R:R ≈ 750 that would be
-        # stopped out on the first tick.
-        atr_stop = price - (atr * ATR_STOP_MULT)
-        structural_stop = swing_low_10 - (atr * 0.10)
-
-        if structural_stop < price:
-            # Structure is valid — take the tighter (higher) of the two
-            stop = max(structural_stop, atr_stop)
-        else:
-            # Structure unusable (swing low is at/above price) — ATR only
-            stop = atr_stop
-
-        stop = round(min(stop, entry - 0.01), 2)   # final safety clamp
-
-        # Target: 2.5 ATR up. Cap at overhead resistance ONLY if that level is
-        # at least 1 ATR above entry.
-        #
-        # BUG v2 (fixed): the previous threshold was a fixed 0.5% (entry*1.005).
-        # In a steady uptrend the 20-bar high IS the most recent bar's high —
-        # typically 0.5–1.5% above the close — so the cap fired on virtually
-        # every clean trend and crushed the target to just above entry
-        # (rr ≈ 0.2). "Meaningful resistance" must be measured in ATR: if the
-        # 20-bar high is within 1 ATR, price is effectively AT its highs
-        # (breakout) and there is no genuine overhead level to cap against.
-        raw_target = price + (atr * ATR_TGT_MULT)
-        resistance = float(df["High"].tail(20).max())
-        if resistance >= entry + (atr * 1.0):
-            target = round(min(raw_target, resistance * 0.995), 2)
-        else:
-            target = round(raw_target, 2)     # at/near highs — no cap
-        target = round(max(target, entry + 0.02), 2)
-
-    else:  # Bearish
-        entry = round(price, 2)
-
-        atr_stop = price + (atr * ATR_STOP_MULT)
-        structural_stop = swing_high_10 + (atr * 0.10)
-
-        if structural_stop > price:
-            # Structure valid — take the tighter (lower) of the two
-            stop = min(structural_stop, atr_stop)
-        else:
-            # Structure unusable (swing high is at/below price) — ATR only
-            stop = atr_stop
-
-        stop = round(max(stop, entry + 0.01), 2)
-
-        raw_target = price - (atr * ATR_TGT_MULT)
-        support    = float(df["Low"].tail(20).min())
-        # Same ATR-based threshold as bullish: only cap at support if it's at
-        # least 1 ATR below entry. In a steady downtrend the 20-bar low is the
-        # most recent bar's low — capping against it crushed every clean trend.
-        if support <= entry - (atr * 1.0):
-            target = round(max(raw_target, support * 1.005), 2)
-        else:
-            target = round(raw_target, 2)     # at/near lows — no cap
-        target = round(min(target, entry - 0.02), 2)
-
-    # ── Risk sanity gate ──
-    # Guard must be RELATIVE to price, not an absolute penny. A $0.01 stop on a
-    # $100 stock is 0.01% — it would be stopped out by any tick. Anything under
-    # 0.3% of price is not a tradeable stop for a swing setup.
-    risk     = abs(entry - stop)
-    min_risk = max(0.05, price * 0.003)     # 0.3% of price, floor of 5 cents
-
-    if risk < min_risk:
-        return {
-            "blocked": True, "block_reason": "zero_risk",
-            "trend": trend, "price": round(price, 2),
-            "entry": entry, "stop": stop,
-            "risk": round(risk, 2), "min_risk": round(min_risk, 2),
-            "filters": filters, "filters_pass": n_pass, "filters_total": n_total,
-        }
-
-    rr = round(abs(target - entry) / risk, 2)
-    if rr < MIN_RR:
-        return {
-            "blocked": True, "block_reason": "rr",
-            "trend": trend, "strength": strength,
-            "price": round(price, 2), "entry": entry,
-            "stop": stop, "target": target, "rr": rr,
-            "filters": filters, "filters_pass": n_pass, "filters_total": n_total,
-            "rsi": round(rsi, 1), "adx": adx_val,
-        }
-
-    # ── Option chain: LAZY ──
-    # BUG FIX (rate limiting): this used to fetch unconditionally, which meant
-    # EVERY ticker passing base+RR during a watchlist scan pulled a full option
-    # chain. Traced cost of one 5-ticker scan: 1 batch + 1 SPY + 5 weekly +
-    # 5 earnings + (1 expiry-list + 3 chains) per qualifying ticker = 16-32
-    # Yahoo calls fired from 2 threads in seconds. That exhausted Yahoo's
-    # unofficial limit, so the NEXT thing you did — usually opening the Options
-    # tab — failed with "Rate limited" on the very first ticker.
-    # Chains are only needed in the single-stock view, so the scan now skips
-    # them entirely (fetch_options=False) and the Options tab fetches on demand.
-    option = (get_option_data(ticker, price, trend, strength, atr=atr)
-              if fetch_options else
-              {"error": "Not fetched during scan — open 🔍 Stock Analysis for options."})
-
-    # ── High-quality tier ──
-    # Was hardcoded `rr >= 2.0`. With MIN_RR now user-tunable (default 0.5),
-    # a fixed 2.0 bar meant the HIGH QUALITY tier almost never fired — and since
-    # Telegram alerts only fire on high_quality, alerts went silent.
-    # Now the bar is a sidebar tunable (HQ_MIN_RR) that defaults to 2× MIN_RR,
-    # so it scales sensibly with whatever the user sets.
-    high_quality = (rr >= HQ_MIN_RR and strength == "Strong" and all_pass)
-
-    return {
-        "blocked":       False,
-        "ticker":        ticker,
-        "price":         round(price, 2),
-        "trend":         trend,
-        "strength":      strength,
-        "entry":         entry,
-        "stop":          stop,
-        "target":        target,
-        "rr":            rr,
-        "rsi":           round(rsi, 1),
-        "atr":           round(atr, 2),
-        "adx":           adx_val,
-        "option":        option,
-        "filters":       filters,
-        "filters_pass":  n_pass,
-        "filters_total": n_total,
-        "all_pass":      all_pass,
-        "high_quality":  high_quality,
-    }
-
-
-@st.cache_data(ttl=300, show_spinner=False)
 def analyze(_df: pd.DataFrame, ticker: str, latest_bar_key: str,
             settings_key: str, spy_regime: dict | None = None,
             fetch_options: bool = True) -> dict:
