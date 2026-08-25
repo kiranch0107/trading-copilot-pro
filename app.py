@@ -12,7 +12,7 @@ import requests
 import math
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, date as _date, timedelta as _timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import pytz
@@ -1519,6 +1519,23 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
             "is_budget":row["mid"]<=BUDGET_MAX}
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def list_expiries(ticker: str) -> list[str]:
+    """
+    Expiry dates actually listed for this ticker.
+
+    Options only expire on specific dates, so a free calendar lets you pick a
+    Wednesday and get a guaranteed failure. This drives a picker of real dates
+    instead. One lightweight call, cached for an hour.
+    """
+    try:
+        _rl.wait()
+        return list(yf.Ticker(ticker).options or [])
+    except Exception as e:
+        logger.debug("Expiry list unavailable for %s (%s)", ticker, e)
+        return []
+
+
 def check_manual_contract(ticker: str, right: str, strike: float,
                           expiry: str, entry_premium: float) -> dict:
     """
@@ -1615,21 +1632,43 @@ def check_manual_contract(ticker: str, right: str, strike: float,
     # not of the underlying, so it has to be fetched specifically.
     row = None
     try:
-        chain_data = get_full_chain_data(ticker, 1)
-        if chain_data.get("error"):
-            add("Contract found on chain", False, chain_data["error"])
+        # BUG FIX: this used get_full_chain_data(), which caps at
+        # _OPT_MAX_EXPIRIES (3) — the three NEAREST expiries. A contract 4th in
+        # line (e.g. the monthly, 24 DTE, when three weeklies sit in front of
+        # it) was never fetched, and the checker reported "no CALL at $X" when
+        # the contract existed perfectly well. The scan needs a truncated list
+        # because it is looking for a contract; here the user has already named
+        # one, so fetch exactly that expiry — more accurate AND one call
+        # instead of three.
+        _rl.wait()
+        stock = yf.Ticker(ticker)
+        listed = list(stock.options or [])
+        if expiry not in listed:
+            nearby = ", ".join(listed[:6]) if listed else "none returned"
+            add("Contract found on chain", False,
+                f"{expiry} is not a listed expiry for {ticker.upper()}. "
+                f"Listed: {nearby}")
         else:
-            for entry in chain_data["expiries"]:
-                if entry["expiry"] != expiry:
-                    continue
-                side = entry["calls"] if out["right"] == "CALL" else entry["puts"]
-                hit = side[abs(side["strike"] - out["strike"]) < 0.01]
-                if not hit.empty:
-                    row = hit.iloc[0]
-                break
-            if row is None:
+            chain = _fetch_chain_with_retry(stock, expiry)
+            if chain is None:
                 add("Contract found on chain", False,
-                    f"no {out['right']} at ${out['strike']:g} expiring {expiry}")
+                    "chain fetch failed after retries — likely rate limited, "
+                    "try again shortly")
+            else:
+                side = (chain.calls if out["right"] == "CALL"
+                        else chain.puts).fillna(0)
+                hit = side[abs(side["strike"] - out["strike"]) < 0.01]
+                if hit.empty:
+                    strikes = sorted(float(x) for x in side["strike"])
+                    near = [x for x in strikes
+                            if abs(x - out["strike"]) <= max(5.0, out["strike"] * 0.05)]
+                    hint = (", ".join(f"${x:g}" for x in near[:8])
+                            if near else "none within 5%")
+                    add("Contract found on chain", False,
+                        f"no {out['right']} at ${out['strike']:g} on {expiry}. "
+                        f"Nearby strikes: {hint}")
+                else:
+                    row = hit.iloc[0]
     except Exception as e:
         add("Contract found on chain", False, f"chain fetch failed ({e})")
 
@@ -3329,9 +3368,34 @@ with TAB_CHECK:
 
     cc4, cc5 = st.columns(2)
     with cc4:
-        chk_expiry = st.text_input(
-            "Expiry (YYYY-MM-DD)", key="chk_expiry", placeholder="2026-09-18",
-            help="Must be an expiry that actually exists on the chain.")
+        _listed = list_expiries(chk_ticker) if chk_ticker else []
+        if _listed:
+            # Real expiries only — you cannot pick a date that is not tradeable.
+            _default_ix = next(
+                (i for i, d in enumerate(_listed)
+                 if (pd.Timestamp(d).date() - _date.today()).days >= MIN_DTE),
+                0)
+            chk_expiry = st.selectbox(
+                "Expiry", _listed, index=_default_ix, key="chk_expiry_sel",
+                format_func=lambda d: (
+                    f"{d}  ({(pd.Timestamp(d).date() - _date.today()).days}d)"),
+                help="Only dates actually listed for this ticker. Defaults to "
+                     "the first one meeting your Min DTE.")
+        else:
+            # Fallback when the ticker is blank or the expiry list is
+            # unavailable (rate limit, bad symbol). A calendar can produce a
+            # non-expiry date, so the checker validates it against the chain
+            # and reports what IS listed.
+            chk_expiry = st.date_input(
+                "Expiry", value=_date.today() + _timedelta(days=max(MIN_DTE, 21)),
+                min_value=_date.today() + _timedelta(days=1),
+                key="chk_expiry_date",
+                help="Enter a ticker above to pick from real listed expiries. "
+                     "Until then this is a plain calendar, so the date may not "
+                     "be a tradeable expiry.").strftime("%Y-%m-%d")
+            if chk_ticker:
+                st.caption("Could not load listed expiries — check the ticker, "
+                           "or Yahoo may be rate limiting.")
     with cc5:
         chk_premium = st.number_input(
             "Entry premium (per share)", min_value=0.0, step=0.05, value=0.0,
