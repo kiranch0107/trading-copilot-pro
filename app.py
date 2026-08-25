@@ -268,78 +268,34 @@ st.sidebar.header("⚙️ Scan Settings")
 STATIC_WATCHLIST = ["NVDA","META","MSFT"]
 
 
-UNIVERSE_HISTORY_DIR = "universe_history"
-UNIVERSE_MAX_AGE_DAYS = 14      # older than this and the snapshot is stale
-
-
-def _latest_snapshot() -> tuple[dict | None, str]:
-    """
-    Newest file in universe_history/, written by the weekly scheduled job.
-
-    Reading the snapshot rather than re-ranking live is the point: it costs
-    zero Yahoo calls, it works when Yahoo is rate-limiting, and — most
-    usefully — the list the app scans is EXACTLY the list recorded in the
-    churn history. Re-ranking live would mean the app trades a slightly
-    different universe than the one your turnover series describes.
-
-    The snapshot being up to a week old is the intended cadence, not staleness:
-    the universe is rebalanced weekly by design.
-    """
-    try:
-        if not os.path.isdir(UNIVERSE_HISTORY_DIR):
-            return None, "no universe_history/ directory"
-        files = sorted(f for f in os.listdir(UNIVERSE_HISTORY_DIR)
-                       if f.endswith(".json"))
-        if not files:
-            return None, "universe_history/ is empty"
-        path = os.path.join(UNIVERSE_HISTORY_DIR, files[-1])
-        with open(path) as f:
-            snap = json.load(f)
-        if not snap.get("tickers"):
-            return None, f"{files[-1]} has no tickers"
-        return snap, files[-1]
-    except Exception as e:
-        logger.warning("Could not read universe snapshot (%s)", e)
-        return None, f"unreadable ({e})"
-
-
 @st.cache_data(ttl=3600, show_spinner=False)
-def _load_universe_from_snapshot(_cache_key: str) -> tuple[list, str, int]:
-    """Returns (tickers, status, age_days). age_days is -1 when unknown."""
-    snap, label = _latest_snapshot()
-    if snap is None:
-        return [], label, -1
-    try:
-        as_of = datetime.strptime(snap["as_of"], "%Y-%m-%d").date()
-        age = (datetime.now(pytz.timezone("America/New_York")).date() - as_of).days
-    except Exception:
-        age = -1
-    return list(snap["tickers"]), f"snapshot {snap.get('as_of', label)}", age
-
-
-@st.cache_data(ttl=21600, show_spinner="Ranking universe by relative strength...")
-def _rank_universe_live(_cache_key: str) -> tuple[list, str]:
+def _resolve_universe(_cache_key: str) -> tuple[list, str, int, str]:
     """
-    Fallback only. Ranks ~67 symbols through yf.download, which does NOT go
-    through this module's RateLimiter and can therefore eat into the same
-    Yahoo budget the scanner needs. Used when no snapshot exists yet.
+    Thin cached wrapper over universe.load_universe — the SAME function
+    scanner.py calls, so the two can never drift apart on freshness rules.
+
+    allow_live=True here (unlike the scanner) because the app is interactive:
+    if there is no snapshot yet, a one-off ranking is better than silently
+    showing the baseline. It is cached for an hour and warned about loudly.
     """
     try:
         import universe as _u
     except Exception as e:
-        return [], f"universe.py unavailable ({e})"
+        return STATIC_WATCHLIST, f"universe.py unavailable ({e})", -1, "fallback"
+    return _u.load_universe(STATIC_WATCHLIST, allow_live=True)
+
+
+def _dynamic_default() -> bool:
+    """Env var seeds the toggle so app and scanner start in the same mode."""
     try:
-        picked = _u.select_universe()
-        if not picked:
-            return [], "nothing passed the gates"
-        return picked, "ranked live"
-    except Exception as e:
-        logger.exception("Live universe ranking failed: %s", e)
-        return [], f"ranking failed ({e})"
+        import universe as _u
+        return _u.dynamic_enabled()
+    except Exception:
+        return False
 
 
 USE_DYNAMIC = st.sidebar.checkbox(
-    "Dynamic universe (RS-ranked)", value=False,
+    "Dynamic universe (RS-ranked)", value=_dynamic_default(),
     help="OFF: scan the fixed NVDA/META/MSFT baseline. ON: scan the top names "
          "by 63-session relative strength vs SPY, sector-capped. Reads the "
          "newest file in universe_history/ written by the weekly scheduled "
@@ -350,34 +306,20 @@ USE_DYNAMIC = st.sidebar.checkbox(
 
 if USE_DYNAMIC:
     _today = datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d")
-    _uni, _uni_status, _uni_age = _load_universe_from_snapshot(_today)
+    WATCHLIST, _uni_status, _uni_age, _uni_src = _resolve_universe(_today)
 
-    if _uni and 0 <= _uni_age <= UNIVERSE_MAX_AGE_DAYS:
-        WATCHLIST = _uni
-        st.sidebar.caption(f"Dynamic universe — {_uni_status} "
-                           f"({_uni_age}d old)")
-    elif _uni:
-        # Snapshot exists but the weekly job has not run in a while.
-        WATCHLIST = _uni
-        st.sidebar.warning(
-            f"Universe snapshot is {_uni_age} days old ({_uni_status}). "
-            f"The weekly job may not be running — check the Actions tab. "
-            f"Scanning it anyway.")
+    if _uni_src == "snapshot":
+        st.sidebar.caption(f"Dynamic universe — {_uni_status} ({_uni_age}d old)")
+    elif _uni_src == "snapshot-stale":
+        st.sidebar.warning(f"{_uni_status}. Check the Actions tab. "
+                           f"Scanning it anyway.")
+    elif _uni_src == "live":
+        st.sidebar.warning("No snapshot yet — ranked live. This pulls ~67 "
+                           "symbols and can trigger Yahoo rate limits. Run the "
+                           "weekly job to avoid it.")
     else:
-        # No usable snapshot: rank live, and say so, because this is the
-        # expensive path that competes with the scanner for Yahoo calls.
-        _live, _live_status = _rank_universe_live(_today)
-        if _live:
-            WATCHLIST = _live
-            st.sidebar.warning(
-                f"No snapshot ({_uni_status}) — ranked live instead. "
-                f"This pulls ~67 symbols and can trigger Yahoo rate limits. "
-                f"Run the weekly job to avoid it.")
-        else:
-            WATCHLIST = STATIC_WATCHLIST
-            st.sidebar.error(
-                f"Dynamic universe unavailable ({_uni_status}; "
-                f"{_live_status}). Using the static baseline.")
+        st.sidebar.error(f"Dynamic universe unavailable ({_uni_status}). "
+                         f"Using the static baseline.")
 else:
     WATCHLIST = STATIC_WATCHLIST
 
