@@ -60,14 +60,66 @@ logger = logging.getLogger("scanner")
 
 ET = pytz.timezone("America/New_York")
 
-WATCHLIST = ["TSLA", "NVDA", "AAPL", "MSFT", "AMZN", "META", "AMD", "SPY", "QQQ",
-             "INTC", "NFLX", "BABA", "CSCO", "GOOGL"]
+# ── Watchlist ──
+# STATIC_WATCHLIST is the frozen baseline — the config selected by the Aug 2026
+# sweep. Kept as the fallback because it is the best-DEFINED hypothesis tested,
+# not because it is profitable: the 591-trade out-of-sample validation returned
+# -0.014 R with PF 0.98.
+#
+# When USE_DYNAMIC_UNIVERSE is set, the list comes from the newest snapshot in
+# universe_history/, written by the weekly scheduled job. Same env var app.py
+# reads, so the two can never scan different universes — alerting on tickers
+# the app will not show you is worse than either choice on its own.
+STATIC_WATCHLIST = ["NVDA", "META", "MSFT"]
+
+
+def resolve_watchlist() -> list[str]:
+    """
+    Resolve the scan list at startup and log which source won.
+
+    allow_live=False on purpose: ranking the universe pulls ~67 symbols
+    through yf.download, and this process still has a whole watchlist to fetch
+    through the same Yahoo rate budget. If no snapshot exists, fall back to the
+    static list rather than spending the budget on ranking.
+    """
+    try:
+        import universe as _u
+    except Exception as e:
+        logger.warning("universe.py unavailable (%s) — using static watchlist", e)
+        return STATIC_WATCHLIST
+
+    if not _u.dynamic_enabled():
+        logger.info("Watchlist: static baseline (%s). Set %s=1 for the "
+                    "RS-ranked universe.", ", ".join(STATIC_WATCHLIST),
+                    _u.ENV_TOGGLE)
+        return STATIC_WATCHLIST
+
+    tickers, status, age, source = _u.load_universe(
+        STATIC_WATCHLIST, allow_live=False)
+    if source == "snapshot":
+        logger.info("Watchlist: dynamic — %s (%dd old): %s",
+                    status, age, ", ".join(tickers))
+    elif source == "snapshot-stale":
+        logger.warning("Watchlist: %s. Scanning it anyway: %s",
+                       status, ", ".join(tickers))
+    else:
+        logger.warning("Watchlist: %s — falling back to %s",
+                       status, ", ".join(tickers))
+    return tickers
+
+
+WATCHLIST = resolve_watchlist()
 
 # ── Tunables ──
-ADX_MIN            = 25
+# FIX: these had drifted from app.py, which meant Telegram alerts were firing
+# on a looser configuration than the app scanned with — ADX 25 vs 35, target
+# 3.0x vs 4.0x, R:R 2.0 vs 0.5. Two systems disagreeing about what counts as a
+# signal is worse than either being wrong, because you cannot tell which one
+# produced a given trade. Now matched to app.py's frozen baseline.
+ADX_MIN            = 35     # was 25 — matches app.py
 ATR_STOP_MULT      = 1.0
-ATR_TGT_MULT       = 3.0
-MIN_RR             = 2.0
+ATR_TGT_MULT       = 4.0    # was 3.0 — matches app.py
+MIN_RR             = 0.5    # was 2.0 — matches app.py
 ALERT_COOLDOWN_HRS = 4      # per ticker AND direction
 STATE_FILE         = Path("scanner_state.json")
 
