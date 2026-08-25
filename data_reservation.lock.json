@@ -1,0 +1,112 @@
+{
+  "reservation_hash": "431e21b4da127fe2",
+  "created": "2026-08-24T22:50:05+00:00",
+  "contaminated": {
+    "TSLA": "Aug 2026 parameter sweep (~60 configurations)",
+    "NVDA": "Aug 2026 parameter sweep; selected config; live 30-trade test",
+    "AAPL": "Aug 2026 parameter sweep",
+    "MSFT": "Aug 2026 parameter sweep; selected config; live 30-trade test",
+    "AMZN": "Aug 2026 parameter sweep",
+    "META": "Aug 2026 parameter sweep; selected config; live 30-trade test",
+    "SPY": "Aug 2026 sweep; also the regime filter and RS benchmark",
+    "GOOGL": "591-trade OOS validation (failed)",
+    "AVGO": "591-trade OOS validation (failed)",
+    "AMD": "591-trade OOS validation (failed)",
+    "NFLX": "591-trade OOS validation (failed)",
+    "CRM": "591-trade OOS validation (failed)",
+    "ADBE": "591-trade OOS validation (failed)",
+    "QCOM": "591-trade OOS validation (failed)",
+    "MU": "591-trade OOS validation (failed)",
+    "ORCL": "591-trade OOS validation (failed)",
+    "NOW": "591-trade OOS validation (failed)",
+    "PANW": "591-trade OOS validation (failed)",
+    "LRCX": "591-trade OOS validation (failed)"
+  },
+  "reserved": {
+    "A": {
+      "note": "First held-out set. Spend on the next completed hypothesis.",
+      "tickers": [
+        "TXN",
+        "INTC",
+        "AMAT",
+        "KLAC",
+        "SNPS",
+        "CDNS",
+        "INTU",
+        "IBM",
+        "CSCO",
+        "DIS",
+        "HD",
+        "LOW",
+        "NKE",
+        "SBUX",
+        "MCD",
+        "COST"
+      ],
+      "spent": false
+    },
+    "B": {
+      "note": "Second held-out set. Do not touch until A is spent and the result written down.",
+      "tickers": [
+        "TGT",
+        "WMT",
+        "PG",
+        "KO",
+        "PEP",
+        "JPM",
+        "BAC",
+        "GS",
+        "MS",
+        "V",
+        "MA",
+        "AXP",
+        "BLK",
+        "CAT",
+        "DE",
+        "HON",
+        "GE",
+        "BA",
+        "UNP",
+        "UPS",
+        "UNH",
+        "JNJ",
+        "LLY",
+        "ABBV",
+        "MRK",
+        "PFE",
+        "TMO",
+        "ABT",
+        "XOM",
+        "CVX",
+        "COP",
+        "SLB"
+      ],
+      "spent": false
+    }
+  },
+  "ledger": [
+    {
+      "tranche": "A",
+      "purpose": "tool manual test",
+      "at": "2026-08-24T22:50:05+00:00",
+      "tickers": [
+        "TXN",
+        "INTC",
+        "AMAT",
+        "KLAC",
+        "SNPS",
+        "CDNS",
+        "INTU",
+        "IBM",
+        "CSCO",
+        "DIS",
+        "HD",
+        "LOW",
+        "NKE",
+        "SBUX",
+        "MCD",
+        "COST"
+      ]
+    }
+  ]
+}

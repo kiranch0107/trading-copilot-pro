@@ -1,0 +1,36 @@
+[
+  {
+    "timestamp": "2026-08-22T05:23:05.119616+00:00",
+    "config_hash": "4e05e4a2bfa4017d",
+    "hash_changed": false,
+    "tickers": [
+      "GOOGL",
+      "AVGO",
+      "AMD",
+      "NFLX",
+      "CRM",
+      "ADBE",
+      "QCOM",
+      "MU",
+      "ORCL",
+      "NOW",
+      "PANW",
+      "LRCX"
+    ],
+    "n_trades": 591,
+    "expectancy": -0.014,
+    "profit_factor": 0.98,
+    "t": -0.249,
+    "p_value": 0.80341,
+    "ci": [
+      -0.1242,
+      0.0962
+    ],
+    "passed": false,
+    "fail_reasons": [
+      "expectancy -0.014 R < +0.20 R",
+      "profit factor 0.98 < 1.30",
+      "95% CI lower bound -0.124 R does not clear 0"
+    ]
+  }
+]
