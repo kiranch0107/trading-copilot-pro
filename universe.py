@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 from datetime import date, datetime, timedelta
 
@@ -347,6 +348,93 @@ def _print_table(rows: list[dict], as_of: date, top_n: int,
 
 
 # ---------------------------------------------------------------------------
+# Shared snapshot loader — used by app.py AND scanner.py
+# ---------------------------------------------------------------------------
+
+HISTORY_DIR = "universe_history"
+MAX_AGE_DAYS = 14
+ENV_TOGGLE = "USE_DYNAMIC_UNIVERSE"
+
+
+def dynamic_enabled() -> bool:
+    """
+    One switch, read by every consumer.
+
+    app.py and scanner.py must never disagree about which universe is live: if
+    the scanner alerts on RS leaders while the app scans the fixed baseline,
+    you get Telegram alerts for tickers the app will not show you. A single
+    environment variable makes that disagreement impossible.
+    """
+    return os.environ.get(ENV_TOGGLE, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def latest_snapshot(history_dir: str = HISTORY_DIR) -> tuple[dict | None, str]:
+    """Newest JSON in history_dir, written by the weekly scheduled job."""
+    try:
+        if not os.path.isdir(history_dir):
+            return None, f"no {history_dir}/ directory"
+        files = sorted(f for f in os.listdir(history_dir) if f.endswith(".json"))
+        if not files:
+            return None, f"{history_dir}/ is empty"
+        with open(os.path.join(history_dir, files[-1])) as f:
+            snap = json.load(f)
+        if not snap.get("tickers"):
+            return None, f"{files[-1]} has no tickers"
+        return snap, files[-1]
+    except Exception as e:
+        return None, f"unreadable ({e})"
+
+
+def load_universe(fallback: list[str],
+                  history_dir: str = HISTORY_DIR,
+                  max_age_days: int = MAX_AGE_DAYS,
+                  allow_live: bool = True,
+                  today: date | None = None) -> tuple[list[str], str, int, str]:
+    """
+    Resolve the universe to scan. Returns (tickers, status, age_days, source)
+    where source is one of: snapshot | snapshot-stale | live | fallback.
+
+    Reading the committed snapshot rather than re-ranking is deliberate. It
+    costs zero Yahoo calls, works when Yahoo is rate-limiting, and — the real
+    reason — guarantees the list being traded is EXACTLY the one recorded in
+    the churn history. A live re-rank would mean the turnover series describes
+    a universe slightly different from the one that generated the trades.
+
+    A week-old snapshot is the intended cadence, not staleness: the universe
+    is rebalanced weekly by design.
+
+    allow_live=False is for headless callers (scanner.py) that must not spend
+    ~67 Yahoo calls ranking a universe while they still have a watchlist to
+    scan through the same rate budget.
+    """
+    today = today or datetime.now().date()
+    snap, label = latest_snapshot(history_dir)
+
+    if snap is not None:
+        try:
+            as_of = datetime.strptime(snap["as_of"], "%Y-%m-%d").date()
+            age = (today - as_of).days
+        except Exception:
+            age = -1
+        tickers = list(snap["tickers"])
+        if 0 <= age <= max_age_days:
+            return tickers, f"snapshot {snap.get('as_of', label)}", age, "snapshot"
+        return (tickers,
+                f"snapshot {snap.get('as_of', label)} is {age}d old — the weekly "
+                f"job may not be running", age, "snapshot-stale")
+
+    if allow_live:
+        try:
+            picked = select_universe()
+            if picked:
+                return picked, "ranked live (no snapshot)", 0, "live"
+        except Exception as e:
+            label = f"{label}; live ranking failed ({e})"
+
+    return list(fallback), f"{label} — using fallback list", -1, "fallback"
+
+
+# ---------------------------------------------------------------------------
 # Self-test — synthetic data, no network
 # ---------------------------------------------------------------------------
 
@@ -438,6 +526,47 @@ def selftest() -> int:
     assert all(t in SECTORS for t in CANDIDATE_POOL), \
         [t for t in CANDIDATE_POOL if t not in SECTORS]
     print(f"sector coverage: all {len(CANDIDATE_POOL)} candidates labelled")
+
+    # Shared loader — the path both app.py and scanner.py depend on
+    import tempfile, json as _json
+    d = tempfile.mkdtemp()
+    fb = ["NVDA", "META", "MSFT"]
+
+    tk, st_, age, src = load_universe(fb, history_dir=d, allow_live=False)
+    print(f"\nempty dir      : {src} -> {tk}")
+    assert src == "fallback" and tk == fb
+
+    _json.dump({"as_of": "2026-08-21", "tickers": ["TMO", "PANW"]},
+               open(os.path.join(d, "2026-08-21.json"), "w"))
+    tk, st_, age, src = load_universe(fb, history_dir=d, allow_live=False,
+                                      today=date(2026, 8, 24))
+    print(f"fresh snapshot : {src} ({age}d) -> {tk}")
+    assert src == "snapshot" and tk == ["TMO", "PANW"] and age == 3
+
+    tk, st_, age, src = load_universe(fb, history_dir=d, allow_live=False,
+                                      today=date(2026, 10, 1))
+    print(f"stale snapshot : {src} ({age}d) — still scanned, with a warning")
+    assert src == "snapshot-stale" and tk == ["TMO", "PANW"]
+
+    _json.dump({"as_of": "2026-08-24", "tickers": ["AAA", "BBB"]},
+               open(os.path.join(d, "2026-08-24.json"), "w"))
+    tk, _, _, src = load_universe(fb, history_dir=d, allow_live=False,
+                                  today=date(2026, 8, 24))
+    print(f"two snapshots  : newest wins -> {tk}")
+    assert tk == ["AAA", "BBB"]
+
+    open(os.path.join(d, "2026-08-31.json"), "w").write("{not json")
+    tk, _, _, src = load_universe(fb, history_dir=d, allow_live=False,
+                                  today=date(2026, 8, 31))
+    print(f"corrupt newest : {src} -> {tk}")
+    assert src == "fallback" and tk == fb
+
+    for var, want in [("1", True), ("true", True), ("ON", True),
+                      ("0", False), ("", False)]:
+        os.environ[ENV_TOGGLE] = var
+        assert dynamic_enabled() is want, (var, want)
+    os.environ.pop(ENV_TOGGLE, None)
+    print(f"env toggle     : 1/true/ON on, 0/unset off")
 
     print("\nAll self-tests passed.")
     return 0
