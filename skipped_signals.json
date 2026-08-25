@@ -128,5 +128,15 @@
     "notes": "9/18 at $3.80 on 8/25",
     "date": "2026-08-25",
     "logged": "2026-08-25 15:52 ET"
+  },
+  {
+    "id": "SKIP_TMO_1787688858",
+    "ticker": "TMO",
+    "trend": "Bullish",
+    "price": 600.0,
+    "reason": "Contract too expensive for my risk rule",
+    "notes": "9/18 at $3490 on 8/25",
+    "date": "2026-08-25",
+    "logged": "2026-08-25 16:14 ET"
   }
 ]
