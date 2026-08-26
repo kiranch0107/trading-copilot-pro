@@ -373,9 +373,6 @@ def run(cfg: dict) -> None:
         df = compute(raw)
         # attach dates back for reporting/regime mapping
         df = df.copy()
-        if "Date" in raw.columns:
-            df = df.merge(raw[["Date", "Open"]], on=None, how="left") \
-                if False else df   # (Open already dropped; re-attach below)
         # re-attach Open + Date aligned by tail length
         tail = raw.tail(len(df)).reset_index(drop=True)
         for col in ["Open", "Date"]:
