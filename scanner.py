@@ -123,10 +123,11 @@ PARAMS             = sc.DEFAULTS
 # 3.0x vs 4.0x, R:R 2.0 vs 0.5. Two systems disagreeing about what counts as a
 # signal is worse than either being wrong, because you cannot tell which one
 # produced a given trade. Now matched to app.py's frozen baseline.
-ADX_MIN            = PARAMS.adx_min
-ATR_STOP_MULT      = PARAMS.atr_stop_mult
-ATR_TGT_MULT       = PARAMS.atr_tgt_mult
-MIN_RR             = PARAMS.min_rr
+# NOTE: ADX_MIN / ATR_STOP_MULT / ATR_TGT_MULT / MIN_RR used to live here as
+# module constants. They were removed once analyze() started reading PARAMS
+# directly: leaving them would be actively misleading, since editing them
+# would look like it changed the signal and would in fact do nothing. Change
+# signal_core.SignalParams instead.
 EARNINGS_BLACKOUT_DAYS = 3   # matches app.py sidebar default
 POST_EARNINGS_DAYS     = 1   # matches app.py sidebar default
 ALERT_COOLDOWN_HRS = 4      # per ticker AND direction
