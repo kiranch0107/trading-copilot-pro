@@ -121,6 +121,28 @@ def drop_partial_bar(df: pd.DataFrame,
 # The signal
 # ---------------------------------------------------------------------------
 
+def _base_reason(price, ema20, ema50, macd, sig, rsi, volume, vol_avg,
+                 params) -> str:
+    """Which base condition failed — so the UI can say more than 'no signal'."""
+    bits = []
+    if not (price > ema20 > ema50 or price < ema20 < ema50):
+        bits.append("EMA stack not aligned")
+    if not (macd > sig or macd < sig):
+        bits.append("MACD flat")
+    elif (price > ema20 > ema50) and macd <= sig:
+        bits.append("MACD not confirming the uptrend")
+    elif (price < ema20 < ema50) and macd >= sig:
+        bits.append("MACD not confirming the downtrend")
+    if not (25 < rsi < 75):
+        bits.append(f"RSI {rsi:.0f} outside range")
+    if vol_avg > 0 and volume < vol_avg * params.volume_soft_mult:
+        bits.append(f"volume {volume/vol_avg:.2f}x average "
+                    f"(needs {params.volume_soft_mult:g}x)")
+    elif vol_avg <= 0:
+        bits.append("no volume average available")
+    return "; ".join(bits) if bits else "base conditions not met"
+
+
 def _norm_trend(v: str | None) -> str | None:
     """
     Normalise trend vocabulary.
@@ -198,7 +220,10 @@ def evaluate(df: pd.DataFrame,
         trend = "Bearish"
     else:
         return {
-            "blocked": True, "block_reason": "base", "ticker": ticker,
+            "blocked": True, "block_reason": "base",
+            "reason": _base_reason(price, ema20, ema50, macd, sig, rsi,
+                                   volume, vol_avg, params),
+            "ticker": ticker,
             "price": round(price, 2), "ema20": round(ema20, 2),
             "ema50": round(ema50, 2), "rsi": round(rsi, 1),
             "macd": round(macd, 4), "signal_line": round(sig, 4),
@@ -296,7 +321,10 @@ def evaluate(df: pd.DataFrame,
     min_risk = max(0.05, price * 0.003)
     if risk < min_risk:
         return {
-            "blocked": True, "block_reason": "zero_risk", "ticker": ticker,
+            "blocked": True, "block_reason": "zero_risk",
+            "reason": (f"stop too close to entry (risk ${abs(entry-stop):.2f} "
+                       f"< minimum ${max(0.05, price*0.003):.2f})"),
+            "ticker": ticker,
             "trend": trend, "price": round(price, 2), "entry": entry,
             "stop": stop, "risk": round(risk, 2), "min_risk": round(min_risk, 2),
             "filters": filters, "filters_pass": n_pass, "filters_total": n_total,
@@ -305,7 +333,9 @@ def evaluate(df: pd.DataFrame,
     rr = round(abs(target - entry) / risk, 2)
     if rr < params.min_rr:
         return {
-            "blocked": True, "block_reason": "rr", "ticker": ticker,
+            "blocked": True, "block_reason": "rr",
+            "reason": f"R:R {rr} below the {params.min_rr:g} minimum",
+            "ticker": ticker,
             "trend": trend, "strength": strength, "price": round(price, 2),
             "entry": entry, "stop": stop, "target": target, "rr": rr,
             "filters": filters, "filters_pass": n_pass, "filters_total": n_total,
@@ -322,7 +352,7 @@ def evaluate(df: pd.DataFrame,
         "volume": volume, "vol_avg": vol_avg,
         "vol_ratio": round(volume / vol_avg, 2) if vol_avg else 0,
         "filters": filters, "filters_pass": n_pass, "filters_total": n_total,
-        "all_filters_pass": all_pass, "high_quality": high_quality,
+        "all_pass": all_pass, "high_quality": high_quality,
     }
 
 
@@ -442,6 +472,22 @@ def selftest() -> int:
 
     assert params_fingerprint(DEFAULTS) == params_fingerprint(SignalParams())
     print(f"\nfingerprint               : {params_fingerprint(DEFAULTS)[:52]}...")
+    # REGRESSION: the UI reads r["all_pass"] in three places. An earlier
+    # version of this module renamed it to "all_filters_pass", which raised
+    # KeyError the moment a signal fired in the Swing Trade tab.
+    r = evaluate(_frame(), "TEST", spy_regime={"regime": "Bull"},
+                 weekly_trend="Bullish")
+    for k in ("all_pass", "filters", "filters_pass", "filters_total", "trend",
+              "strength", "entry", "stop", "target", "rr", "rsi", "adx",
+              "atr", "price", "high_quality"):
+        assert k in r, f"missing key the UI depends on: {k}"
+    print(f"\nresult contract           : all {15} UI keys present")
+
+    # blocked results explain themselves
+    r = evaluate(_frame(vol=100_000), "TEST")
+    assert r["reason"] and "volume" in r["reason"]
+    print(f"blocked reason            : {r['reason']}")
+
     print("\nAll self-tests passed.")
     return 0
 
