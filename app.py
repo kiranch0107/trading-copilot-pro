@@ -1709,72 +1709,6 @@ def check_manual_contract(ticker: str, right: str, strike: float,
 
 
 # ─────────────────────────────────────────────
-# UNUSUAL ACTIVITY ENGINE
-# ─────────────────────────────────────────────
-UA_VOL_OI_RATIO_MIN  = 2.0
-UA_VOL_OI_RATIO_HIGH = 4.0
-UA_PEER_MULTIPLE_MIN = 3.0
-UA_MIN_VOLUME        = 100
-
-
-def _score_unusual_contract(row: pd.Series, peer_med: float) -> dict:
-    vol = float(row.get("volume",0) or 0)
-    oi  = float(row.get("openInterest",0) or 0)
-    if vol < UA_MIN_VOLUME:
-        return {"unusual":False}
-    vol_oi  = vol/oi if oi>0 else (float("inf") if vol>0 else 0)
-    peer_r  = vol/peer_med if peer_med>0 else 0
-    voi_f   = vol_oi  >= UA_VOL_OI_RATIO_MIN
-    peer_f  = peer_r  >= UA_PEER_MULTIPLE_MIN
-    if not (voi_f or peer_f):
-        return {"unusual":False}
-    if vol_oi >= UA_VOL_OI_RATIO_HIGH and peer_f: sev = "Extreme"
-    elif voi_f and peer_f:                         sev = "High"
-    else:                                          sev = "Moderate"
-    reasons = []
-    if voi_f:  reasons.append(f"Vol {int(vol):,} is {vol_oi:.1f}x OI ({int(oi):,})")
-    if peer_f: reasons.append(f"Vol is {peer_r:.1f}x chain median volume")
-    return {"unusual":True,"severity":sev,
-            "vol_oi_ratio":round(vol_oi,1) if vol_oi!=float("inf") else None,
-            "peer_ratio":round(peer_r,1),"reasons":reasons,
-            "volume":int(vol),"oi":int(oi)}
-
-
-def scan_unusual_activity(ticker: str) -> dict:
-    chain = get_full_chain_data(ticker, MIN_DTE)
-    if chain.get("error"):
-        return {"error":chain["error"],"flagged":[]}
-    flagged = []; checked = 0
-    for e in chain["expiries"]:
-        expiry, dte = e["expiry"], e["dte"]; checked += 1
-        for label, opts in (("CALL",e["calls"]),("PUT",e["puts"])):
-            if opts.empty: continue
-            peer_med = float(opts["volume"].median())
-            for _, row in opts.iterrows():
-                s = _score_unusual_contract(row, peer_med)
-                if s.get("unusual"):
-                    flagged.append({"ticker":ticker,"type":label,
-                        "strike":round(float(row["strike"]),2),"expiry":expiry,"dte":dte,
-                        "last_price":round(float(row.get("lastPrice",0) or 0),2),
-                        "severity":s["severity"],"vol_oi_ratio":s["vol_oi_ratio"],
-                        "peer_ratio":s["peer_ratio"],"reasons":s["reasons"],
-                        "volume":s["volume"],"oi":s["oi"]})
-    sev_rank = {"Extreme":3,"High":2,"Moderate":1}
-    flagged.sort(key=lambda x:(sev_rank.get(x["severity"],0),x["volume"]),reverse=True)
-    return {"flagged":flagged,"expiries_checked":checked}
-
-
-def check_pick_unusual_activity(ticker: str, opt: dict) -> dict | None:
-    if not opt or "error" in opt: return None
-    ua = scan_unusual_activity(ticker)
-    if "error" in ua or not ua.get("flagged"): return None
-    for f in ua["flagged"]:
-        if f["type"]==opt["label"] and abs(f["strike"]-opt["strike"])<0.01 and f["expiry"]==opt["expiry"]:
-            return f
-    return None
-
-
-# ─────────────────────────────────────────────
 # TRADE ANALYSIS
 #
 # Returns a dict on success, OR a diagnostic dict
@@ -2061,47 +1995,6 @@ def render_price_chart(df: pd.DataFrame, ticker: str):
     st.caption(f"{ticker} — Close price with EMA 20 & EMA 50 (last 60 bars)")
 
 
-def render_unusual_table(flagged: list, ticker_label: str = "", top_n: int = 5):
-    if not flagged:
-        st.info(f"No unusual activity detected{f' for {ticker_label}' if ticker_label else ''}.")
-        return
-    sev_rank = {"Extreme":3,"High":2,"Moderate":1}
-    sev_map  = {"Extreme":"🔴","High":"🟠","Moderate":"🟡"}
-    by_t: dict[str,list] = {}
-    for f in flagged:
-        by_t.setdefault(f["ticker"],[]).append(f)
-
-    def t_key(t):
-        best = max(by_t[t], key=lambda x:(sev_rank.get(x["severity"],0),x["volume"]))
-        return (sev_rank.get(best["severity"],0), best["volume"])
-
-    for t in sorted(by_t.keys(), key=t_key, reverse=True):
-        contracts = sorted(by_t[t],
-                           key=lambda x:(sev_rank.get(x["severity"],0),x["volume"]),
-                           reverse=True)
-        total_cnt = len(contracts)
-        top_c     = contracts[:top_n]
-        ext_n     = sum(1 for c in contracts if c["severity"]=="Extreme")
-        high_n    = sum(1 for c in contracts if c["severity"]=="High")
-        header    = f"**{t}** — {total_cnt} flagged" + (f" (top {top_n})" if total_cnt>top_n else "")
-        badges    = " ".join(filter(None,[f"🔴 x{ext_n}" if ext_n else "",
-                                          f"🟠 x{high_n}" if high_n else ""]))
-        st.markdown(f"### {header}  {badges}")
-        for f in top_c:
-            se  = sev_map.get(f["severity"],"⚪")
-            te  = "📈" if f["type"]=="CALL" else "📉"
-            with st.container(border=True):
-                u1,u2,u3,u4,u5 = st.columns([1,1,1.2,1,1.5])
-                u1.markdown(f"{te} **{f['type']}**")
-                u2.markdown(f"Strike **${f['strike']}**")
-                u3.markdown(f"Exp {f['expiry']} ({f['dte']}d)")
-                u4.markdown(f"{se} **{f['severity']}**")
-                u5.markdown(f"Vol **{f['volume']:,}** / OI {f['oi']:,}")
-                for reason in f["reasons"]:
-                    st.caption(f"• {reason}")
-        st.divider()
-
-
 # ─────────────────────────────────────────────
 # MARKET STATUS + REGIME BANNER
 # Both fetched lazily (inside a cached wrapper)
@@ -2119,10 +2012,10 @@ def get_market_context() -> dict:
 # ─────────────────────────────────────────────
 # TOP-LEVEL TABS
 # ─────────────────────────────────────────────
-(TAB_SCAN, TAB_STOCK, TAB_CHECK, TAB_POSITIONS, TAB_UNUSUAL,
+(TAB_SCAN, TAB_STOCK, TAB_CHECK, TAB_POSITIONS,
  TAB_ALERTS, TAB_JOURNAL) = st.tabs([
     "📡 Watchlist Scan", "🔍 Stock Analysis", "✅ Contract Check", "📍 Positions",
-    "🌊 Unusual Activity", "🔔 Alert History", "📓 Trade Journal",
+    "🔔 Alert History", "📓 Trade Journal",
 ])
 
 
@@ -2179,7 +2072,7 @@ with TAB_SCAN:
         # setups — those lack display keys and must never reach the UI.
         all_setups = [s for s in all_setups if isinstance(s, dict) and "ticker" in s]
 
-        # Store in session_state so other tabs (e.g. Unusual Activity quick-pick)
+        # Store in session_state so other tabs can reuse the last scan
         # can safely read it without a NameError when no scan has run yet.
         st.session_state["all_setups"] = all_setups
 
@@ -2517,14 +2410,6 @@ with TAB_STOCK:
                                 st.success(f"💸 Budget pick — \\${opt['mid']}/contract (under \\${BUDGET_MAX:.2f})")
                             if not r.get("all_pass", True):
                                 st.warning("⚠️ Not all filters pass — trade at your own discretion.")
-                            ua_hit = check_pick_unusual_activity(ticker, opt)
-                            if ua_hit:
-                                se = {"Extreme":"🔴","High":"🟠","Moderate":"🟡"}.get(ua_hit["severity"],"⚪")
-                                st.markdown(f"### {se} Unusual Activity — {ua_hit['severity']}")
-                                for reason in ua_hit["reasons"]:
-                                    st.caption(f"• {reason}")
-                            else:
-                                st.caption("🌊 No unusual activity on this contract.")
 
                             # ── Quick log: Bought / Skip, right from this contract ──
                             #
@@ -3014,78 +2899,6 @@ with TAB_POSITIONS:
     st.caption("⚠️ The monitor reports when a rule was met on delayed quotes. It is "
                "not a broker, places no orders, and your real fill will differ — "
                "especially on wide spreads.")
-
-
-# ═══════════════════════════════════════════════
-# TAB — UNUSUAL ACTIVITY
-# ═══════════════════════════════════════════════
-with TAB_UNUSUAL:
-    st.subheader("🌊 Unusual Options Activity Scanner")
-    st.caption("Flags contracts where Volume >> Open Interest (fresh same-day positioning) "
-               "or Volume >> peer strikes in the same chain.")
-
-    ua_c1, ua_c2 = st.columns([2,1])
-    with ua_c1:
-        # FIX #7: quick-pick dropdown of already-scanned tickers.
-        # Read from session_state — all_setups is only defined inside TAB_SCAN's
-        # else-branch, so referencing it directly would NameError before a scan.
-        _setups         = st.session_state.get("all_setups", [])
-        scanned_tickers = [s["ticker"] for s in _setups if isinstance(s, dict) and "ticker" in s]
-        quick_picks     = ["— type below —"] + sorted(scanned_tickers) + ["Other…"]
-        quick_choice    = st.selectbox("Quick-pick from watchlist scan",
-                                       quick_picks, key="ua_quick_pick")
-        if quick_choice not in ("— type below —","Other…"):
-            ua_ticker_input = quick_choice
-        else:
-            ua_ticker_input = st.text_input("Or enter any ticker",
-                                            placeholder="TSLA", key="ua_ticker_input")
-    with ua_c2:
-        ua_scan_watchlist = st.checkbox("Scan full watchlist instead", key="ua_scan_watchlist")
-
-    st.divider()
-
-    if ua_scan_watchlist:
-        all_flagged = []
-        prog = st.progress(0, text="Starting scan…")
-        for i, t in enumerate(SCAN_LIST):
-            prog.progress((i+1)/len(SCAN_LIST), text=f"Scanning {t}…")
-            res = scan_unusual_activity(t)
-            if "error" not in res:
-                all_flagged.extend(res.get("flagged",[]))
-        prog.empty()
-        sev_rank = {"Extreme":3,"High":2,"Moderate":1}
-        all_flagged.sort(key=lambda x:(sev_rank.get(x["severity"],0),x["volume"]),reverse=True)
-        wc1,wc2,wc3 = st.columns(3)
-        wc1.metric("Total Flagged",    len(all_flagged))
-        wc2.metric("Extreme",          sum(1 for f in all_flagged if f["severity"]=="Extreme"))
-        wc3.metric("Tickers Affected", len(set(f["ticker"] for f in all_flagged)))
-        st.divider()
-        render_unusual_table(all_flagged)
-    elif ua_ticker_input:
-        ticker_ua = ua_ticker_input.strip().upper()
-        with st.spinner(f"Scanning {ticker_ua} option chain…"):
-            result = scan_unusual_activity(ticker_ua)
-        if "error" in result:
-            st.error(f"⚠️ {result['error']}")
-        else:
-            flagged = result.get("flagged",[])
-            fc1,fc2,fc3 = st.columns(3)
-            fc1.metric("Flagged Contracts", len(flagged))
-            fc2.metric("Extreme",           sum(1 for f in flagged if f["severity"]=="Extreme"))
-            fc3.metric("Expiries Checked",  result.get("expiries_checked",0))
-            st.divider()
-            render_unusual_table(flagged, ticker_ua)
-    else:
-        st.info("Pick a ticker from the dropdown or type one above, "
-                "or tick the box to scan the full watchlist.")
-
-    st.divider()
-    st.markdown("**Severity guide**")
-    st.caption(f"🟡 Moderate — Vol ≥ {UA_VOL_OI_RATIO_MIN}x OI or ≥ {UA_PEER_MULTIPLE_MIN}x peer median")
-    st.caption("🟠 High — both conditions simultaneously")
-    st.caption(f"🔴 Extreme — Vol ≥ {UA_VOL_OI_RATIO_HIGH}x OI AND ≥ {UA_PEER_MULTIPLE_MIN}x peer median")
-    st.caption(f"Contracts with < {UA_MIN_VOLUME} traded are ignored as noise.")
-    st.caption("⚠️ Not financial advice. Heuristic screen — not confirmed institutional flow.")
 
 
 # ═══════════════════════════════════════════════
