@@ -242,6 +242,11 @@ def _save(path: Path, data: list) -> None:
         if not err and remote:
             data = _merge_positions(data, remote)
             st.session_state[_SS_POSITIONS] = data
+            # Re-save locally so the on-disk cache reflects the merged state
+            # too (e.g. an EXIT_SIGNALLED flip written by exit_monitor.py) —
+            # otherwise a later GitHub outage would fall back to a local copy
+            # that is missing exactly the update this merge just picked up.
+            _local_save(path, data)
     err = _gh_put(path.name, data, f"chore: update {path.name} from app")
     st.session_state["_gh_last_error"] = err
     if err:
@@ -744,8 +749,15 @@ def add_journal_trade(alert_id, ticker, trend, entry, stop, target,
                       rr, exit_price, outcome, notes, setup_date) -> None:
     journal = load_journal()
     risk    = abs(entry - stop)
-    pnl_r   = round((exit_price - entry) / risk, 2) if trend == "Bullish" \
-              else round((entry - exit_price) / risk, 2)
+    # Guard the divide: the live signal path can never produce entry == stop
+    # (signal_core's zero-risk gate blocks it before an alert is created), but
+    # a manually edited or legacy record could — and every other R-multiple
+    # calc in this file is already guarded the same way.
+    if risk <= 0:
+        pnl_r = 0.0
+    else:
+        pnl_r = round((exit_price - entry) / risk, 2) if trend == "Bullish" \
+                else round((entry - exit_price) / risk, 2)
     journal = [j for j in journal if j["id"] != alert_id]
     journal.append({
         "id": alert_id, "date": setup_date,
