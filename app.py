@@ -1991,7 +1991,7 @@ def render_price_chart(df: pd.DataFrame, ticker: str):
     """FIX #2: candlestick-style line chart with EMA20/50 overlay."""
     chart_df = df.tail(60)[["Close","EMA20","EMA50"]].copy()
     chart_df.columns = ["Close", "EMA 20", "EMA 50"]
-    st.line_chart(chart_df, height=220, use_container_width=True)
+    st.line_chart(chart_df, height=220, width="stretch")
     st.caption(f"{ticker} — Close price with EMA 20 & EMA 50 (last 60 bars)")
 
 
@@ -2429,13 +2429,13 @@ with TAB_STOCK:
                             with lc1:
                                 if st.button("✅ Bought this — log position",
                                             key=f"qbuy_btn_{_qkey}",
-                                            use_container_width=True):
+                                            width="stretch"):
                                     st.session_state[f"qbuy_open_{_qkey}"] = True
                                     st.session_state[f"qskip_open_{_qkey}"] = False
                             with lc2:
                                 if st.button("🚫 Skipping this — log reason",
                                             key=f"qskip_btn_{_qkey}",
-                                            use_container_width=True):
+                                            width="stretch"):
                                     st.session_state[f"qskip_open_{_qkey}"] = True
                                     st.session_state[f"qbuy_open_{_qkey}"] = False
 
@@ -2999,7 +2999,7 @@ with TAB_JOURNAL:
                 data=json.dumps(backup, indent=2, default=str),
                 file_name=f"trading_copilot_backup_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
                 mime="application/json",
-                use_container_width=True,
+                width="stretch",
             )
             st.caption(f"{len(journal)} trades · {len(alerts)} alerts · "
                        f"{len(load_positions())} open position(s)")
@@ -3016,7 +3016,7 @@ with TAB_JOURNAL:
                     n_p = len(payload.get("positions", []))
                     st.caption(f"Found {n_j} trades · {n_a} alerts · {n_p} position(s)")
                     if st.button("♻️ Restore (overwrites current)", type="primary",
-                                 use_container_width=True, key="do_restore"):
+                                 width="stretch", key="do_restore"):
                         save_journal(payload.get("journal", []))
                         save_alerts(payload.get("alerts", []))
                         if "positions" in payload:
@@ -3051,7 +3051,7 @@ with TAB_JOURNAL:
         eq_data = stats.get("equity_curve",[])
         if len(eq_data) > 1:
             eq_df = pd.DataFrame(eq_data).set_index("date")
-            st.line_chart(eq_df, height=200, use_container_width=True)
+            st.line_chart(eq_df, height=200, width="stretch")
             st.caption("Cumulative R over time — rising = consistent edge · steep drop = drawdown period to review")
 
         st.divider()
