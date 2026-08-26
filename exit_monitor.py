@@ -80,10 +80,12 @@ MARKET_HOLIDAYS = {
 }
 MARKET_HALF_DAYS = {"2025-07-03","2025-11-28","2025-12-24","2026-11-27","2026-12-24"}
 
-# Bar-count time stop. Mirrors backtest.py --max-hold. Positions opened
-# before this rule existed have no max_hold_bars in their rules block and
-# are simply not subject to it.
-MAX_HOLD_BARS_DEFAULT = 30
+# NOTE: there is deliberately no MAX_HOLD_BARS_DEFAULT constant here. The
+# limit is written into each position's rules block by app.py when the
+# position is opened, so a module-level default would never be consulted —
+# and a constant that looks like a setting but changes nothing is worse than
+# no constant at all. Positions opened before this rule existed have no
+# max_hold_bars and are simply not subject to it.
 
 
 def is_market_open(now: datetime | None = None) -> bool:
