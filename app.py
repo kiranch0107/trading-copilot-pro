@@ -2184,8 +2184,9 @@ with TAB_SCAN:
         st.session_state["all_setups"] = all_setups
 
         high_quality = [s for s in all_setups if s["high_quality"]]
-        partial      = [s for s in all_setups if not s["high_quality"] and s["all_pass"]]
-        weak         = [s for s in all_setups if not s["all_pass"]]
+        partial      = [s for s in all_setups
+                        if not s.get("high_quality") and s.get("all_pass", True)]
+        weak         = [s for s in all_setups if not s.get("all_pass", True)]
 
         for a in high_quality:
             alert_created = log_alert(
@@ -2374,7 +2375,7 @@ with TAB_STOCK:
                             st.warning(f"⚠️ No trade plan — blocked ({reason}).")
                     else:
                         badge = ("🔥 HIGH QUALITY" if r["high_quality"]
-                                 else "✅ VALID — all filters pass" if r["all_pass"]
+                                 else "✅ VALID — all filters pass" if r.get("all_pass")
                                  else f"⚠️ PARTIAL — {r['filters_pass']}/{r['filters_total']} filters pass")
                         st.markdown(f"### {badge} — {r['trend']} ({r['strength']})")
                         s1,s2,s3,s4 = st.columns(4)
@@ -2414,7 +2415,7 @@ with TAB_STOCK:
                             "overnight and an adverse gap can open *beyond* your stop, making the "
                             "realised loss larger than the planned risk shown above."
                         )
-                        if not r["all_pass"]:
+                        if not r.get("all_pass", True):
                             failed = [n for n,f in r["filters"].items() if not f["pass"]]
                             st.caption(
                                 f"⚠️ {len(failed)} enhancement filter(s) failing: "
@@ -2514,7 +2515,7 @@ with TAB_STOCK:
 
                             if opt["is_budget"]:
                                 st.success(f"💸 Budget pick — \\${opt['mid']}/contract (under \\${BUDGET_MAX:.2f})")
-                            if not r["all_pass"]:
+                            if not r.get("all_pass", True):
                                 st.warning("⚠️ Not all filters pass — trade at your own discretion.")
                             ua_hit = check_pick_unusual_activity(ticker, opt)
                             if ua_hit:
