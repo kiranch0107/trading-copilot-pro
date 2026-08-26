@@ -16,7 +16,7 @@ from datetime import datetime, date as _date, timedelta as _timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import pytz
-import signal_core as sc
+import signal_core
 
 # ─────────────────────────────────────────────
 # LOGGING
@@ -1691,13 +1691,32 @@ def check_manual_contract(ticker: str, right: str, strike: float,
         add("Spread <= 15% of mid", spread_pct <= 15.0,
             f"${spread:.2f} = {spread_pct:.1f}% of mid")
 
-        # Non-blocking: your fill vs the current market. Being outside the
-        # spread is not a rule violation, but it changes the trade's maths.
-        if mid > 0:
+        # Non-blocking, and DIRECTIONAL. An earlier version used abs(slip),
+        # which flagged a fill BELOW mid as a failure — but paying under mid
+        # when buying is a good fill, not a bad one. Only paying OVER mid
+        # costs you anything.
+        #
+        # This comparison is also only meaningful for a contract you are about
+        # to buy. If the position was opened days ago the "gap" is mostly the
+        # contract having moved since, not slippage, so it is reported as
+        # context rather than judged.
+        if mid > 0 and out["entry_premium"] > 0:
             slip = (out["entry_premium"] - mid) / mid * 100
-            add("Entry near mid", abs(slip) <= 10,
-                f"paid ${out['entry_premium']:.2f} vs mid ${mid:.2f} "
-                f"({slip:+.1f}%)", blocking=False)
+            if slip > 10:
+                add("Entry not far above mid", False,
+                    f"paid ${out['entry_premium']:.2f} vs mid ${mid:.2f} "
+                    f"(+{slip:.1f}%) — that premium is a cost you carry from "
+                    f"the first tick", blocking=False)
+            elif slip < -10:
+                add("Entry not far above mid", True,
+                    f"paid ${out['entry_premium']:.2f} vs mid ${mid:.2f} "
+                    f"({slip:+.1f}%) — below mid. Good fill if this was just "
+                    f"bought; if the position is older, the contract has "
+                    f"simply moved since entry", blocking=False)
+            else:
+                add("Entry not far above mid", True,
+                    f"paid ${out['entry_premium']:.2f} vs mid ${mid:.2f} "
+                    f"({slip:+.1f}%)", blocking=False)
 
     # ── C. Verdict ──
     blocking = [c for c in out["checks"] if c["blocking"]]
@@ -1716,14 +1735,14 @@ def check_manual_contract(ticker: str, right: str, strike: float,
 # exactly WHY — base conditions / filters / RR.
 # Never returns bare None anymore.
 # ─────────────────────────────────────────────
-def _signal_params() -> "sc.SignalParams":
+def _signal_params() -> "signal_core.SignalParams":
     """
     Build the shared parameter object from the sidebar.
 
-    scanner.py uses sc.DEFAULTS. The app lets you move these live, but both
+    scanner.py uses signal_core.DEFAULTS. The app lets you move these live, but both
     read the SAME dataclass, so a field cannot exist in one and not the other.
     """
-    return sc.SignalParams(
+    return signal_core.SignalParams(
         adx_min=float(ADX_MIN),
         min_rr=float(MIN_RR),
         hq_min_rr=float(HQ_MIN_RR),
@@ -1753,7 +1772,7 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
     params = _signal_params()
     adx_ok, adx_val = check_adx(df)
 
-    r = sc.evaluate(
+    r = signal_core.evaluate(
         df, ticker, params,
         adx_value=adx_val,
         weekly_trend=get_weekly_trend(ticker) if WEEKLY_CONFIRM else None,
@@ -2555,6 +2574,13 @@ with TAB_STOCK:
                                    "Try again once the session has more data.")
                     else:
                         intraday = compute(intraday)
+                        # NOTE: this `sc` is the scalp RESULT DICT. It used to
+                        # shadow `import signal_core as sc` — app.py executes
+                        # top-to-bottom at module level, so this assignment
+                        # replaced the module for the rest of the script and
+                        # _signal_params() then failed with "'dict' object has
+                        # no attribute 'SignalParams'". The module is now
+                        # imported under its full name; keep it that way.
                         sc = scalp(intraday)
                         if sc["direction"] is None:
                             st.info(f"ℹ️ {sc['signal']}")
