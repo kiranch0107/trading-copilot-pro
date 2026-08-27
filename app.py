@@ -1373,14 +1373,32 @@ def get_full_chain_data(ticker: str, min_dte: int) -> dict:
             _rl.wait()
             try:
                 all_expiries = stock.options
-                break
+                # BUG FIX: yfinance returns an EMPTY LIST when throttled rather
+                # than raising, so an empty result used to skip the retry loop
+                # entirely and surface as "No option chain available" — which
+                # reads like the stock has no options at all. For a name like
+                # KO with thousands of listed contracts that is never true; it
+                # is a throttle. Treat empty as retryable.
+                if all_expiries:
+                    break
+                if attempt < _OPT_RETRY_ATTEMPTS - 1:
+                    logger.warning("Empty expiry list for %s (likely throttled); "
+                                   "retry in %ss", ticker, delay)
+                    time.sleep(delay); delay *= 2; continue
             except Exception as e:
                 if _is_rate_limit_error(e) and attempt < _OPT_RETRY_ATTEMPTS - 1:
                     logger.warning("Rate limited options(%s); backoff %ss", ticker, delay)
                     time.sleep(delay); delay *= 2; continue
                 raise
         if not all_expiries:
-            return {"error":"No option chain available","expiries":[]}
+            # Say what actually happened. The previous wording implied the
+            # underlying is not optionable, sending you to check the ticker
+            # when the real answer is "wait a minute and try again".
+            return {"error": f"Yahoo returned no expiries for {ticker} after "
+                             f"{_OPT_RETRY_ATTEMPTS} attempts — almost always a "
+                             f"temporary rate limit, not a missing chain. "
+                             f"Try again shortly.",
+                    "expiries": []}
 
         today   = pd.Timestamp.today().normalize()
         result  = []
