@@ -36,7 +36,7 @@ on:
     # Every 30 min, 13:00–21:00 UTC, Mon–Fri.
     # That range covers 9:30am–4:00pm ET in BOTH EST and EDT; the guard step
     # below discards the slots that fall outside real trading hours.
-    - cron: '0,30 13-21 * * 1-5'
+        - cron: '7,37 13-21 * * 1-5'
 
     # ── ALTERNATIVE: once daily, just after the close ──
     # Recommended if you only want the daily signal. Comment out the line
