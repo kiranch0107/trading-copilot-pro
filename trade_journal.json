@@ -66,5 +66,37 @@
     "contracts": 2.0,
     "pnl_usd": -52.0,
     "notes": "Bought on 8/20"
+  },
+  {
+    "id": "OPT_TGT_1787687485",
+    "date": "2026-08-25 15:51 ET",
+    "closed": "2026-08-27 10:17 ET",
+    "ticker": "TGT 2026-09-18 170C",
+    "trend": "Bullish",
+    "entry": 2.25,
+    "stop": 0,
+    "target": 0,
+    "planned_rr": 0,
+    "exit_price": 3.45,
+    "outcome": "WIN",
+    "actual_rr": 0.53,
+    "contracts": 1.0,
+    "pnl_usd": 120.0,
+    "entry_features": {
+      "adx": 35.5298,
+      "rsi": 79.3651,
+      "atr": 4.9871,
+      "close": 169.89,
+      "ema20": 152.6073,
+      "ema50": 143.0764,
+      "volume": 6410700.0,
+      "vol_avg20": 4637680.0,
+      "rvol": 1.382,
+      "ext_atr": 3.465,
+      "rs_20d": 0.1868,
+      "regime": "Neutral",
+      "captured": "2026-08-25 15:51 ET"
+    },
+    "notes": "Manual on 8/27"
   }
 ]
