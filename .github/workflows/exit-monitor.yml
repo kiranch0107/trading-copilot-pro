@@ -29,13 +29,18 @@ name: Exit Monitor
 
 on:
   schedule:
-    # Every 30 min, 13:30–20:00 UTC, Mon–Fri.
-    # NOTE: this is UTC and does NOT follow US daylight saving. It covers
-    # 9:30am–4:00pm ET during EDT (Mar–Nov). During EST (Nov–Mar) US markets
-    # run 14:30–21:00 UTC, so shift the hours below by one in winter, or just
-    # widen the range — the script itself checks real market hours and exits
-    # quietly when closed, so extra runs are harmless.
-    - cron: "0,30 13-20 * * 1-5"
+    # Every 30 min, 13:00-21:59 UTC, Mon-Fri.
+    #
+    # Cron is UTC and does not follow US daylight saving, so a fixed window
+    # cannot fit both. 13-20 covered EDT only: through the EST half of the
+    # year (Nov-Mar) the session runs 14:30-21:00 UTC, and the 15:00-16:00 ET
+    # hour — the close, when stops and targets most often get hit — had NO
+    # monitor run at all. scanner.yml already uses 13-21; this one did not.
+    #
+    # Widened rather than "shift it in winter", because that is a manual step
+    # nobody remembers twice a year. The script re-checks real ET market
+    # hours and exits quietly when closed, so the extra runs cost seconds.
+    - cron: "0,30 13-21 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:
