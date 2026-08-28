@@ -248,8 +248,18 @@ def bars_held(pos: dict) -> int | None:
 
 
 def days_to_expiry(expiry: str) -> int | None:
+    """
+    DTE measured against the ET trading date.
+
+    date.today() reads the HOST clock, and GitHub Actions runners are UTC.
+    Any run after 20:00 ET is already tomorrow in UTC, so DTE came back one
+    day short — and the TIME rule fires on `dte <= floor`, so a position at
+    exactly the floor could exit a session early. Every other date in this
+    module is ET; this one was the exception.
+    """
     try:
-        return (datetime.strptime(expiry, "%Y-%m-%d").date() - date.today()).days
+        return (datetime.strptime(expiry, "%Y-%m-%d").date()
+                - datetime.now(ET).date()).days
     except Exception:
         return None
 
@@ -414,9 +424,15 @@ def diagnose(positions: list) -> None:
         print(f"    Paid           : ${p['entry_premium']:.2f} x {p.get('contracts')} contract(s)")
         rules = p.get("rules", {}) or {}
         print(f"    Rules          : TP +{rules.get('tp_pct')}%  SL -{rules.get('sl_pct')}%  "
-              f"DTE<={rules.get('dte_exit')}  thesis={rules.get('invalidate_ema')}")
+              f"DTE<={rules.get('dte_exit')}  HOLD<={rules.get('max_hold_bars')}  "
+              f"thesis={rules.get('invalidate_ema')}")
+        # max_hold_bars was missing from this check, so a position whose only
+        # active rule was HOLD got reported as "can never alert" — the exact
+        # opposite of the truth, from the tool you reach for when an alert
+        # does not arrive.
         if not any([rules.get("tp_pct"), rules.get("sl_pct"),
-                    rules.get("dte_exit"), rules.get("invalidate_ema")]):
+                    rules.get("dte_exit"), rules.get("max_hold_bars"),
+                    rules.get("invalidate_ema")]):
             print("    -> ALL RULES DISABLED. This position can never alert.")
             continue
 
@@ -478,6 +494,13 @@ def diagnose(positions: list) -> None:
             if rules.get("tp_pct") and pnl >= abs(rules["tp_pct"]):  fired.append("TARGET")
             if rules.get("dte_exit") and dte is not None and dte <= rules["dte_exit"]:
                 fired.append("TIME")
+            _held = bars_held(p)
+            if rules.get("max_hold_bars") and _held is not None \
+                    and _held >= rules["max_hold_bars"]:
+                fired.append("HOLD")
+            if _held is not None:
+                print(f"    Sessions held  : {_held}"
+                      f"{' / ' + str(rules['max_hold_bars']) if rules.get('max_hold_bars') else ''}")
             print(f"    Would fire     : {', '.join(fired) if fired else 'nothing — all rules within limits'}")
             if fired and p.get("exit_alerted"):
                 print("    -> Rule met BUT exit_alerted is already True, so no repeat")
