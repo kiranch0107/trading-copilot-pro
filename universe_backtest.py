@@ -172,7 +172,12 @@ def run_arm(name: str, tickers: list[str], years: int, cfg: dict,
 
     s = bt.stats(all_trades)
     pos = sum(1 for p in per_ticker if p["avg_r"] > 0)
-    s.update({"arm": name, "per_ticker": per_ticker,
+    ci_low = ci_high = None
+    if len(all_trades) > 1:
+        r = np.array([t["r"] for t in all_trades])
+        se = float(r.std(ddof=1)) / np.sqrt(len(r))
+        ci_low, ci_high = float(r.mean() - 1.96*se), float(r.mean() + 1.96*se)
+    s.update({"ci_low": ci_low, "ci_high": ci_high, "arm": name, "per_ticker": per_ticker,
               "tickers_traded": len(per_ticker),
               "tickers_positive": pos,
               "tickers_positive_frac":
@@ -249,15 +254,17 @@ def main() -> int:
     print("COMPARISON")
     print("=" * 78)
     print(f"{'Arm':10} {'Trades':>7} {'Win%':>6} {'Avg R':>8} {'Total R':>9} "
-          f"{'PF':>6} {'MaxDD':>8}  Tickers+")
+          f"{'PF':>6} {'MaxDD':>8} {'95% CI':>18}  Tickers+")
     for s in results:
         if not s.get("trades"):
             print(f"{s['arm']:10} {'0':>7}  (no trades)")
             continue
+        ci = (f"[{s['ci_low']:+.3f}, {s['ci_high']:+.3f}]"
+              if s.get('ci_low') is not None else 'n/a')
         print(f"{s['arm']:10} {s['trades']:>7} "
-              f"{s.get('win_rate', 0):>5.1f}% {s.get('expectancy', 0):>8.3f} "
-              f"{s.get('total_r', 0):>9.1f} {s.get('profit_factor', 0):>6.2f} "
-              f"{s.get('max_dd', 0):>8.1f}  "
+              f"{s['win_rate']:>5.1f}% {s['avg_r']:>8.3f} "
+              f"{s['total_r']:>9.1f} {s['pf']:>6.2f} "
+              f"{s['max_dd']:>8.1f} {ci:>18}  "
               f"{s['tickers_positive']}/{s['tickers_traded']}")
 
     print("\n" + "=" * 78)
