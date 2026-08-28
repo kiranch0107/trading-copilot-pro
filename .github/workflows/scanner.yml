@@ -135,6 +135,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        env:
+          LOG_LEVEL: ${{ inputs.log_level || 'INFO' }}
         run: python scanner.py
 
       - name: Persist alert cooldown state
