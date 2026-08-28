@@ -29,5 +29,11 @@
     "min_expectancy": 0.2,
     "min_profit_factor": 1.3,
     "require_ci_above_zero": true
+  },
+  "live_divergence_note": {
+    "recorded": "2026-08-28",
+    "universe": "Live scans the dynamic RS-ranked universe (universe.py, top_n=8, weekly rebalance), NOT the 12 tickers in frozen.tickers. Those 12 are the OOS validation universe only. Chosen deliberately; universe_backtest.py measures the rule point-in-time.",
+    "atr_stop": "Live now matches frozen.atr_stop=1.25. It had drifted to 1.0, which the harness never tested and which is the looser setting since R:R scales inversely with it.",
+    "why_this_note": "The atr_stop discrepancy went unnoticed because nothing recorded which value was chosen or why. Anything that diverges from frozen{} belongs here, dated."
   }
 }

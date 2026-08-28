@@ -140,6 +140,13 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Explicit rather than relying on universe.DEFAULT_DYNAMIC. That
+          # default is buried in code, and app.py (Streamlit Cloud) reads the
+          # same toggle from a different environment — a silent default is how
+          # the two end up scanning different universes and you get alerts for
+          # tickers the app will not show. Set the SAME value in Streamlit
+          # Cloud secrets.
+          USE_DYNAMIC_UNIVERSE: '1'
           LOG_LEVEL: ${{ inputs.log_level || 'INFO' }}
         run: python scanner.py
 
