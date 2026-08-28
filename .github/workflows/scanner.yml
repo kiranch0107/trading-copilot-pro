@@ -45,6 +45,11 @@ on:
 
   workflow_dispatch:               # manual run, always allowed
     inputs:
+      log_level:
+        description: "Log level (DEBUG shows per-ticker reject reasons)"
+        type: choice
+        options: ["INFO", "DEBUG"]
+        default: "INFO"
       force:
         description: 'Run even if the market is closed'
         type: boolean
