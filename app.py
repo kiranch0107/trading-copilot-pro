@@ -1491,6 +1491,12 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
         diag["in_window"] += len(opts)
 
         opts = opts.copy()
+        # Yahoo returns NaN (not 0) for quotes on some contracts. NaN fails every
+        # comparison silently, so a NaN bid and a zero bid both mean "no quote" —
+        # make that explicit rather than relying on comparison semantics.
+        for _c in ("bid", "ask", "volume", "openInterest"):
+            if _c in opts.columns:
+                opts[_c] = opts[_c].fillna(0)
         opts["spread"] = opts["ask"] - opts["bid"]
         opts["mid"]    = (opts["ask"] + opts["bid"]) / 2
 
@@ -1552,6 +1558,14 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
                    f"${price:.2f})")
         elif diag["had_bid"] == 0:
             why = f"all {diag['in_window']} strikes in range had no live bid"
+            # Almost always the clock, not the chain. Yahoo returns zero or NaN
+            # bids for options outside regular hours, so every strike fails the
+            # bid > 0 gate after the close — with no indication that the cause
+            # is the time of day.
+            if not is_market_open():
+                why += (". The market is closed — option quotes go stale after "
+                        "the bell, so this is expected outside 9:30-16:00 ET "
+                        "rather than a problem with the chain")
         elif diag["had_volume"] == 0:
             why = (f"{diag['had_bid']} strikes had a bid but none traded "
                    f"today (volume 0)")
