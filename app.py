@@ -1472,17 +1472,40 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
     lo, hi = price * lo_mult, price * hi_mult
 
     best = None; best_score = 0.0
+    # Diagnostics. "No liquid options found" on its own is a dead end — it does
+    # not say whether the chain was empty, the strike window excluded
+    # everything, or contracts existed and every one failed a liquidity gate.
+    # Those need different responses, so count them.
+    diag = {"expiries": 0, "in_window": 0, "had_bid": 0, "had_volume": 0,
+            "had_oi": 0, "spread_ok": 0, "best_spread_pct": None,
+            "window_lo": round(lo, 2), "window_hi": round(hi, 2)}
+
     for entry in chain_data["expiries"]:
         expiry, dte = entry["expiry"], entry["dte"]
         opts = entry["calls"] if trend=="Bullish" else entry["puts"]
         if opts.empty: continue
+        diag["expiries"] += 1
 
         opts = opts[(opts["strike"] >= lo) & (opts["strike"] <= hi)]
         if opts.empty: continue
+        diag["in_window"] += len(opts)
 
         opts = opts.copy()
         opts["spread"] = opts["ask"] - opts["bid"]
         opts["mid"]    = (opts["ask"] + opts["bid"]) / 2
+
+        _live = opts[(opts["mid"] > 0) & (opts["bid"] > 0)]
+        diag["had_bid"] += len(_live)
+        _vol = _live[_live["volume"] > 0]
+        diag["had_volume"] += len(_vol)
+        _oi = _vol[_vol["openInterest"] > 0]
+        diag["had_oi"] += len(_oi)
+        if not _oi.empty:
+            _sp = (_oi["spread"] / _oi["mid"] * 100)
+            diag["spread_ok"] += int((_sp <= 15.0).sum())
+            _tightest = float(_sp.min())
+            if diag["best_spread_pct"] is None or _tightest < diag["best_spread_pct"]:
+                diag["best_spread_pct"] = round(_tightest, 1)
         # Require bid > 0 (mid can pass even when bid=0 on wide/illiquid strikes)
         # and volume > 0 (a zero-volume contract is untradeable regardless of OI).
         valid = opts[
@@ -1521,7 +1544,26 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
             best = (top, expiry, dte); best_score = top["score"]
 
     if best is None:
-        return {"error":"No liquid options found"}
+        if diag["expiries"] == 0:
+            why = "no expiries came back with contracts"
+        elif diag["in_window"] == 0:
+            why = (f"no strikes between ${diag['window_lo']} and "
+                   f"${diag['window_hi']} (the ±ATR window around "
+                   f"${price:.2f})")
+        elif diag["had_bid"] == 0:
+            why = f"all {diag['in_window']} strikes in range had no live bid"
+        elif diag["had_volume"] == 0:
+            why = (f"{diag['had_bid']} strikes had a bid but none traded "
+                   f"today (volume 0)")
+        elif diag["had_oi"] == 0:
+            why = f"{diag['had_volume']} strikes traded but none had open interest"
+        elif diag["spread_ok"] == 0:
+            tight = diag["best_spread_pct"]
+            why = (f"{diag['had_oi']} strikes passed liquidity but every spread "
+                   f"exceeded 15% of mid — tightest was {tight}%")
+        else:
+            why = "contracts passed the filters but none scored"
+        return {"error": f"No liquid options found: {why}.", "diag": diag}
 
     row, expiry, dte = best
     days_needed = max(5, int(ATR_TGT_MULT * 3)) if (atr and atr > 0) else 10
