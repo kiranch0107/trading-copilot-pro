@@ -1,0 +1,39 @@
+==============================================================================
+TRADING COPILOT ELITE — HISTORICAL BACKTEST (real data)
+==============================================================================
+Tickers      : TSLA, NVDA, AAPL, MSFT, AMZN, META, SPY
+History      : 5 years daily
+ADX min      : 35.0   ATR stop×: 1.0   ATR tgt×: 4.0   Min R:R: 0.5
+Max hold     : 20 bars   Slippage: 2.0bps/side   Regime filter: OFF
+==============================================================================
+
+PER-TICKER RESULTS
+Ticker      Trades  Win%      Avg R    Total R    PF    MaxDD    Hold
+--------  --------  ------  -------  ---------  ----  -------  ------
+TSLA            25  36%       0.125        3.1  1.19     -3.8       4
+NVDA            24  62%       0.552       13.3  2.57     -2         6
+AAPL            19  37%      -0.161       -3.1  0.75     -7.1       3
+MSFT            16  44%       0.709       11.3  2.25     -5.2       9
+AMZN            13  38%      -0.034       -0.4  0.95     -3         6
+META            24  46%       0.696       16.7  2.28     -4.4       6
+SPY             19  37%      -0.276       -5.2  0.59     -6.5       3
+
+==============================================================================
+AGGREGATE (all tickers combined)
+==============================================================================
+  Total trades   : 140
+  Win rate       : 43.6%
+  Expectancy     : +0.255 R per trade
+  Total return   : +35.7 R
+  Profit factor  : 1.45
+  Max drawdown   : -9.6 R
+  Avg hold       : 5.2 bars
+  Best / worst   : +6.60 R / -1.30 R
+
+INTERPRETATION
+  ✅ Positive expectancy (+0.255 R/trade, PF 1.45) on REAL data.
+     The edge that showed up in the Monte-Carlo sweep survives on
+     actual historical prices. This is the result you want to see.
+
+  Reminder: past performance is not predictive. Stops are not guaranteed
+  (overnight gaps). Options add theta/slippage this share-based test omits.
