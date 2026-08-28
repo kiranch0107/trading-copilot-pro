@@ -77,21 +77,49 @@ class SignalParams:
 
 DEFAULTS = SignalParams()
 
+# The frame contract. Every caller's compute() must produce all of these
+# before calling evaluate(); evaluate() raises if any is absent rather than
+# quietly scoring a signal it cannot actually assess.
+REQUIRED_COLUMNS = ("Close", "High", "Low", "Volume", "EMA20", "EMA50",
+                    "RSI", "MACD", "Signal", "ATR", "VOL_AVG20")
+
 
 # ---------------------------------------------------------------------------
 # Market hours / partial bar — the bug-1 fix, shared
 # ---------------------------------------------------------------------------
 
+# NYSE closures and 1:00pm ET early closes. app.py, scanner.py and
+# exit_monitor.py each had their own copy of this calendar; this is the one
+# they should all read. A holiday-blind version reports the market OPEN on
+# Thanksgiving, and drop_partial_bar() then DISCARDS the last completed bar
+# as if it were in progress — silently analysing day-stale data.
+MARKET_HOLIDAYS = frozenset({
+    "2025-01-01", "2025-01-09", "2025-01-20", "2025-02-17", "2025-04-18",
+    "2025-05-26", "2025-06-19", "2025-07-04", "2025-09-01", "2025-11-27",
+    "2025-12-25",
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+})
+MARKET_HALF_DAYS = frozenset({
+    "2025-07-03", "2025-11-28", "2025-12-24", "2026-11-27", "2026-12-24",
+})
+
+
 def is_market_open(now: datetime | None = None) -> bool:
     """
-    True during US regular trading hours. Caller supplies an ET-aware datetime;
-    if none is given we use naive local time, which is only correct when the
-    process runs in ET — so callers should pass one explicitly.
+    True during US regular trading hours, accounting for holidays and 1:00pm
+    early closes. Caller supplies an ET-aware datetime; if none is given we
+    use naive local time, which is only correct when the process runs in ET —
+    so callers should pass one explicitly.
     """
     now = now or datetime.now()
     if now.weekday() >= 5:
         return False
-    return dtime(9, 30) <= now.time() <= dtime(16, 0)
+    day = now.strftime("%Y-%m-%d")
+    if day in MARKET_HOLIDAYS:
+        return False
+    close = dtime(13, 0) if day in MARKET_HALF_DAYS else dtime(16, 0)
+    return dtime(9, 30) <= now.time() <= close
 
 
 def drop_partial_bar(df: pd.DataFrame,
@@ -133,8 +161,13 @@ def _base_reason(price, ema20, ema50, macd, sig, rsi, volume, vol_avg,
         bits.append("MACD not confirming the uptrend")
     elif (price < ema20 < ema50) and macd >= sig:
         bits.append("MACD not confirming the downtrend")
-    if not (25 < rsi < 75):
-        bits.append(f"RSI {rsi:.0f} outside range")
+    # Must mirror the ACTUAL bands used below: 30-75 for a bullish stack,
+    # 25-70 for a bearish one. A single 25-75 test here reported "RSI fine"
+    # for an RSI of 27 in an uptrend, which is exactly the bar that failed.
+    if price > ema20 > ema50 and not (30 < rsi < 75):
+        bits.append(f"RSI {rsi:.0f} outside the 30-75 band for a long")
+    elif price < ema20 < ema50 and not (25 < rsi < 70):
+        bits.append(f"RSI {rsi:.0f} outside the 25-70 band for a short")
     if vol_avg > 0 and volume < vol_avg * params.volume_soft_mult:
         bits.append(f"volume {volume/vol_avg:.2f}x average "
                     f"(needs {params.volume_soft_mult:g}x)")
@@ -199,6 +232,22 @@ def evaluate(df: pd.DataFrame,
     one of: base | zero_risk | rr — and the diagnostic fields for that reason
     are populated so the UI can explain the rejection.
     """
+    # A missing indicator column must be an ERROR, not a silent rejection.
+    #
+    # scanner.py's compute() shipped without VOL_AVG20 while app.py's had it.
+    # evaluate() read it with latest.get("VOL_AVG20", 0), got 0, and every
+    # ticker failed the volume floor — so the scanner reported "no signal"
+    # forever and looked like a quiet market rather than a broken pipeline.
+    # A caller that hands us an incomplete frame is misconfigured; say so.
+    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"{ticker}: evaluate() requires {', '.join(missing)} but the frame "
+            f"does not have {'them' if len(missing) > 1 else 'it'}. The caller's "
+            f"compute() must produce every column in "
+            f"signal_core.REQUIRED_COLUMNS before calling evaluate()."
+        )
+
     latest = df.iloc[-1]
     price = float(latest["Close"])
     ema20 = float(latest["EMA20"])
