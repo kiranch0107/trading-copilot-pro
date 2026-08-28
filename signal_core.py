@@ -69,7 +69,7 @@ class SignalParams:
     hq_min_rr: float = 1.0          # high-quality tier; alerts fire on this
     volume_mult: float = 1.2        # "Strong" needs volume >= avg * this
     volume_soft_mult: float = 0.70  # base condition floor
-    atr_stop_mult: float = 1.0
+    atr_stop_mult: float = 1.25
     atr_tgt_mult: float = 4.0
     weekly_confirm: bool = True
     spy_regime_on: bool = True
