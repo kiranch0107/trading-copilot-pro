@@ -342,7 +342,17 @@ if USE_DYNAMIC and FAST_MODE and len(WATCHLIST) > 5:
         f"tickers this scan skipped.")
 st.sidebar.divider()
 
-ADX_MIN       = st.sidebar.number_input("ADX minimum",              value=35,   min_value=1,    max_value=100)
+# Sidebar defaults are sourced from signal_core.DEFAULTS, never retyped.
+#
+# Hardcoded literals here had ALREADY drifted back apart from the scanner:
+# HQ_MIN_RR was 1.5 in the app vs 1.0 in DEFAULTS, and VOLUME_MULT was 1.0
+# vs 1.2 — so the app demanded a stricter R:R and a looser volume surge than
+# the alerts you actually receive. That is the same class of bug the shared
+# signal_core refactor was written to end, reintroduced through the sidebar.
+# Reading the dataclass means a default cannot diverge again.
+_D = signal_core.DEFAULTS
+
+ADX_MIN       = st.sidebar.number_input("ADX minimum",              value=int(_D.adx_min), min_value=1, max_value=100)
 EARNINGS_DAYS      = int(st.sidebar.number_input("Earnings blackout days",      value=3,   min_value=0, max_value=30))
 POST_EARNINGS_DAYS = int(st.sidebar.number_input("Post-earnings cooling (days)", value=1,   min_value=0, max_value=7,
     help="Also block signals N days AFTER earnings (avoids IV crush residual)"))
@@ -351,20 +361,20 @@ MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",   value=12,  
     help="Minimum days-to-expiry to consider. Your swing target (2.5× ATR) usually needs "
          "~8 sessions to play out — a 1-2 DTE contract will lose to theta even if the "
          "trade thesis is correct. 7+ is a sane floor for swing trades."))
-MIN_RR        = st.sidebar.number_input("Min Reward/Risk",           value=0.5,  min_value=0.1,  step=0.1)
-HQ_MIN_RR     = st.sidebar.number_input("High-Quality R:R threshold", value=1.5,  min_value=0.2,  step=0.1,
+MIN_RR        = st.sidebar.number_input("Min Reward/Risk",           value=float(_D.min_rr),  min_value=0.1,  step=0.1)
+HQ_MIN_RR     = st.sidebar.number_input("High-Quality R:R threshold", value=float(_D.hq_min_rr),  min_value=0.2,  step=0.1,
     help="R:R needed to qualify as a 🔥 HIGH QUALITY setup (these trigger Telegram alerts). "
          "Must also be 'Strong' strength with all 4 filters passing.")
 MIN_ROWS      = int(st.sidebar.number_input("Min history bars",      value=50,   min_value=10))
-VOLUME_MULT   = st.sidebar.number_input("Volume multiplier",         value=1.0,  min_value=0.1,  step=0.1)
-ATR_STOP_MULT = st.sidebar.number_input("ATR stop multiplier",       value=1.0,  min_value=0.5, max_value=4.0, step=0.25,
+VOLUME_MULT   = st.sidebar.number_input("Volume multiplier",         value=float(_D.volume_mult),  min_value=0.1,  step=0.1)
+ATR_STOP_MULT = st.sidebar.number_input("ATR stop multiplier",       value=float(_D.atr_stop_mult),  min_value=0.5, max_value=4.0, step=0.25,
     help="Stop distance = this × ATR. Tighter stops raise per-trade expectancy (1.0 → "
          "+0.252 R vs 1.5 → +0.162 R across 300 series) because losers are cut faster and "
          "the R multiple per win is larger — BUT they also whipsaw more, so drawdown per "
          "trade is deeper (more frequent small losses). 1.0 maximises expectancy; 1.25–1.5 "
          "trades some edge for a smoother equity curve. Pick based on your tolerance for "
          "consecutive small losses.")
-ATR_TGT_MULT  = st.sidebar.number_input("ATR target multiplier",     value=4.0,  min_value=1.0, max_value=6.0, step=0.25,
+ATR_TGT_MULT  = st.sidebar.number_input("ATR target multiplier",     value=float(_D.atr_tgt_mult),  min_value=1.0, max_value=6.0, step=0.25,
     help="Target distance = this × ATR. Backtested across 300 simulated market series, "
          "3.0 lifted per-trade expectancy ~29% over 2.5 (+0.196 → +0.252 R) with the same "
          "stop and same trade count — the edge in trend-following comes from letting "
@@ -1858,6 +1868,10 @@ def _signal_params() -> "signal_core.SignalParams":
         min_rr=float(MIN_RR),
         hq_min_rr=float(HQ_MIN_RR),
         volume_mult=float(VOLUME_MULT),
+        # Was omitted, so the app silently fell back to the dataclass default
+        # while every other field tracked the sidebar. Passed explicitly now
+        # so the params object is a complete description of what ran.
+        volume_soft_mult=_D.volume_soft_mult,
         atr_stop_mult=float(ATR_STOP_MULT),
         atr_tgt_mult=float(ATR_TGT_MULT),
         weekly_confirm=bool(WEEKLY_CONFIRM),
