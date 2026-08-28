@@ -311,7 +311,7 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
     df["RSI"]    = ta.momentum.rsi(df["Close"], 14)
     df["ATR"]    = ta.volatility.average_true_range(df["High"], df["Low"],
                                                     df["Close"], 14)
-        df["ADX"]    = ta.trend.adx(df["High"], df["Low"], df["Close"], 14)
+    df["ADX"]    = ta.trend.adx(df["High"], df["Low"], df["Close"], 14)
     df["VOL_AVG20"] = df["Volume"].rolling(20).mean()
     df = df.dropna(subset=["EMA20", "EMA50", "MACD", "Signal", "RSI", "ATR", "ADX", "VOL_AVG20"])
     # Discard the unconverged head so EMA50/MACD/ADX are trustworthy
