@@ -1593,8 +1593,23 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
             "is_budget":row["mid"]<=BUDGET_MAX}
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def list_expiries(ticker: str) -> list[str]:
+    """
+    Cached only on SUCCESS. st.cache_data would happily store an empty list for
+    a full hour, so a single throttle would leave the dropdown blank long after
+    Yahoo recovered. Cache the good result; retry the bad one.
+    """
+    key = f"_expiries_{ticker.upper()}"
+    hit = st.session_state.get(key)
+    if hit:
+        return hit
+    out = _fetch_expiries(ticker)
+    if out:
+        st.session_state[key] = out
+    return out
+
+
+def _fetch_expiries(ticker: str) -> list[str]:
     """
     Expiry dates actually listed for this ticker.
 
@@ -1602,12 +1617,24 @@ def list_expiries(ticker: str) -> list[str]:
     Wednesday and get a guaranteed failure. This drives a picker of real dates
     instead. One lightweight call, cached for an hour.
     """
-    try:
-        _rl.wait()
-        return list(yf.Ticker(ticker).options or [])
-    except Exception as e:
-        logger.debug("Expiry list unavailable for %s (%s)", ticker, e)
-        return []
+    delay = _OPT_RETRY_DELAY
+    for attempt in range(_OPT_RETRY_ATTEMPTS):
+        try:
+            _rl.wait()
+            out = list(yf.Ticker(ticker).options or [])
+            if out:
+                return out
+            # Empty means throttled, not "no options". Retry rather than
+            # caching an empty list for an hour.
+            if attempt < _OPT_RETRY_ATTEMPTS - 1:
+                logger.warning("Empty expiry list for %s (likely throttled); "
+                               "retry in %ss", ticker, delay)
+                time.sleep(delay); delay *= 2
+        except Exception as e:
+            logger.debug("Expiry list unavailable for %s (%s)", ticker, e)
+            if attempt < _OPT_RETRY_ATTEMPTS - 1:
+                time.sleep(delay); delay *= 2
+    return []
 
 
 def check_manual_contract(ticker: str, right: str, strike: float,
@@ -1714,11 +1741,21 @@ def check_manual_contract(ticker: str, right: str, strike: float,
         # because it is looking for a contract; here the user has already named
         # one, so fetch exactly that expiry — more accurate AND one call
         # instead of three.
-        _rl.wait()
+        # BUG FIX: this called yf.Ticker(ticker).options directly, with no
+        # retry. yfinance returns an EMPTY LIST when throttled, so a throttle
+        # surfaced as "not a listed expiry ... Listed: none returned" — while
+        # the Expiry dropdown right above it was happily showing that same
+        # date, because the dropdown reads the CACHED list_expiries(). Two
+        # sources for the same fact will eventually disagree, and here they
+        # did. Use the one source, cached, so they cannot.
         stock = yf.Ticker(ticker)
-        listed = list(stock.options or [])
-        if expiry not in listed:
-            nearby = ", ".join(listed[:6]) if listed else "none returned"
+        listed = list_expiries(ticker)
+        if not listed:
+            add("Contract found on chain", False,
+                f"Yahoo returned no expiries for {ticker.upper()} — that is a "
+                f"rate limit, not a missing chain. Try again in a minute.")
+        elif expiry not in listed:
+            nearby = ", ".join(listed[:6])
             add("Contract found on chain", False,
                 f"{expiry} is not a listed expiry for {ticker.upper()}. "
                 f"Listed: {nearby}")
