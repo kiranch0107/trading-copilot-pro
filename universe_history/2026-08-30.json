@@ -1,0 +1,76 @@
+{
+  "as_of": "2026-08-30",
+  "taken_at": "2026-08-30T16:55:47",
+  "tickers": [
+    "CRM",
+    "PANW",
+    "ABT",
+    "TGT",
+    "TMO",
+    "BAC",
+    "MA",
+    "UNP"
+  ],
+  "passed_gates": 46,
+  "pool_size": 66,
+  "sector_mix": {
+    "Tech": 2,
+    "Health": 2,
+    "ConsDisc": 1,
+    "Financials": 2,
+    "Industrials": 1
+  },
+  "rs_lookback": 63,
+  "top_n": 8,
+  "max_per_sector": 2,
+  "detail": [
+    {
+      "ticker": "CRM",
+      "rs": 32.26,
+      "price": 256.0,
+      "dollar_vol_m": 3277.5
+    },
+    {
+      "ticker": "PANW",
+      "rs": 30.21,
+      "price": 371.59,
+      "dollar_vol_m": 2037.5
+    },
+    {
+      "ticker": "ABT",
+      "rs": 29.69,
+      "price": 112.47,
+      "dollar_vol_m": 844.7
+    },
+    {
+      "ticker": "TGT",
+      "rs": 26.72,
+      "price": 163.18,
+      "dollar_vol_m": 783.2
+    },
+    {
+      "ticker": "TMO",
+      "rs": 24.63,
+      "price": 622.18,
+      "dollar_vol_m": 1014.7
+    },
+    {
+      "ticker": "BAC",
+      "rs": 19.07,
+      "price": 62.32,
+      "dollar_vol_m": 1753.9
+    },
+    {
+      "ticker": "MA",
+      "rs": 18.81,
+      "price": 595.3,
+      "dollar_vol_m": 1651.7
+    },
+    {
+      "ticker": "UNP",
+      "rs": 15.34,
+      "price": 307.41,
+      "dollar_vol_m": 702.2
+    }
+  ]
+}
