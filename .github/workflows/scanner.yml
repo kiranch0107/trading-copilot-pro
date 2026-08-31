@@ -33,15 +33,34 @@ name: Trading Scanner
 
 on:
   schedule:
-    # Every 30 min, 13:00–21:00 UTC, Mon–Fri.
-    # That range covers 9:30am–4:00pm ET in BOTH EST and EDT; the guard step
-    # below discards the slots that fall outside real trading hours.
-        - cron: '7,37 13-21 * * 1-5'
+    # Every ~2h, 15:07-19:07 UTC, Mon-Fri. Three slots per day, down from 18.
+    #
+    # WHY THE CUT: scanner.py fetches interval="1d" and calls
+    # drop_partial_bar(), so it always evaluates the last COMPLETED daily bar.
+    # That bar does not change during the session — the 9:37am scan and the
+    # 3:37pm scan computed identical indicators and reached identical
+    # conclusions. Eighteen slots a day bought exactly one answer.
+    #
+    # AND IT COST RELIABILITY: GitHub schedules are best-effort and repos with
+    # heavy cron load get dropped first. Run #538 (2026-08-28) was delayed
+    # roughly six hours and executed at 02:47 UTC, long after the close, so
+    # the market-hours guard skipped it and the run did nothing in 7 seconds.
+    # Fewer slots means each is likelier to be serviced on time.
+    #
+    # ONLY UTC hours 15-19 are inside 9:30am-4:00pm ET in BOTH EST and EDT.
+    # Outside that band a fixed UTC cron is wrong half the year: 14:07 UTC is
+    # 9:07am ET in winter (pre-open) and 20:07 UTC is 4:07pm ET in summer
+    # (post-close). The old 13-21 range therefore wasted several slots a day
+    # on runs the guard was always going to skip.
+    #   15:07 UTC = 11:07am EDT / 10:07am EST
+    #   17:07 UTC =  1:07pm EDT / 12:07pm EST
+    #   19:07 UTC =  3:07pm EDT /  2:07pm EST
+    - cron: '7 15,17,19 * * 1-5'
 
-    # ── ALTERNATIVE: once daily, just after the close ──
-    # Recommended if you only want the daily signal. Comment out the line
-    # above and uncomment this one.
-    # - cron: '15 20 * * 1-5'      # 4:15pm ET (EDT) / 3:15pm ET (EST)
+    # DO NOT use a post-close cron such as '15 20 * * 1-5' (4:15pm ET). The
+    # guard step requires 9:30-16:00 ET, so a 16:15 run is skipped as
+    # market-closed and never scans. A previous comment here recommended
+    # exactly that; it would have run daily and produced nothing.
 
   workflow_dispatch:               # manual run, always allowed
     inputs:

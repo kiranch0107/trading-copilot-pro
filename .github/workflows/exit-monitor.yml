@@ -40,7 +40,19 @@ on:
     # Widened rather than "shift it in winter", because that is a manual step
     # nobody remembers twice a year. The script re-checks real ET market
     # hours and exits quietly when closed, so the extra runs cost seconds.
-    - cron: "0,30 13-21 * * 1-5"
+    # Hourly, 14:00-20:00 UTC. Halved from every 30 min for the same
+    # scheduling-reliability reason as scanner.yml, but NOT cut as far: unlike
+    # the scanner, this one reads LIVE option quotes, so its input genuinely
+    # changes between runs and a missed window can mean a stop or target that
+    # is hit and not alerted. Hourly is the compromise between responsiveness
+    # and not being deprioritised by GitHub.
+    #
+    # ONLY UTC hours 15-19 sit inside 9:30am-4:00pm ET in BOTH EST and EDT.
+    # 14:00 UTC is 9:00am EST (pre-open) and 20:00 UTC is 4:00pm EDT (the
+    # close), so both were dead slots for half the year.
+    #   15:00 UTC = 11:00am EDT / 10:00am EST
+    #   19:00 UTC =  3:00pm EDT /  2:00pm EST
+    - cron: "0 15,16,17,18,19 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:
