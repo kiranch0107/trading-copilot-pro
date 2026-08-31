@@ -138,5 +138,15 @@
     "notes": "9/18 at $3490 on 8/25",
     "date": "2026-08-25",
     "logged": "2026-08-25 16:14 ET"
+  },
+  {
+    "id": "SKIP_MA_1788209847",
+    "ticker": "MA",
+    "trend": "Bullish",
+    "price": 589.31,
+    "reason": "Contract too expensive for my risk rule",
+    "notes": "9/18 at $24.3 on 8/31 after hours",
+    "date": "2026-08-31",
+    "logged": "2026-08-31 16:57 ET"
   }
 ]
