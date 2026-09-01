@@ -67,6 +67,8 @@ try:
 except ImportError:
     raise SystemExit("Missing requests. Run: pip install requests")
 
+import data_source
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("exit_monitor")
 
@@ -168,12 +170,23 @@ def get_option_quote(ticker: str, expiry: str, strike: float,
 
 
 def get_underlying_state(ticker: str) -> dict | None:
-    """Last daily close and EMA20, for the thesis-invalidation check."""
+    """
+    Last daily close and EMA20, for the thesis-invalidation check.
+
+    Yahoo first, then data_source's fallback (Tiingo, if TIINGO_API_KEY is
+    set) when Yahoo comes back empty — this is the THESIS rule's only price
+    input, and before this it had no fallback at all: a Yahoo outage silently
+    disabled the one exit rule that doesn't depend on option quotes.
+    """
     try:
-        df = yf.download(ticker, period="6mo", interval="1d",
-                         progress=False, auto_adjust=False)
+        df, source = data_source.fetch_daily(
+            ticker, period="6mo", interval="1d",
+            yahoo_fetch=lambda t, p, i: yf.download(
+                t, period=p, interval=i, progress=False, auto_adjust=False))
         if df is None or df.empty:
             return None
+        if source != "yahoo":
+            logger.info("%s: Yahoo unavailable, used %s fallback", ticker, source)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df = df.dropna(subset=["Close"])
