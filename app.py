@@ -19,6 +19,25 @@ import pytz
 import signal_core
 import data_source
 
+
+def _build_stamp() -> str:
+    """
+    Last-modified time of this file. On Streamlit Cloud that is when the repo
+    was cloned, i.e. deploy time — so it answers "is my fix actually live?"
+    without needing to be bumped by hand. A manual version constant is only
+    correct until the first time you forget to bump it, and the moments it
+    matters most are exactly the moments you are moving fast.
+    """
+    try:
+        import os as _os, datetime as _dt
+        return _dt.datetime.fromtimestamp(
+            _os.path.getmtime(__file__)).strftime("%b %d %H:%M")
+    except Exception:
+        return "unknown"
+
+
+APP_BUILD = _build_stamp()
+
 # ─────────────────────────────────────────────
 # LOGGING
 # ─────────────────────────────────────────────
@@ -341,6 +360,8 @@ if USE_DYNAMIC and FAST_MODE and len(WATCHLIST) > 5:
         f"Fast Mode is trimming {len(WATCHLIST) - 5} name(s) off the ranking. "
         f"scanner.py scans all {len(WATCHLIST)}, so alerts may arrive for "
         f"tickers this scan skipped.")
+st.sidebar.caption(f"build {APP_BUILD}")
+
 if st.session_state.get("_stooq_used"):
     st.sidebar.info("Some price data came from Stooq — Yahoo was unavailable. "
                     "Stooq bars are not split-adjusted; option data is "
