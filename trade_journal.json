@@ -14,7 +14,7 @@
     "actual_rr": 0.69,
     "contracts": 1.0,
     "pnl_usd": 94.0,
-    "notes": ""
+    "notes": "Actual"
   },
   {
     "id": "OPT_SPY_1786725022",
@@ -31,7 +31,7 @@
     "actual_rr": 1.31,
     "contracts": 1.0,
     "pnl_usd": 143.0,
-    "notes": "Closed on 8/13"
+    "notes": "Closed on 8/13. Actual"
   },
   {
     "id": "OPT_NVDA_1787164500",
@@ -48,7 +48,7 @@
     "actual_rr": 0.23,
     "contracts": 1.0,
     "pnl_usd": 11.0,
-    "notes": "Sold on 8/4"
+    "notes": "Sold on 8/4. Actual"
   },
   {
     "id": "OPT_SPY_1787239810",
@@ -65,7 +65,7 @@
     "actual_rr": -0.49,
     "contracts": 2.0,
     "pnl_usd": -52.0,
-    "notes": "Bought on 8/20"
+    "notes": "Bought on 8/20. Actual"
   },
   {
     "id": "OPT_TGT_1787687485",
@@ -97,6 +97,6 @@
       "regime": "Neutral",
       "captured": "2026-08-25 15:51 ET"
     },
-    "notes": "Manual on 8/27"
+    "notes": "Manual on 8/27. Actual"
   }
 ]
