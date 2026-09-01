@@ -140,6 +140,15 @@ def fetch_history(tickers: list[str], as_of: date,
 
     The window must cover the LONGEST requirement, not just the RS lookback:
     the 200-SMA gate needs MIN_HISTORY sessions of its own.
+
+    NOT routed through data_source.py's fallback (unlike app.py, scanner.py,
+    exit_monitor.py and backtest.py). This fetches ~67 tickers in ONE batched
+    yf.download() call; data_source.fetch_daily() is a per-ticker interface,
+    and per-ticker fallback within a batch failure would need this function
+    restructured, not just wrapped. If Yahoo is down, ranking simply fails
+    and load_universe() falls back to the last committed snapshot or the
+    static list (see its own docstring) — a real gap, left as a known
+    follow-up rather than silently claimed as covered.
     """
     import yfinance as yf
     need_sessions = max(MIN_HISTORY, lookback_sessions + 1)

@@ -18,6 +18,7 @@ from pathlib import Path
 import pytz
 import signal_core
 import data_source
+import gh_sync
 
 
 def _build_stamp() -> str:
@@ -79,196 +80,15 @@ _SS_SKIPPED   = "_skipped_store"
 
 
 # ═════════════════════════════════════════════════════════════════════
-# GITHUB-BACKED STORAGE
+# GITHUB-BACKED STORAGE — see gh_sync.py
 #
-# WHY THIS EXISTS — two failures it fixes:
-#
-# 1. DATA LOSS. st.session_state dies with the browser tab, and the local disk
-#    fallback is worthless on Streamlit Cloud because containers are stateless
-#    (wiped on redeploy, restart or idle timeout). Worse, the old _save()
-#    swallowed write failures into a log line nobody reads, so positions
-#    silently vanished with no error shown.
-#
-# 2. THE APP AND THE MONITOR COULDN'T SEE EACH OTHER. exit_monitor.py runs on
-#    GitHub Actions and reads open_positions.json from the REPO. The Streamlit
-#    app was writing to its own container filesystem. Two different disks that
-#    never sync — so positions logged in the app were invisible to the monitor,
-#    permanently, and no exit alert could ever have fired.
-#
-# Making the repo the single source of truth solves both at once.
-#
-# SETUP (one time):
-#   1. GitHub → Settings → Developer settings → Personal access tokens →
-#      Fine-grained tokens → Generate new token
-#        Repository access : only kiranch0107/trading-copilot-pro
-#        Permissions       : Repository permissions → Contents → Read and write
-#   2. Streamlit Cloud → your app → Settings → Secrets, paste:
-#        GITHUB_TOKEN = "github_pat_..."
-#      (Locally instead: export GITHUB_TOKEN=...)
-#   3. Commit an empty open_positions.json containing []  to the repo.
-#
-# If no token is present the app degrades to local-disk-only and says so
-# loudly, rather than pretending to have saved.
+# Extracted out of this file into its own module (same reasoning that put
+# the signal logic in signal_core.py): it has no Streamlit UI of its own,
+# so it was the safest first piece to pull out of a 3,000+ line file.
+# gh_sync.py's docstring has the full "why" (data loss on Streamlit Cloud's
+# stateless containers; the app and exit_monitor.py writing to two disks
+# that never synced) and the one-time GITHUB_TOKEN setup steps.
 # ═════════════════════════════════════════════════════════════════════
-import base64
-
-GITHUB_REPO   = os.environ.get("GITHUB_REPO", "kiranch0107/trading-copilot-pro")
-GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
-_GH_API       = "https://api.github.com"
-
-
-def _gh_token() -> str | None:
-    """Token from Streamlit secrets first, then environment."""
-    try:
-        tok = st.secrets.get("GITHUB_TOKEN")
-        if tok:
-            return str(tok)
-    except Exception:
-        pass
-    return os.environ.get("GITHUB_TOKEN")
-
-
-def gh_enabled() -> bool:
-    return bool(_gh_token())
-
-
-def _gh_headers() -> dict:
-    return {
-        "Authorization": f"Bearer {_gh_token()}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-
-
-def _gh_get(path: str) -> tuple[list | None, str | None, str | None]:
-    """
-    Fetch a JSON file from the repo.
-    Returns (data, sha, error). A missing file is (None, None, None) — not an
-    error, it just hasn't been created yet.
-    """
-    try:
-        r = requests.get(
-            f"{_GH_API}/repos/{GITHUB_REPO}/contents/{path}",
-            headers=_gh_headers(), params={"ref": GITHUB_BRANCH}, timeout=10)
-        if r.status_code == 404:
-            return None, None, None
-        if r.status_code != 200:
-            return None, None, f"GitHub GET {r.status_code}: {r.text[:160]}"
-        payload = r.json()
-        raw = base64.b64decode(payload.get("content", "")).decode("utf-8") or "[]"
-        return json.loads(raw), payload.get("sha"), None
-    except Exception as e:
-        return None, None, f"GitHub GET failed: {e}"
-
-
-def _gh_put(path: str, data: list, message: str) -> str | None:
-    """
-    Write a JSON file to the repo. Returns an error string, or None on success.
-
-    READ-MODIFY-WRITE: we always re-fetch the current sha immediately before
-    writing. exit_monitor.py also writes this file (to mark exit_alerted), so a
-    stale sha would be rejected with a 409. Re-fetching keeps the collision
-    window to milliseconds.
-    """
-    try:
-        _, sha, err = _gh_get(path)
-        if err:
-            return err
-        body = {
-            "message": message,
-            "content": base64.b64encode(
-                json.dumps(data, indent=2, default=str).encode("utf-8")).decode("utf-8"),
-            "branch":  GITHUB_BRANCH,
-        }
-        if sha:
-            body["sha"] = sha
-        r = requests.put(f"{_GH_API}/repos/{GITHUB_REPO}/contents/{path}",
-                         headers=_gh_headers(), json=body, timeout=10)
-        if r.status_code not in (200, 201):
-            return f"GitHub PUT {r.status_code}: {r.text[:160]}"
-        return None
-    except Exception as e:
-        return f"GitHub PUT failed: {e}"
-
-
-def _merge_positions(local: list, remote: list) -> list:
-    """
-    Merge position lists by id, so the app and the monitor don't clobber
-    each other.
-
-    The monitor's job is to flip a position to EXIT_SIGNALLED. The app's job is
-    to add new positions and remove closed ones. If both wrote at once, plain
-    last-write-wins could silently discard an exit alert — the one piece of
-    state you most need. So for any id present in BOTH, we keep the record that
-    has progressed further (EXIT_SIGNALLED beats OPEN); ids only in local are
-    additions/removals the app owns.
-    """
-    rank = {"OPEN": 0, "EXIT_SIGNALLED": 1}
-    by_id = {p["id"]: p for p in local}
-    for rp in remote:
-        lp = by_id.get(rp["id"])
-        if lp is None:
-            continue          # app deleted it (closed) — respect that
-        if rank.get(rp.get("status"), 0) > rank.get(lp.get("status"), 0):
-            by_id[rp["id"]] = rp
-    return list(by_id.values())
-
-
-def _local_load(path: Path) -> list:
-    try:
-        return json.loads(path.read_text()) if path.exists() else []
-    except Exception as e:
-        logger.exception("Failed to load %s: %s", path, e)
-        return []
-
-
-def _local_save(path: Path, data: list) -> bool:
-    try:
-        path.write_text(json.dumps(data, indent=2, default=str))
-        return True
-    except Exception as e:
-        logger.warning("Could not persist %s to disk (%s)", path, e)
-        return False
-
-
-def _load(path: Path) -> list:
-    """Prefer the repo (shared, durable); fall back to local disk."""
-    if gh_enabled():
-        data, _sha, err = _gh_get(path.name)
-        if err:
-            logger.warning("%s — falling back to local disk", err)
-            st.session_state["_gh_last_error"] = err
-        elif data is not None:
-            return data
-        else:
-            return []          # file not created yet
-    return _local_load(path)
-
-
-def _save(path: Path, data: list) -> None:
-    """
-    Write through to the repo AND local disk.
-
-    Unlike the old version this does NOT fail silently. If the durable write
-    fails the user is told in the UI, because "I logged a position and it
-    vanished" is exactly the failure a silent warning produced.
-    """
-    _local_save(path, data)     # best-effort cache; wiped on container restart
-    if not gh_enabled():
-        st.session_state["_gh_last_error"] = None
-        return
-    if path.name == POSITIONS_FILE.name:
-        remote, _sha, err = _gh_get(path.name)
-        if not err and remote:
-            data = _merge_positions(data, remote)
-            st.session_state[_SS_POSITIONS] = data
-    err = _gh_put(path.name, data, f"chore: update {path.name} from app")
-    st.session_state["_gh_last_error"] = err
-    if err:
-        st.error(f"⚠️ **Could not save to GitHub** — {err}\n\n"
-                 f"Your change is only in this browser session and **will be "
-                 f"lost** when you close the tab. The exit monitor also can't "
-                 f"see it. Check your GITHUB_TOKEN secret.")
 
 
 # ─────────────────────────────────────────────
@@ -362,10 +182,11 @@ if USE_DYNAMIC and FAST_MODE and len(WATCHLIST) > 5:
         f"tickers this scan skipped.")
 st.sidebar.caption(f"build {APP_BUILD}")
 
-if st.session_state.get("_stooq_used"):
-    st.sidebar.info("Some price data came from Stooq — Yahoo was unavailable. "
-                    "Stooq bars are not split-adjusted; option data is "
-                    "unaffected (it is always Yahoo).")
+_fallback_src = st.session_state.get("_fallback_source")
+if _fallback_src:
+    st.sidebar.info(f"Some price data came from {_fallback_src.title()} — Yahoo "
+                    f"was unavailable. Fallback bars are not split-adjusted; "
+                    f"option data is unaffected (it is always Yahoo).")
 st.sidebar.divider()
 
 ADX_MIN       = st.sidebar.number_input("ADX minimum",              value=35,   min_value=1,    max_value=100)
@@ -422,12 +243,12 @@ st.sidebar.divider()
 st.sidebar.header("📍 Exit Monitoring")
 
 # ── Storage status — make silent data loss impossible to miss ──
-if gh_enabled():
+if gh_sync.gh_enabled():
     _gh_err = st.session_state.get("_gh_last_error")
     if _gh_err:
         st.sidebar.error(f"🔴 GitHub sync FAILING\n\n{_gh_err[:120]}")
     else:
-        st.sidebar.success(f"🟢 Synced to `{GITHUB_REPO}`")
+        st.sidebar.success(f"🟢 Synced to `{gh_sync.GITHUB_REPO}`")
         st.sidebar.caption("Positions persist across sessions and are visible to "
                            "the exit monitor.")
 else:
@@ -473,24 +294,24 @@ COOLDOWN       = 4 * 3600
 def load_alerts() -> list:
     """Read from session_state first; hydrate from disk on first access."""
     if _SS_ALERTS not in st.session_state:
-        st.session_state[_SS_ALERTS] = _load(ALERT_LOG_FILE)
+        st.session_state[_SS_ALERTS] = gh_sync.load(ALERT_LOG_FILE)
     return st.session_state[_SS_ALERTS]
 
 
 def save_alerts(d: list) -> None:
     st.session_state[_SS_ALERTS] = d
-    _save(ALERT_LOG_FILE, d)
+    gh_sync.save(ALERT_LOG_FILE, d)
 
 
 def load_journal() -> list:
     if _SS_JOURNAL not in st.session_state:
-        st.session_state[_SS_JOURNAL] = _load(JOURNAL_FILE)
+        st.session_state[_SS_JOURNAL] = gh_sync.load(JOURNAL_FILE)
     return st.session_state[_SS_JOURNAL]
 
 
 def save_journal(d: list) -> None:
     st.session_state[_SS_JOURNAL] = d
-    _save(JOURNAL_FILE, d)
+    gh_sync.save(JOURNAL_FILE, d)
 
 
 # ─────────────────────────────────────────────
@@ -508,24 +329,28 @@ def save_journal(d: list) -> None:
 # ─────────────────────────────────────────────
 def load_positions() -> list:
     if _SS_POSITIONS not in st.session_state:
-        st.session_state[_SS_POSITIONS] = _load(POSITIONS_FILE)
+        st.session_state[_SS_POSITIONS] = gh_sync.load(POSITIONS_FILE)
     return st.session_state[_SS_POSITIONS]
 
 
 def save_positions(d: list) -> None:
+    # merge=True: exit_monitor.py also writes this file independently (to
+    # flip OPEN -> EXIT_SIGNALLED). See gh_sync.save()'s docstring — this is
+    # the one file in the app where a plain overwrite could discard an exit
+    # alert the monitor just wrote.
     st.session_state[_SS_POSITIONS] = d
-    _save(POSITIONS_FILE, d)
+    st.session_state[_SS_POSITIONS] = gh_sync.save(POSITIONS_FILE, d, merge=True)
 
 
 def load_skipped() -> list:
     if _SS_SKIPPED not in st.session_state:
-        st.session_state[_SS_SKIPPED] = _load(SKIPPED_FILE)
+        st.session_state[_SS_SKIPPED] = gh_sync.load(SKIPPED_FILE)
     return st.session_state[_SS_SKIPPED]
 
 
 def save_skipped(d: list) -> None:
     st.session_state[_SS_SKIPPED] = d
-    _save(SKIPPED_FILE, d)
+    gh_sync.save(SKIPPED_FILE, d)
 
 
 def log_skipped_signal(ticker: str, trend: str, reason: str,
@@ -786,6 +611,13 @@ def add_journal_trade(alert_id, ticker, trend, entry, stop, target,
         if a["id"] == alert_id:
             a["journaled"] = True
     save_alerts(alerts)
+
+
+# Below this many CLOSED journal trades, win rate / profit factor / total R
+# are noise, not signal — informal floor for a single live log, distinct from
+# oos_validate.py's pre-registered min_trades=60 (a formal significance test
+# pooled across 12 tickers). Used by the Performance Dashboard caveat below.
+MIN_JOURNAL_TRADES_FOR_SIGNAL = 30
 
 
 def journal_stats(journal: list) -> dict:
@@ -1115,26 +947,29 @@ def get_data(ticker: str, period: str = "1y", interval: str = "1d",
 def get_data_with_error(ticker: str, period: str = "1y",
                         interval: str = "1d") -> tuple[pd.DataFrame | None, str | None]:
     """
-    Yahoo first, Stooq if Yahoo comes back empty or throws.
+    Yahoo first, then data_source's fallback (currently Tiingo, if
+    TIINGO_API_KEY is set; Stooq is a dead stub — see data_source.py) if
+    Yahoo comes back empty or throws.
 
     Retries alone could not fix the throttle problem — they only make a
-    throttled app slower. A second, independent source can. Stooq covers daily
-    and weekly OHLCV, which is what every tab depends on; options remain
-    Yahoo-only because Stooq has no chains.
+    throttled app slower. A second, independent source can. The fallback
+    covers daily and weekly OHLCV, which is what every tab depends on;
+    options remain Yahoo-only because neither fallback has chains.
     """
     df, source = data_source.fetch_daily(
         ticker, period, interval,
         yahoo_fetch=_yf_download_with_retry)
 
     if df is None:
-        return None, (f"Neither Yahoo nor Stooq returned data for '{ticker}'. "
-                      f"If the symbol is right, both are unavailable — wait a "
+        return None, (f"No configured price source returned data for "
+                      f"'{ticker}'. If the symbol is right, Yahoo (and the "
+                      f"fallback, if configured) are unavailable — wait a "
                       f"minute and retry.")
-    if source == "stooq":
-        # Surfaced so a silent source switch never goes unnoticed: Stooq bars
-        # are not split-adjusted the way Yahoo's are.
-        logger.info("Using Stooq data for %s (Yahoo unavailable)", ticker)
-        st.session_state["_stooq_used"] = True
+    if source != "yahoo":
+        # Surfaced so a silent source switch never goes unnoticed: fallback
+        # bars are not split-adjusted the way Yahoo's are.
+        logger.info("Using %s data for %s (Yahoo unavailable)", source, ticker)
+        st.session_state["_fallback_source"] = source
     # Past this point a frame exists; the only remaining failure is too few
     # bars. The "nothing came back" case is handled above, where we know which
     # source was tried.
@@ -3109,9 +2944,9 @@ with TAB_JOURNAL:
 
     # ── BUG FIX #4: data-safety warning + export/import ──
     with st.expander("⚠️ Data Safety — read this if hosting on Streamlit Cloud", expanded=False):
-        if gh_enabled():
+        if gh_sync.gh_enabled():
             st.success(
-                f"🟢 Data is synced to **{GITHUB_REPO}** — it survives container "
+                f"🟢 Data is synced to **{gh_sync.GITHUB_REPO}** — it survives container "
                 f"restarts and is shared with the exit monitor. Export below is "
                 f"still a useful offline backup."
             )
@@ -3176,6 +3011,22 @@ with TAB_JOURNAL:
                 f"ℹ️ {stats['open']} OPEN trade(s) are excluded from every metric "
                 f"below — performance is computed on closed trades only."
             )
+        # Sample-size caveat, same discipline oos_validate.py pre-registers
+        # (min_trades=60 there, for a statistical significance test across
+        # many tickers). This is a much smaller, informal floor for a single
+        # live journal — not a formal test, just the same honesty: a handful
+        # of closed trades is not evidence the signal works or doesn't, and
+        # eyeballing it is exactly how the August parameter sweep found a
+        # false edge in the first place (see signal_core.py / oos_validate.py).
+        if stats["total"] < MIN_JOURNAL_TRADES_FOR_SIGNAL:
+            st.caption(
+                f"⚠️ Only {stats['total']} closed trade(s) — win rate, profit "
+                f"factor and total R below are noise at this sample size, not "
+                f"a verdict on the strategy. The 591-trade out-of-sample test "
+                f"(see oos_validate.py) is the actual evidence on the signal; "
+                f"this dashboard is your execution log, not a replacement "
+                f"for it. Treat these numbers as informative again past "
+                f"~{MIN_JOURNAL_TRADES_FOR_SIGNAL} closed trades.")
         m1,m2,m3,m4,m5,m6 = st.columns(6)
         m1.metric("Closed Trades", stats["total"])
         m2.metric("Win Rate",      f"{stats['win_rate']}%")

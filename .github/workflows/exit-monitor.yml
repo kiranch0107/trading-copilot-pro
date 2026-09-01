@@ -11,6 +11,8 @@
 # 1. Repo → Settings → Secrets and variables → Actions → New repository secret
 #       TELEGRAM_BOT_TOKEN   (same bot the app uses)
 #       TELEGRAM_CHAT_ID
+#       TIINGO_API_KEY       (optional — see data_source.py; unset means
+#                             Yahoo-only, exactly today's behaviour)
 # 2. Write access is now declared in the `permissions:` block below, so no
 #    repo-level setting change is required. (If your org enforces read-only
 #    tokens, that policy overrides the block and you must relax it there.)
@@ -100,6 +102,11 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Optional — data_source.py's fallback provider (see its docstring)
+          # activates only when this is set. Unset means Yahoo-only, exactly
+          # the pre-fallback behaviour. Set the SAME secret in Streamlit
+          # Cloud so the app and the monitor degrade the same way.
+          TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
           # Explicit rather than relying on universe.DEFAULT_DYNAMIC. That
           # default is buried in code, and app.py (Streamlit Cloud) reads the
           # same toggle from a different environment — a silent default is how

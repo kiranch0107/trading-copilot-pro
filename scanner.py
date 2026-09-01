@@ -55,6 +55,8 @@ import requests
 import ta
 import yfinance as yf
 
+import data_source
+
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(),format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("scanner")
 
@@ -265,20 +267,23 @@ def send_alert(message: str, dry_run: bool = False) -> bool:
 # ══════════════════════════════════════════════════════════════════
 # DATA + INDICATORS
 # ══════════════════════════════════════════════════════════════════
-def get_data(ticker: str) -> pd.DataFrame | None:
+def _yf_download_with_retry(ticker: str, period: str, interval: str) -> pd.DataFrame | None:
     """
     BUG FIX: previously called yf.download() ONCE with no retry, unlike every
     other Yahoo-calling function in this project. A single 429 failed the
     ticker outright. Now retries with escalating backoff (3s -> 6s -> 12s)
     before giving up, matching get_data() in app.py and exit_monitor.py.
+
+    This is the Yahoo LEG only — wrapped so data_source.fetch_daily() can try
+    a second provider when Yahoo keeps coming back empty after every retry,
+    instead of the whole scan failing on that ticker.
     """
     delay = YF_RETRY_DELAY
     last_err = None
     for attempt in range(YF_RETRY_ATTEMPTS):
         try:
-            df = yf.download(ticker, period=FETCH_PERIOD, interval="1d",
-                             progress=False, auto_adjust=False)
-            break
+            return yf.download(ticker, period=period, interval=interval,
+                               progress=False, auto_adjust=False)
         except Exception as e:
             last_err = e
             if _is_rate_limit_error(e) and attempt < YF_RETRY_ATTEMPTS - 1:
@@ -288,14 +293,28 @@ def get_data(ticker: str) -> pd.DataFrame | None:
                 time.sleep(delay)
                 delay *= 2
                 continue
-            logger.warning("get_data(%s) failed: %s", ticker, e)
+            logger.warning("get_data(%s) Yahoo leg failed: %s", ticker, e)
             return None
-    else:
-        logger.warning("get_data(%s) exhausted retries: %s", ticker, last_err)
-        return None
+    logger.warning("get_data(%s) exhausted Yahoo retries: %s", ticker, last_err)
+    return None
 
+
+def get_data(ticker: str) -> pd.DataFrame | None:
+    """
+    Yahoo first, then data_source's fallback (Tiingo, if TIINGO_API_KEY is
+    set) when Yahoo comes back empty after every retry above. Before this,
+    the scanner had no fallback at all — only app.py did — so a Yahoo outage
+    or throttle took the scanner down even on days the app kept working via
+    Stooq/Tiingo. See data_source.py's docstring for what the fallback does
+    and does not cover.
+    """
+    df, source = data_source.fetch_daily(
+        ticker, period=FETCH_PERIOD, interval="1d",
+        yahoo_fetch=lambda t, p, i: _yf_download_with_retry(t, p, i))
     if df is None or df.empty:
         return None
+    if source != "yahoo":
+        logger.info("%s: Yahoo unavailable, used %s fallback", ticker, source)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
@@ -510,10 +529,14 @@ def get_spy_regime() -> dict | None:
     """SPY vs its 200-SMA — the macro regime gate app.py applies."""
     try:
         time.sleep(FETCH_GAP_SEC)
-        spy = yf.download("SPY", period="2y", interval="1d",
-                          progress=False, auto_adjust=False)
+        spy, source = data_source.fetch_daily(
+            "SPY", period="2y", interval="1d",
+            yahoo_fetch=lambda t, p, i: yf.download(
+                t, period=p, interval=i, progress=False, auto_adjust=False))
         if spy is None or spy.empty or len(spy) < 200:
             return None
+        if source != "yahoo":
+            logger.info("SPY regime: Yahoo unavailable, used %s fallback", source)
         if isinstance(spy.columns, pd.MultiIndex):
             spy.columns = spy.columns.get_level_values(0)
         close = spy["Close"]

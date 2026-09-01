@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-data_source.py — Yahoo first, Stooq as a fallback
+data_source.py — Yahoo first, Tiingo as a fallback, Stooq kept as a dead stub
 
 WHY THIS EXISTS
 ---------------
@@ -10,18 +10,38 @@ codebase, each surfacing as a confident but wrong message ("check the symbol",
 "no option chain", "not a listed expiry"). Retries help, but they only make a
 throttled app slower; they cannot make it work.
 
-Stooq is a second, independent source of daily OHLCV. No API key, no account,
-decades of history. When Yahoo comes back empty after its retries, we ask
-Stooq instead of failing.
+A second, independent source of daily OHLCV closes that gap. When Yahoo comes
+back empty after its retries, we ask the fallback instead of failing.
+
+WHY TIINGO AND NOT STOOQ
+------------------------
+Stooq was the original fallback: no API key, no account. It now serves a
+JavaScript proof-of-work challenge instead of CSV (see fetch_stooq() below),
+so it is disabled — solving that from Python would mean running a JS engine
+or reimplementing a hash loop whose parameters can change without notice, not
+something to build a data path on.
+
+Tiingo has a real REST API (https://api.tiingo.com/tiingo/daily/{ticker}/prices)
+gated by a free API key from tiingo.com/account/api/token. Set TIINGO_API_KEY
+and fetch_tiingo() activates automatically; leave it unset and this module
+degrades to the pre-Tiingo Yahoo-only behaviour, same as before this fallback
+existed. Verify Tiingo's current free-tier terms and rate limits yourself
+before relying on them in production — API terms change and this comment will
+not chase that.
 
 WHAT IT DOES NOT COVER
 ----------------------
-Options. Stooq has no option chains, so the Options tab and Contract Check
-still depend entirely on Yahoo. This fallback protects PRICE data — which is
-what the scan, the signal, the charts and the universe all run on. That is the
-majority of the calls and all of the ones that block the app from working.
+Options. Neither fallback has option chains, so the Options tab and Contract
+Check still depend entirely on Yahoo. This fallback protects PRICE data —
+which is what the scan, the signal, the charts and the universe all run on.
+That is the majority of the calls and all of the ones that block the app from
+working.
 
-Stooq daily bars are also NOT split/dividend adjusted the way Yahoo's are.
+Fallback daily bars are also NOT split/dividend adjusted the way Yahoo's
+auto_adjust=True output is (Tiingo's RAW columns are used deliberately here —
+see fetch_tiingo() — because most callers in this repo fetch with
+auto_adjust=False and expect raw bars; backtest.py is the one caller that
+wants auto_adjust=True and accepts the mismatch, documented at its call site).
 For indicators computed over a year of data (EMA, ADX, RSI, ATR) that is
 immaterial unless the ticker split inside the window — and a split would be
 visible as an obvious step in the chart. Worth knowing, not worth blocking on.
@@ -30,18 +50,23 @@ visible as an obvious step in the chart. Worth knowing, not worth blocking on.
 from __future__ import annotations
 
 import logging
+import os
+from datetime import date, timedelta
 
 try:
     import pandas as pd
 except ImportError:
     raise SystemExit("Missing pandas. Run: pip install pandas")
 
+try:
+    import requests
+except ImportError:
+    requests = None   # Tiingo leg degrades to a no-op; Yahoo-only still works
+
 logger = logging.getLogger(__name__)
 
-# NOTE: a period -> calendar-days map used to live here, for trimming a
-# provider's full-history response to the window requested. It went with the
-# Stooq parser. Any replacement provider that returns everything it has will
-# need it back — most keyed APIs accept a date range directly instead.
+TIINGO_BASE = "https://api.tiingo.com/tiingo/daily"
+TIINGO_KEY_ENV = "TIINGO_API_KEY"
 
 
 def to_stooq_symbol(ticker: str) -> str:
@@ -72,15 +97,101 @@ def fetch_stooq(ticker: str, period: str = "1y",
     return None
 
 
-def fetch_daily(ticker: str, period: str = "1y", interval: str = "1d",
-                yahoo_fetch=None) -> tuple[pd.DataFrame | None, str]:
+def _period_to_start(period: str) -> str:
     """
-    Yahoo first, Stooq if Yahoo comes back empty.
+    Approximate a yfinance-style period string ("1y", "6mo", "15y", "max", …)
+    into a start date for providers that want an explicit range instead of a
+    period keyword. Deliberately generous — callers trim/validate row counts
+    downstream, this only needs to request ENOUGH history, not exactly enough.
+    """
+    if not period:
+        return "1990-01-01"
+    p = period.strip().lower()
+    if p == "max":
+        return "1990-01-01"
+    try:
+        if p.endswith("mo"):
+            days = int(p[:-2]) * 31
+        elif p.endswith("y"):
+            days = int(p[:-1]) * 366
+        elif p.endswith("d"):
+            days = int(p[:-1])
+        else:
+            days = 400
+    except ValueError:
+        days = 400
+    return str(date.today() - timedelta(days=days + 10))
+
+
+def fetch_tiingo(ticker: str, period: str = "1y", interval: str = "1d",
+                 _get=None) -> pd.DataFrame | None:
+    """
+    Tiingo end-of-day daily bars. Needs TIINGO_API_KEY; returns None
+    immediately (no network call) if it is unset, so an app with no key
+    configured behaves exactly as it did before this function existed.
+
+    Daily only — an intraday `interval` returns None and the caller falls
+    through to the next leg, same contract as fetch_stooq() always had.
+
+    Uses Tiingo's RAW open/high/low/close/volume, not its adjusted columns.
+    Most callers in this repo (app.py, scanner.py, exit_monitor.py) fetch
+    Yahoo with auto_adjust=False and expect raw bars; matching that here
+    means a mid-session fallback doesn't also silently switch adjustment
+    convention. backtest.py wants auto_adjust=True and documents the small
+    resulting mismatch at its own call site instead.
+
+    `_get` is injected for offline tests (default: requests.get).
+    """
+    if interval != "1d":
+        return None
+    api_key = os.environ.get(TIINGO_KEY_ENV)
+    if not api_key:
+        return None
+    if requests is None and _get is None:
+        logger.warning("Tiingo configured (TIINGO_API_KEY set) but the "
+                       "'requests' package is not installed — skipping.")
+        return None
+    get = _get or requests.get
+
+    url = f"{TIINGO_BASE}/{ticker.strip().lower()}/prices"
+    try:
+        resp = get(url, params={"startDate": _period_to_start(period),
+                                "token": api_key, "format": "json"},
+                   timeout=15)
+        if resp.status_code != 200:
+            logger.warning("Tiingo %s: HTTP %s", ticker, resp.status_code)
+            return None
+        rows = resp.json()
+        if not rows:
+            return None
+        df = pd.DataFrame(rows)
+        keep = {"open": "Open", "high": "High", "low": "Low",
+               "close": "Close", "volume": "Volume"}
+        missing = [c for c in keep if c not in df.columns]
+        if missing:
+            logger.warning("Tiingo %s: response missing %s", ticker, missing)
+            return None
+        df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
+        df = df.set_index("date").sort_index()
+        df.index.name = "Date"
+        df = df.rename(columns=keep)[list(keep.values())]
+        return df
+    except Exception as e:
+        logger.warning("Tiingo fetch failed for %s: %s", ticker, e)
+        return None
+
+
+def fetch_daily(ticker: str, period: str = "1y", interval: str = "1d",
+                yahoo_fetch=None, tiingo_fetch=None) -> tuple[pd.DataFrame | None, str]:
+    """
+    Yahoo first, Tiingo if configured and Yahoo comes back empty, Stooq last
+    (currently always a no-op — see fetch_stooq()).
 
     `yahoo_fetch(ticker, period, interval)` is injected so this module has no
-    dependency on app.py — and so the fallback logic can be tested without a
-    network. Returns (frame, source) where source is "yahoo", "stooq" or
-    "none".
+    dependency on app.py/scanner.py/exit_monitor.py/backtest.py — and so the
+    fallback logic can be tested without a network. `tiingo_fetch` is injected
+    the same way for tests; production leaves it as fetch_tiingo. Returns
+    (frame, source) where source is "yahoo", "tiingo", "stooq" or "none".
     """
     if yahoo_fetch is not None:
         try:
@@ -91,10 +202,17 @@ def fetch_daily(ticker: str, period: str = "1y", interval: str = "1d",
         except Exception as e:
             logger.warning("Yahoo failed for %s (%s) — trying fallback", ticker, e)
 
+    tiingo = tiingo_fetch or fetch_tiingo
+    df = tiingo(ticker, period, interval)
+    if df is not None and not df.empty:
+        logger.info("Tiingo supplied %d bars for %s", len(df), ticker)
+        return df, "tiingo"
+
     df = fetch_stooq(ticker, period, interval)
     if df is not None and not df.empty:
-        logger.info("Fallback provider supplied %d bars for %s", len(df), ticker)
+        logger.info("Stooq supplied %d bars for %s", len(df), ticker)
         return df, "stooq"
+
     return None, "none"
 
 
@@ -114,7 +232,52 @@ def selftest() -> int:
     assert fetch_stooq("TGT") is None
     print("  fetch_stooq         : returns None (Stooq disabled)")
 
-    print("\nrouting — the part that still matters")
+    print("\nperiod -> start-date parsing")
+    for p in ("1y", "6mo", "15y", "30d", "max", ""):
+        s = _period_to_start(p)
+        print(f"  {p or '(empty)':<8} -> {s}")
+        assert s < str(date.today())
+
+    print("\ntiingo — no key configured")
+    os.environ.pop(TIINGO_KEY_ENV, None)
+    calls = []
+    def _unexpected_get(*a, **kw):
+        calls.append((a, kw)); raise AssertionError("should not be called")
+    assert fetch_tiingo("TGT", _get=_unexpected_get) is None
+    assert not calls, "no TIINGO_API_KEY must mean no network call at all"
+    print("  no key              : returns None, makes NO network call")
+
+    print("\ntiingo — key configured, injected transport")
+    os.environ[TIINGO_KEY_ENV] = "test-key"
+    try:
+        class _Resp:
+            status_code = 200
+            def json(self):
+                return [{"date": "2026-08-27T00:00:00.000Z", "open": 1.0,
+                         "high": 1.2, "low": 0.9, "close": 1.1, "volume": 1000}]
+        got_url = {}
+        def _fake_get(url, params=None, timeout=None):
+            got_url["url"] = url; got_url["params"] = params
+            return _Resp()
+        df = fetch_tiingo("TGT", _get=_fake_get)
+        assert df is not None and len(df) == 1
+        assert list(df.columns) == ["Open", "High", "Low", "Close", "Volume"]
+        assert "token" in got_url["params"] and "startDate" in got_url["params"]
+        print(f"  healthy response    : {len(df)} bar(s), raw OHLCV columns, "
+             f"token sent")
+
+        class _RespBad:
+            status_code = 429
+            def json(self): return []
+        assert fetch_tiingo("TGT", _get=lambda *a, **k: _RespBad()) is None
+        print("  HTTP error          : returns None")
+
+        assert fetch_tiingo("TGT", interval="1h", _get=_unexpected_get) is None
+        print("  intraday interval   : returns None, no call (daily-only)")
+    finally:
+        os.environ.pop(TIINGO_KEY_ENV, None)
+
+    print("\nrouting — yahoo -> tiingo -> stooq -> none")
     good = pd.DataFrame({"Open": [1.0], "High": [1.0], "Low": [1.0],
                          "Close": [1.0], "Volume": [1.0]},
                         index=pd.to_datetime(["2026-08-27"]))
@@ -123,19 +286,27 @@ def selftest() -> int:
     print(f"  yahoo healthy       : source={src}")
     assert src == "yahoo" and df is not None
 
-    df, src = fetch_daily("TGT", yahoo_fetch=lambda t, p, i: pd.DataFrame())
-    print(f"  yahoo empty         : source={src}, frame=None")
+    df, src = fetch_daily("TGT", yahoo_fetch=lambda t, p, i: pd.DataFrame(),
+                          tiingo_fetch=lambda t, p, i: good)
+    print(f"  yahoo empty, tiingo healthy : source={src}")
+    assert src == "tiingo" and df is not None
+
+    df, src = fetch_daily("TGT", yahoo_fetch=lambda t, p, i: pd.DataFrame(),
+                          tiingo_fetch=lambda t, p, i: None)
+    print(f"  yahoo empty, tiingo empty   : source={src}, frame=None "
+         f"(stooq is a dead stub)")
     assert src == "none" and df is None
 
     def _raise(t, p, i): raise RuntimeError("rate limited")
-    df, src = fetch_daily("TGT", yahoo_fetch=_raise)
+    df, src = fetch_daily("TGT", yahoo_fetch=_raise,
+                          tiingo_fetch=lambda t, p, i: None)
     print(f"  yahoo raised        : source={src}, frame=None")
     assert src == "none" and df is None
 
-    print("\n  With no second provider, fetch_daily degrades to Yahoo-only —")
-    print("  which is the pre-fallback behaviour, so nothing regressed. When a")
-    print("  replacement provider arrives, only fetch_stooq() changes and these")
-    print("  routing tests start asserting a real fallback again.")
+    df, src = fetch_daily("TGT", yahoo_fetch=lambda t, p, i: pd.DataFrame())
+    print(f"  no tiingo_fetch injected, no key set -> source={src} "
+         f"(fetch_tiingo itself returns None with no key)")
+    assert src == "none" and df is None
 
     print("\nAll self-tests passed.")
     return 0

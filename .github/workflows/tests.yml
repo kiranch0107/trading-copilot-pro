@@ -1,0 +1,65 @@
+# Module self-tests — no network, no market-data budget
+# ─────────────────────────────────────────────────────────────────────────
+# Every module that decides what "a signal" means (signal_core.py) or that
+# validates the signal (backtest.py, oos_validate.py, data_reservation.py)
+# or builds the universe it runs on (universe.py) already ships a --selftest
+# that runs entirely on synthetic/injected data — no Yahoo call, no rate
+# limit, no market hours to wait for. None of it was wired into CI, so a
+# change to shared logic could break silently until a live alert misbehaved.
+#
+# This just runs what was already written. Every job here should finish in
+# seconds; if one is slow or needs network, that is itself a bug to fix in
+# the module, not in this workflow.
+
+name: Module self-tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selftests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # signal_core.py has no --selftest flag — running the module IS the
+      # test (see its `if __name__ == "__main__": sys.exit(selftest())`).
+      - name: signal_core.py — the one signal implementation every caller shares
+        run: python signal_core.py
+
+      - name: data_source.py — Yahoo / fallback provider routing
+        run: python data_source.py
+
+      - name: universe.py — universe selection, sector cap, snapshot loader
+        run: python universe.py --selftest
+
+      - name: backtest.py — signal_core-backed trade simulation
+        run: python backtest.py --selftest
+
+      - name: oos_validate.py — OOS harness parser + significance stats
+        run: python oos_validate.py --selftest
+
+      - name: data_reservation.py — held-out data reservation ledger
+        run: python data_reservation.py --selftest
+
+      - name: excursion_analysis.py — MAE/MFE math
+        run: python excursion_analysis.py --selftest
+
+      - name: churn_tracker.py — universe snapshot/diff/turnover
+        run: python churn_tracker.py --selftest

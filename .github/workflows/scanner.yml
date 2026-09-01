@@ -159,6 +159,11 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Optional — data_source.py's fallback provider (see its docstring)
+          # activates only when this is set. Unset means Yahoo-only, exactly
+          # the pre-fallback behaviour. Set the SAME secret in Streamlit
+          # Cloud so the app and the scanner degrade the same way.
+          TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
           # Explicit rather than relying on universe.DEFAULT_DYNAMIC. That
           # default is buried in code, and app.py (Streamlit Cloud) reads the
           # same toggle from a different environment — a silent default is how
