@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import pytz
 import signal_core
+import data_source
 
 # ─────────────────────────────────────────────
 # LOGGING
@@ -340,6 +341,10 @@ if USE_DYNAMIC and FAST_MODE and len(WATCHLIST) > 5:
         f"Fast Mode is trimming {len(WATCHLIST) - 5} name(s) off the ranking. "
         f"scanner.py scans all {len(WATCHLIST)}, so alerts may arrive for "
         f"tickers this scan skipped.")
+if st.session_state.get("_stooq_used"):
+    st.sidebar.info("Some price data came from Stooq — Yahoo was unavailable. "
+                    "Stooq bars are not split-adjusted; option data is "
+                    "unaffected (it is always Yahoo).")
 st.sidebar.divider()
 
 ADX_MIN       = st.sidebar.number_input("ADX minimum",              value=35,   min_value=1,    max_value=100)
@@ -1088,25 +1093,35 @@ def get_data(ticker: str, period: str = "1y", interval: str = "1d",
 
 def get_data_with_error(ticker: str, period: str = "1y",
                         interval: str = "1d") -> tuple[pd.DataFrame | None, str | None]:
-    try:
-        df = _yf_download_with_retry(ticker, period, interval)
-    except Exception as e:
-        if _is_rate_limit_error(e):
-            return None, "Rate limited by Yahoo Finance — please wait a moment and try again."
-        return None, f"Data fetch failed: {e}"
-    empty = df is None or getattr(df, "empty", True)
+    """
+    Yahoo first, Stooq if Yahoo comes back empty or throws.
+
+    Retries alone could not fix the throttle problem — they only make a
+    throttled app slower. A second, independent source can. Stooq covers daily
+    and weekly OHLCV, which is what every tab depends on; options remain
+    Yahoo-only because Stooq has no chains.
+    """
+    df, source = data_source.fetch_daily(
+        ticker, period, interval,
+        yahoo_fetch=_yf_download_with_retry)
+
+    if df is None:
+        return None, (f"Neither Yahoo nor Stooq returned data for '{ticker}'. "
+                      f"If the symbol is right, both are unavailable — wait a "
+                      f"minute and retry.")
+    if source == "stooq":
+        # Surfaced so a silent source switch never goes unnoticed: Stooq bars
+        # are not split-adjusted the way Yahoo's are.
+        logger.info("Using Stooq data for %s (Yahoo unavailable)", ticker)
+        st.session_state["_stooq_used"] = True
+    # Past this point a frame exists; the only remaining failure is too few
+    # bars. The "nothing came back" case is handled above, where we know which
+    # source was tried.
+    rows = len(df)
     df = _normalise_df(df, MIN_ROWS)
     if df is None:
-        if empty:
-            # Nothing came back at all after every retry. For a listed symbol
-            # this is a throttle, not a typo — say so rather than sending the
-            # user to double-check a ticker they typed correctly.
-            return None, (f"Yahoo returned no data for '{ticker}' after "
-                          f"{_YF_RETRY_TRIES} attempts. If the symbol is right, "
-                          f"this is rate limiting — wait a minute and retry.")
-        return None, (f"Only a partial history came back for '{ticker}' "
-                      f"(need {MIN_ROWS} bars). Try a longer period, or wait "
-                      f"and retry if Yahoo is throttling.")
+        return None, (f"Only {rows} usable bars for '{ticker}' from "
+                      f"{source} (need {MIN_ROWS}). Try a longer period.")
     return df, None
 
 
