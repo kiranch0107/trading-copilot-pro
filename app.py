@@ -342,17 +342,7 @@ if USE_DYNAMIC and FAST_MODE and len(WATCHLIST) > 5:
         f"tickers this scan skipped.")
 st.sidebar.divider()
 
-# Sidebar defaults are sourced from signal_core.DEFAULTS, never retyped.
-#
-# Hardcoded literals here had ALREADY drifted back apart from the scanner:
-# HQ_MIN_RR was 1.5 in the app vs 1.0 in DEFAULTS, and VOLUME_MULT was 1.0
-# vs 1.2 — so the app demanded a stricter R:R and a looser volume surge than
-# the alerts you actually receive. That is the same class of bug the shared
-# signal_core refactor was written to end, reintroduced through the sidebar.
-# Reading the dataclass means a default cannot diverge again.
-_D = signal_core.DEFAULTS
-
-ADX_MIN       = st.sidebar.number_input("ADX minimum",              value=int(_D.adx_min), min_value=1, max_value=100)
+ADX_MIN       = st.sidebar.number_input("ADX minimum",              value=35,   min_value=1,    max_value=100)
 EARNINGS_DAYS      = int(st.sidebar.number_input("Earnings blackout days",      value=3,   min_value=0, max_value=30))
 POST_EARNINGS_DAYS = int(st.sidebar.number_input("Post-earnings cooling (days)", value=1,   min_value=0, max_value=7,
     help="Also block signals N days AFTER earnings (avoids IV crush residual)"))
@@ -361,20 +351,20 @@ MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",   value=12,  
     help="Minimum days-to-expiry to consider. Your swing target (2.5× ATR) usually needs "
          "~8 sessions to play out — a 1-2 DTE contract will lose to theta even if the "
          "trade thesis is correct. 7+ is a sane floor for swing trades."))
-MIN_RR        = st.sidebar.number_input("Min Reward/Risk",           value=float(_D.min_rr),  min_value=0.1,  step=0.1)
-HQ_MIN_RR     = st.sidebar.number_input("High-Quality R:R threshold", value=float(_D.hq_min_rr),  min_value=0.2,  step=0.1,
+MIN_RR        = st.sidebar.number_input("Min Reward/Risk",           value=0.5,  min_value=0.1,  step=0.1)
+HQ_MIN_RR     = st.sidebar.number_input("High-Quality R:R threshold", value=1.5,  min_value=0.2,  step=0.1,
     help="R:R needed to qualify as a 🔥 HIGH QUALITY setup (these trigger Telegram alerts). "
          "Must also be 'Strong' strength with all 4 filters passing.")
 MIN_ROWS      = int(st.sidebar.number_input("Min history bars",      value=50,   min_value=10))
-VOLUME_MULT   = st.sidebar.number_input("Volume multiplier",         value=float(_D.volume_mult),  min_value=0.1,  step=0.1)
-ATR_STOP_MULT = st.sidebar.number_input("ATR stop multiplier",       value=float(_D.atr_stop_mult),  min_value=0.5, max_value=4.0, step=0.25,
+VOLUME_MULT   = st.sidebar.number_input("Volume multiplier",         value=1.0,  min_value=0.1,  step=0.1)
+ATR_STOP_MULT = st.sidebar.number_input("ATR stop multiplier",       value=1.0,  min_value=0.5, max_value=4.0, step=0.25,
     help="Stop distance = this × ATR. Tighter stops raise per-trade expectancy (1.0 → "
          "+0.252 R vs 1.5 → +0.162 R across 300 series) because losers are cut faster and "
          "the R multiple per win is larger — BUT they also whipsaw more, so drawdown per "
          "trade is deeper (more frequent small losses). 1.0 maximises expectancy; 1.25–1.5 "
          "trades some edge for a smoother equity curve. Pick based on your tolerance for "
          "consecutive small losses.")
-ATR_TGT_MULT  = st.sidebar.number_input("ATR target multiplier",     value=float(_D.atr_tgt_mult),  min_value=1.0, max_value=6.0, step=0.25,
+ATR_TGT_MULT  = st.sidebar.number_input("ATR target multiplier",     value=4.0,  min_value=1.0, max_value=6.0, step=0.25,
     help="Target distance = this × ATR. Backtested across 300 simulated market series, "
          "3.0 lifted per-trade expectancy ~29% over 2.5 (+0.196 → +0.252 R) with the same "
          "stop and same trade count — the edge in trend-following comes from letting "
@@ -1048,10 +1038,24 @@ def _is_rate_limit_error(e: Exception) -> bool:
 def _yf_download_with_retry(ticker: str, period: str, interval: str) -> pd.DataFrame | None:
     delay = _YF_RETRY_DELAY
     last_err = None
+    out = None
     for attempt in range(_YF_RETRY_TRIES):
         _rl.wait()
         try:
-            return yf.download(ticker, period=period, interval=interval, progress=False)
+            out = yf.download(ticker, period=period, interval=interval, progress=False)
+            # BUG FIX: yf.download returns an EMPTY DataFrame when throttled
+            # rather than raising, so `return yf.download(...)` handed back the
+            # empty frame on attempt 1 and the retry loop never ran. The caller
+            # then reported "No usable data for 'TGT' — check the symbol",
+            # which sends you to check a ticker that was never the problem.
+            # Treat empty as retryable, exactly like an explicit rate-limit
+            # exception.
+            if out is not None and not out.empty:
+                return out
+            if attempt < _YF_RETRY_TRIES - 1:
+                logger.warning("Empty frame for %s (likely throttled); "
+                               "backing off %ss", ticker, delay)
+                time.sleep(delay); delay *= 2; continue
         except Exception as e:
             last_err = e
             if _is_rate_limit_error(e) and attempt < _YF_RETRY_TRIES - 1:
@@ -1059,7 +1063,7 @@ def _yf_download_with_retry(ticker: str, period: str, interval: str) -> pd.DataF
                 time.sleep(delay); delay *= 2; continue
             raise
     if last_err: raise last_err
-    return None
+    return out
 
 
 def _normalise_df(df: pd.DataFrame, min_rows: int) -> pd.DataFrame | None:
@@ -1090,9 +1094,19 @@ def get_data_with_error(ticker: str, period: str = "1y",
         if _is_rate_limit_error(e):
             return None, "Rate limited by Yahoo Finance — please wait a moment and try again."
         return None, f"Data fetch failed: {e}"
+    empty = df is None or getattr(df, "empty", True)
     df = _normalise_df(df, MIN_ROWS)
     if df is None:
-        return None, f"No usable data for '{ticker}' — check the symbol or try a longer period."
+        if empty:
+            # Nothing came back at all after every retry. For a listed symbol
+            # this is a throttle, not a typo — say so rather than sending the
+            # user to double-check a ticker they typed correctly.
+            return None, (f"Yahoo returned no data for '{ticker}' after "
+                          f"{_YF_RETRY_TRIES} attempts. If the symbol is right, "
+                          f"this is rate limiting — wait a minute and retry.")
+        return None, (f"Only a partial history came back for '{ticker}' "
+                      f"(need {MIN_ROWS} bars). Try a longer period, or wait "
+                      f"and retry if Yahoo is throttling.")
     return df, None
 
 
@@ -1603,50 +1617,6 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
             "is_budget":row["mid"]<=BUDGET_MAX}
 
 
-def list_expiries(ticker: str) -> list[str]:
-    """
-    Cached only on SUCCESS. st.cache_data would happily store an empty list for
-    a full hour, so a single throttle would leave the dropdown blank long after
-    Yahoo recovered. Cache the good result; retry the bad one.
-    """
-    key = f"_expiries_{ticker.upper()}"
-    hit = st.session_state.get(key)
-    if hit:
-        return hit
-    out = _fetch_expiries(ticker)
-    if out:
-        st.session_state[key] = out
-    return out
-
-
-def _fetch_expiries(ticker: str) -> list[str]:
-    """
-    Expiry dates actually listed for this ticker.
-
-    Options only expire on specific dates, so a free calendar lets you pick a
-    Wednesday and get a guaranteed failure. This drives a picker of real dates
-    instead. One lightweight call, cached for an hour.
-    """
-    delay = _OPT_RETRY_DELAY
-    for attempt in range(_OPT_RETRY_ATTEMPTS):
-        try:
-            _rl.wait()
-            out = list(yf.Ticker(ticker).options or [])
-            if out:
-                return out
-            # Empty means throttled, not "no options". Retry rather than
-            # caching an empty list for an hour.
-            if attempt < _OPT_RETRY_ATTEMPTS - 1:
-                logger.warning("Empty expiry list for %s (likely throttled); "
-                               "retry in %ss", ticker, delay)
-                time.sleep(delay); delay *= 2
-        except Exception as e:
-            logger.debug("Expiry list unavailable for %s (%s)", ticker, e)
-            if attempt < _OPT_RETRY_ATTEMPTS - 1:
-                time.sleep(delay); delay *= 2
-    return []
-
-
 def check_manual_contract(ticker: str, right: str, strike: float,
                           expiry: str, entry_premium: float) -> dict:
     """
@@ -1751,45 +1721,32 @@ def check_manual_contract(ticker: str, right: str, strike: float,
         # because it is looking for a contract; here the user has already named
         # one, so fetch exactly that expiry — more accurate AND one call
         # instead of three.
-        # BUG FIX: this called yf.Ticker(ticker).options directly, with no
-        # retry. yfinance returns an EMPTY LIST when throttled, so a throttle
-        # surfaced as "not a listed expiry ... Listed: none returned" — while
-        # the Expiry dropdown right above it was happily showing that same
-        # date, because the dropdown reads the CACHED list_expiries(). Two
-        # sources for the same fact will eventually disagree, and here they
-        # did. Use the one source, cached, so they cannot.
+        # One call: fetch the chain for exactly the expiry given. No pre-flight
+        # validation against the listed-expiry list — that was a second Yahoo
+        # round trip to check something the user already knows, and it was the
+        # tab's main source of latency and of throttle-induced false failures.
         stock = yf.Ticker(ticker)
-        listed = list_expiries(ticker)
-        if not listed:
+        chain = _fetch_chain_with_retry(stock, expiry)
+        if chain is None:
             add("Contract found on chain", False,
-                f"Yahoo returned no expiries for {ticker.upper()} — that is a "
-                f"rate limit, not a missing chain. Try again in a minute.")
-        elif expiry not in listed:
-            nearby = ", ".join(listed[:6])
-            add("Contract found on chain", False,
-                f"{expiry} is not a listed expiry for {ticker.upper()}. "
-                f"Listed: {nearby}")
+                f"no chain came back for {ticker.upper()} {expiry} — either "
+                f"that is not a listed expiry, or Yahoo is rate limiting. "
+                f"If the date is right, try again in a minute.")
         else:
-            chain = _fetch_chain_with_retry(stock, expiry)
-            if chain is None:
+            side = (chain.calls if out["right"] == "CALL"
+                    else chain.puts).fillna(0)
+            hit = side[abs(side["strike"] - out["strike"]) < 0.01]
+            if hit.empty:
+                strikes = sorted(float(x) for x in side["strike"])
+                near = [x for x in strikes
+                        if abs(x - out["strike"]) <= max(5.0, out["strike"] * 0.05)]
+                hint = (", ".join(f"${x:g}" for x in near[:8])
+                        if near else "none within 5%")
                 add("Contract found on chain", False,
-                    "chain fetch failed after retries — likely rate limited, "
-                    "try again shortly")
+                    f"no {out['right']} at ${out['strike']:g} on {expiry}. "
+                    f"Nearby strikes: {hint}")
             else:
-                side = (chain.calls if out["right"] == "CALL"
-                        else chain.puts).fillna(0)
-                hit = side[abs(side["strike"] - out["strike"]) < 0.01]
-                if hit.empty:
-                    strikes = sorted(float(x) for x in side["strike"])
-                    near = [x for x in strikes
-                            if abs(x - out["strike"]) <= max(5.0, out["strike"] * 0.05)]
-                    hint = (", ".join(f"${x:g}" for x in near[:8])
-                            if near else "none within 5%")
-                    add("Contract found on chain", False,
-                        f"no {out['right']} at ${out['strike']:g} on {expiry}. "
-                        f"Nearby strikes: {hint}")
-                else:
-                    row = hit.iloc[0]
+                row = hit.iloc[0]
     except Exception as e:
         add("Contract found on chain", False, f"chain fetch failed ({e})")
 
@@ -1868,10 +1825,6 @@ def _signal_params() -> "signal_core.SignalParams":
         min_rr=float(MIN_RR),
         hq_min_rr=float(HQ_MIN_RR),
         volume_mult=float(VOLUME_MULT),
-        # Was omitted, so the app silently fell back to the dataclass default
-        # while every other field tracked the sidebar. Passed explicitly now
-        # so the params object is a complete description of what ran.
-        volume_soft_mult=_D.volume_soft_mult,
         atr_stop_mult=float(ATR_STOP_MULT),
         atr_tgt_mult=float(ATR_TGT_MULT),
         weekly_confirm=bool(WEEKLY_CONFIRM),
@@ -3333,34 +3286,18 @@ with TAB_CHECK:
 
     cc4, cc5 = st.columns(2)
     with cc4:
-        _listed = list_expiries(chk_ticker) if chk_ticker else []
-        if _listed:
-            # Real expiries only — you cannot pick a date that is not tradeable.
-            _default_ix = next(
-                (i for i, d in enumerate(_listed)
-                 if (pd.Timestamp(d).date() - _date.today()).days >= MIN_DTE),
-                0)
-            chk_expiry = st.selectbox(
-                "Expiry", _listed, index=_default_ix, key="chk_expiry_sel",
-                format_func=lambda d: (
-                    f"{d}  ({(pd.Timestamp(d).date() - _date.today()).days}d)"),
-                help="Only dates actually listed for this ticker. Defaults to "
-                     "the first one meeting your Min DTE.")
-        else:
-            # Fallback when the ticker is blank or the expiry list is
-            # unavailable (rate limit, bad symbol). A calendar can produce a
-            # non-expiry date, so the checker validates it against the chain
-            # and reports what IS listed.
-            chk_expiry = st.date_input(
-                "Expiry", value=_date.today() + _timedelta(days=max(MIN_DTE, 21)),
-                min_value=_date.today() + _timedelta(days=1),
-                key="chk_expiry_date",
-                help="Enter a ticker above to pick from real listed expiries. "
-                     "Until then this is a plain calendar, so the date may not "
-                     "be a tradeable expiry.").strftime("%Y-%m-%d")
-            if chk_ticker:
-                st.caption("Could not load listed expiries — check the ticker, "
-                           "or Yahoo may be rate limiting.")
+        # Plain calendar by design. Looking up the real expiry list cost a
+        # Yahoo call (up to four with retries) purely to validate a date the
+        # user already knows is correct — and it was the slowest thing on the
+        # tab. If the date is not a real expiry the chain fetch below says so
+        # anyway, at no extra cost.
+        chk_expiry = st.date_input(
+            "Expiry", value=_date.today() + _timedelta(days=max(MIN_DTE, 21)),
+            min_value=_date.today() + _timedelta(days=1),
+            key="chk_expiry_date",
+            help="Pick the contract's expiry date. Not validated against the "
+                 "listed chain up front — if the date is wrong the check "
+                 "below will tell you.").strftime("%Y-%m-%d")
     with cc5:
         chk_premium = st.number_input(
             "Entry premium (per share)", min_value=0.0, step=0.05, value=0.0,
