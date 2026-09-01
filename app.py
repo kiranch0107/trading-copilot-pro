@@ -11,7 +11,6 @@ import logging
 import requests
 import math
 import time
-import threading
 from datetime import datetime, date as _date, timedelta as _timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pytz
@@ -25,6 +24,11 @@ from journal_store import (
     log_alert, add_journal_trade, journal_stats, calc_position_size,
     MIN_JOURNAL_TRADES_FOR_SIGNAL,
 )
+from rate_limit import (
+    RATE_LIMITER as _rl, RATE_LIMITER_SLOW as _rl_slow,
+    is_rate_limit_error as _is_rate_limit_error,
+)
+from option_chain import get_option_data, _fetch_chain_with_retry, _OPT_MAX_EXPIRIES
 
 
 def _build_stamp() -> str:
@@ -434,26 +438,13 @@ def send_telegram_alert(ticker: str, message: str) -> None:
 
 
 # ─────────────────────────────────────────────
-# RATE LIMITER
+# RATE LIMITER — see rate_limit.py
+#
+# RateLimiter, _rl, _rl_slow and _is_rate_limit_error moved there so
+# option_chain.py can share the SAME limiter instances instead of getting
+# its own independent budget. Imported by name above; every call site below
+# (_rl.wait(), _rl_slow.wait(), _is_rate_limit_error(e)) is unchanged.
 # ─────────────────────────────────────────────
-class RateLimiter:
-    def __init__(self, min_gap: float = 0.35):
-        self._min_gap = min_gap
-        self._lock    = threading.Lock()
-        self._last_ts = 0.0
-
-    def wait(self) -> None:
-        with self._lock:
-            elapsed = time.time() - self._last_ts
-            if elapsed < self._min_gap:
-                time.sleep(self._min_gap - elapsed)
-            self._last_ts = time.time()
-
-_rl = RateLimiter(min_gap=0.35)          # default gap for data + options calls
-_rl_slow = RateLimiter(min_gap=0.80)    # D1 FIX: slower gap for weekly trend + earnings
-                                         # — these fire per-ticker (5 tickers = 10 calls)
-                                         # and don't need to be fast (cached 15-60 min).
-                                         # Keeps them from crowding the main data fetches.
 # F1 FIX: SPY regime uses ADX=20 deliberately (index trends are smoother than
 # individual stocks so a lower threshold is appropriate). Documented here so
 # it's not confused with the per-ticker ADX_MIN (default 25, user-tunable).
@@ -461,11 +452,6 @@ SPY_ADX_THRESHOLD = 20
 
 _YF_RETRY_TRIES = 3
 _YF_RETRY_DELAY = 2.0
-
-
-def _is_rate_limit_error(e: Exception) -> bool:
-    msg = str(e).lower()
-    return "too many requests" in msg or "rate limit" in msg or "429" in msg
 
 
 def _yf_download_with_retry(ticker: str, period: str, interval: str) -> pd.DataFrame | None:
@@ -789,280 +775,14 @@ def get_spy_regime() -> dict:
 
 
 # ─────────────────────────────────────────────
-# OPTIONS ENGINE
+# OPTIONS ENGINE — see option_chain.py
+#
+# _fetch_chain_with_retry, get_full_chain_data, get_option_data and the
+# _OPT_* tuning constants moved there. check_manual_contract() below did NOT
+# move — see option_chain.py's module docstring for why (it calls this
+# file's whole signal-evaluation pipeline, a much larger dependency set than
+# "fetch and rank a chain"). Imported by name above; call sites unchanged.
 # ─────────────────────────────────────────────
-_OPT_RETRY_ATTEMPTS = 4     # was 3 — one extra attempt before giving up.
-_OPT_RETRY_DELAY    = 4.0   # was 2.0 — Yahoo throttles the options endpoints
-                            # aggressively from shared cloud IPs. A longer first
-                            # backoff (4s → 8s → 16s with the ×2 growth below)
-                            # gives the limiter time to reset, turning most
-                            # "rate limited" errors into slow-but-successful
-                            # loads instead of a hard failure on the first ticker.
-_OPT_EXPIRY_DELAY   = 0.6   # was 0.4 — slightly more spacing between the per-
-                            # expiry chain fetches so a single ticker doesn't
-                            # burst 5 calls in ~2s and trip the limiter itself.
-_OPT_MAX_EXPIRIES   = 3   # was 5. Each expiry = one full-chain fetch, so 5
-                          # expiries = ~6 Yahoo calls for ONE ticker — the single
-                          # biggest source of rate-limit hits. Back to 3 cuts
-                          # per-ticker call volume ~40%. The DTE-adequacy check
-                          # already flags contracts that are too short-dated, so
-                          # 3 nearest valid expiries is enough for a swing target.
-
-
-def _fetch_chain_with_retry(stock, expiry: str):
-    delay = _OPT_RETRY_DELAY
-    for attempt in range(_OPT_RETRY_ATTEMPTS):
-        _rl.wait()
-        try:
-            return stock.option_chain(expiry)
-        except Exception as e:
-            msg = str(e).lower()
-            if ("too many requests" in msg or "rate limit" in msg or "429" in msg) \
-               and attempt < _OPT_RETRY_ATTEMPTS - 1:
-                logger.warning("Rate limited chain %s %s; backoff %ss", stock.ticker, expiry, delay)
-                time.sleep(delay); delay *= 2; continue
-            raise
-    return None
-
-
-@st.cache_data(ttl=900, show_spinner=False)
-def get_full_chain_data(ticker: str, min_dte: int) -> dict:
-    # BUG FIX: min_dte is part of the cache key. Previously the MIN_DTE
-    # sidebar global was read as a closure, so changing Min DTE did NOT
-    # invalidate this 15-minute cache — stale expiries kept being served.
-    try:
-        stock = yf.Ticker(ticker)
-        # The initial expiries fetch is the call most often rate-limited (it's
-        # the first Yahoo hit on the Options tab). Previously it retried only
-        # ONCE after a fixed 3s sleep, then failed hard — which is exactly the
-        # "rate limited on the first ticker" error. Give it the same escalating
-        # backoff as the chain fetches so a throttle becomes a slow success.
-        all_expiries = None
-        delay = _OPT_RETRY_DELAY
-        for attempt in range(_OPT_RETRY_ATTEMPTS):
-            _rl.wait()
-            try:
-                all_expiries = stock.options
-                # BUG FIX: yfinance returns an EMPTY LIST when throttled rather
-                # than raising, so an empty result used to skip the retry loop
-                # entirely and surface as "No option chain available" — which
-                # reads like the stock has no options at all. For a name like
-                # KO with thousands of listed contracts that is never true; it
-                # is a throttle. Treat empty as retryable.
-                if all_expiries:
-                    break
-                if attempt < _OPT_RETRY_ATTEMPTS - 1:
-                    logger.warning("Empty expiry list for %s (likely throttled); "
-                                   "retry in %ss", ticker, delay)
-                    time.sleep(delay); delay *= 2; continue
-            except Exception as e:
-                if _is_rate_limit_error(e) and attempt < _OPT_RETRY_ATTEMPTS - 1:
-                    logger.warning("Rate limited options(%s); backoff %ss", ticker, delay)
-                    time.sleep(delay); delay *= 2; continue
-                raise
-        if not all_expiries:
-            # Say what actually happened. The previous wording implied the
-            # underlying is not optionable, sending you to check the ticker
-            # when the real answer is "wait a minute and try again".
-            return {"error": f"Yahoo returned no expiries for {ticker} after "
-                             f"{_OPT_RETRY_ATTEMPTS} attempts — almost always a "
-                             f"temporary rate limit, not a missing chain. "
-                             f"Try again shortly.",
-                    "expiries": []}
-
-        today   = pd.Timestamp.today().normalize()
-        result  = []
-        checked = 0
-        for expiry in all_expiries:
-            if checked >= _OPT_MAX_EXPIRIES:
-                break
-            try:
-                dte = (pd.Timestamp(expiry) - today).days
-            except Exception:
-                continue
-            if dte < min_dte:
-                continue
-            checked += 1
-            try:
-                time.sleep(_OPT_EXPIRY_DELAY)
-                chain = _fetch_chain_with_retry(stock, expiry)
-                if chain is None:
-                    continue
-                result.append({"expiry":expiry,"dte":dte,
-                                "calls":chain.calls.fillna(0),
-                                "puts":chain.puts.fillna(0)})
-            except Exception as e:
-                logger.exception("Skipping expiry %s for %s: %s", expiry, ticker, e)
-        if not result:
-            return {"error":"No valid expiries found","expiries":[]}
-        return {"error":None,"expiries":result}
-    except Exception as e:
-        msg = str(e)
-        if _is_rate_limit_error(Exception(msg)):
-            return {"error":"Rate limited by Yahoo Finance — try again shortly","expiries":[]}
-        return {"error":f"Option chain fetch failed ({msg})","expiries":[]}
-
-
-def get_option_data(ticker: str, price: float, trend: str, strength: str,
-                    atr: float | None = None) -> dict:
-    """
-    Strike selection.
-
-    BUG FIX: the 'Strong' branch previously had only ONE bound —
-        opts[opts["strike"] <= price * 1.02]      (bullish)
-    which accepted EVERY strike from $1 up to 1.02×price. On SPY at $749 that
-    scanned every deep-ITM call from $1 to $764. Same unbounded issue on the
-    bearish side. Now both branches are two-sided windows.
-
-    Windows are also ATR-aware where possible: a 5% band means something very
-    different on a 1%-ATR index than on a 6%-ATR small cap. If ATR is supplied
-    we size the window to ±2.0 ATR (floored/capped at sane percentage bounds);
-    otherwise we fall back to fixed percentages.
-    """
-    chain_data = get_full_chain_data(ticker, MIN_DTE)
-    if chain_data.get("error"):
-        return {"error": chain_data["error"]}
-
-    # ── Build the strike window ──
-    if atr and atr > 0 and price > 0:
-        band = (atr * 2.0) / price               # ±2 ATR expressed as a fraction
-        band = min(max(band, 0.03), 0.12)        # clamp to 3%–12%
-    else:
-        band = 0.05                              # fallback: ±5%
-
-    if strength == "Strong":
-        # Slightly ITM/ATM bias — but two-sided, not unbounded.
-        if trend == "Bullish":
-            lo_mult, hi_mult = 1.0 - band, 1.02          # ITM up to 1 band, max 2% OTM
-        else:
-            lo_mult, hi_mult = 0.98, 1.0 + band          # ITM up to 1 band, max 2% OTM
-    else:
-        lo_mult, hi_mult = 1.0 - band, 1.0 + band        # symmetric ATM window
-
-    lo, hi = price * lo_mult, price * hi_mult
-
-    best = None; best_score = 0.0
-    # Diagnostics. "No liquid options found" on its own is a dead end — it does
-    # not say whether the chain was empty, the strike window excluded
-    # everything, or contracts existed and every one failed a liquidity gate.
-    # Those need different responses, so count them.
-    diag = {"expiries": 0, "in_window": 0, "had_bid": 0, "had_volume": 0,
-            "had_oi": 0, "spread_ok": 0, "best_spread_pct": None,
-            "window_lo": round(lo, 2), "window_hi": round(hi, 2)}
-
-    for entry in chain_data["expiries"]:
-        expiry, dte = entry["expiry"], entry["dte"]
-        opts = entry["calls"] if trend=="Bullish" else entry["puts"]
-        if opts.empty: continue
-        diag["expiries"] += 1
-
-        opts = opts[(opts["strike"] >= lo) & (opts["strike"] <= hi)]
-        if opts.empty: continue
-        diag["in_window"] += len(opts)
-
-        opts = opts.copy()
-        # Yahoo returns NaN (not 0) for quotes on some contracts. NaN fails every
-        # comparison silently, so a NaN bid and a zero bid both mean "no quote" —
-        # make that explicit rather than relying on comparison semantics.
-        for _c in ("bid", "ask", "volume", "openInterest"):
-            if _c in opts.columns:
-                opts[_c] = opts[_c].fillna(0)
-        opts["spread"] = opts["ask"] - opts["bid"]
-        opts["mid"]    = (opts["ask"] + opts["bid"]) / 2
-
-        _live = opts[(opts["mid"] > 0) & (opts["bid"] > 0)]
-        diag["had_bid"] += len(_live)
-        _vol = _live[_live["volume"] > 0]
-        diag["had_volume"] += len(_vol)
-        _oi = _vol[_vol["openInterest"] > 0]
-        diag["had_oi"] += len(_oi)
-        if not _oi.empty:
-            _sp = (_oi["spread"] / _oi["mid"] * 100)
-            diag["spread_ok"] += int((_sp <= 15.0).sum())
-            _tightest = float(_sp.min())
-            if diag["best_spread_pct"] is None or _tightest < diag["best_spread_pct"]:
-                diag["best_spread_pct"] = round(_tightest, 1)
-        # Require bid > 0 (mid can pass even when bid=0 on wide/illiquid strikes)
-        # and volume > 0 (a zero-volume contract is untradeable regardless of OI).
-        valid = opts[
-            (opts["mid"] > 0) &
-            (opts["bid"] > 0) &
-            (opts["volume"] > 0) &
-            (opts["spread"] / opts["mid"] <= 0.15)
-        ]
-        valid = valid[valid["openInterest"] > 0]   # also require some existing interest
-        if valid.empty: continue
-        valid = valid.copy()
-        valid["liq"]   = valid["volume"] + valid["openInterest"]
-        # Volume weight so zero-volume high-OI contracts don't outscore genuinely
-        # active ones. volume=0 → weight 0.1; volume>0 → scales with activity.
-        valid["vol_weight"] = valid["volume"].apply(lambda v: 0.1 if v == 0 else 1.0 + (v / (v + 100)))
-        valid["score"] = (valid["liq"] * valid["vol_weight"]) / (1 + (valid["spread"] / (valid["mid"] + 1e-6)))
-
-        # ── DTE ADEQUACY (theta protection) ──
-        # A 2.5-ATR target typically needs ~2.5 average-range days of favourable
-        # movement, and real moves are rarely straight lines — budget ~3x that,
-        # plus a few days of buffer. A contract that expires before the trade can
-        # realistically reach target is a theta trap no matter how liquid it is.
-        # We SCALE the score rather than hard-filtering, so a very liquid short
-        # contract can still win if nothing better exists — but it gets flagged.
-        if atr and atr > 0:
-            # Scales with the sidebar target multiplier (was hardcoded 2.5 —
-            # inconsistent after the default target moved to 3.0× ATR).
-            days_needed = max(5, int(ATR_TGT_MULT * 3))
-        else:
-            days_needed = 10
-        if dte < days_needed:
-            valid["score"] *= (dte / days_needed) ** 2   # quadratic theta penalty
-
-        top = valid.sort_values("score", ascending=False).iloc[0]
-        if top["score"] > best_score:
-            best = (top, expiry, dte); best_score = top["score"]
-
-    if best is None:
-        if diag["expiries"] == 0:
-            why = "no expiries came back with contracts"
-        elif diag["in_window"] == 0:
-            why = (f"no strikes between ${diag['window_lo']} and "
-                   f"${diag['window_hi']} (the ±ATR window around "
-                   f"${price:.2f})")
-        elif diag["had_bid"] == 0:
-            why = f"all {diag['in_window']} strikes in range had no live bid"
-            # Almost always the clock, not the chain. Yahoo returns zero or NaN
-            # bids for options outside regular hours, so every strike fails the
-            # bid > 0 gate after the close — with no indication that the cause
-            # is the time of day.
-            if not is_market_open():
-                why += (". The market is closed — option quotes go stale after "
-                        "the bell, so this is expected outside 9:30-16:00 ET "
-                        "rather than a problem with the chain")
-        elif diag["had_volume"] == 0:
-            why = (f"{diag['had_bid']} strikes had a bid but none traded "
-                   f"today (volume 0)")
-        elif diag["had_oi"] == 0:
-            why = f"{diag['had_volume']} strikes traded but none had open interest"
-        elif diag["spread_ok"] == 0:
-            tight = diag["best_spread_pct"]
-            why = (f"{diag['had_oi']} strikes passed liquidity but every spread "
-                   f"exceeded 15% of mid — tightest was {tight}%")
-        else:
-            why = "contracts passed the filters but none scored"
-        return {"error": f"No liquid options found: {why}.", "diag": diag}
-
-    row, expiry, dte = best
-    days_needed = max(5, int(ATR_TGT_MULT * 3)) if (atr and atr > 0) else 10
-    return {"label":"CALL" if trend=="Bullish" else "PUT",
-            "strike":round(float(row["strike"]),2),
-            "expiry":expiry,"mid":round(float(row["mid"]),2),
-            "last_price":round(float(row.get("lastPrice",0)),2),
-            "volume":int(row.get("volume",0)),"oi":int(row.get("openInterest",0)),
-            "spread":round(float(row["spread"]),2),"dte":dte,
-            "strike_lo":round(lo,2),"strike_hi":round(hi,2),
-            "days_needed":days_needed,
-            "dte_adequate":dte >= days_needed,
-            "is_budget":row["mid"]<=BUDGET_MAX}
-
-
 def check_manual_contract(ticker: str, right: str, strike: float,
                           expiry: str, entry_premium: float) -> dict:
     """
@@ -1309,7 +1029,8 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
     # Option chain stays here: it is app-specific, rate-limit sensitive, and
     # irrelevant to whether the SIGNAL fired.
     r["option"] = (get_option_data(ticker, r["price"], r["trend"],
-                                   r["strength"], atr=r["atr"])
+                                   r["strength"], MIN_DTE, ATR_TGT_MULT,
+                                   BUDGET_MAX, is_market_open, atr=r["atr"])
                    if fetch_options else
                    {"error": "Not fetched during scan — open the Stock "
                              "Analysis tab for options."})
