@@ -29,7 +29,6 @@ visible as an obvious step in the chart. Worth knowing, not worth blocking on.
 
 from __future__ import annotations
 
-import io
 import logging
 
 try:
@@ -37,22 +36,12 @@ try:
 except ImportError:
     raise SystemExit("Missing pandas. Run: pip install pandas")
 
-try:
-    import requests
-except ImportError:
-    requests = None
-
 logger = logging.getLogger(__name__)
 
-STOOQ_URL = "https://stooq.com/q/d/l/"
-STOOQ_TIMEOUT = 10
-
-# Yahoo period strings -> approximate calendar days, for trimming Stooq's
-# full-history response down to what was actually asked for.
-_PERIOD_DAYS = {
-    "1mo": 31, "3mo": 92, "6mo": 183, "1y": 366,
-    "2y": 731, "5y": 1827, "10y": 3653, "max": 100_000,
-}
+# NOTE: a period -> calendar-days map used to live here, for trimming a
+# provider's full-history response to the window requested. It went with the
+# Stooq parser. Any replacement provider that returns everything it has will
+# need it back — most keyed APIs accept a date range directly instead.
 
 
 def to_stooq_symbol(ticker: str) -> str:
@@ -70,68 +59,17 @@ def to_stooq_symbol(ticker: str) -> str:
 def fetch_stooq(ticker: str, period: str = "1y",
                 interval: str = "1d") -> pd.DataFrame | None:
     """
-    Daily or weekly OHLCV from Stooq, shaped exactly like a yfinance frame:
-    columns Open/High/Low/Close/Volume, DatetimeIndex ascending, tz-naive.
+    DISABLED. Stooq now serves a JavaScript proof-of-work challenge instead of
+    CSV: the page computes SHA-256 hashes until one has leading zeros, then
+    POSTs the answer to /__verify. Solving that from Python would mean running
+    a JS engine or reimplementing a hash loop whose parameters can change
+    without notice — not something to build a data path on.
 
-    Returns None on any failure. A fallback that raises is worse than no
-    fallback, because it turns a recoverable outage into a crash.
+    Kept as a stub rather than deleted because everything AROUND it is still
+    good: fetch_daily()'s routing, the symbol mapping, and the offline tests.
+    Swapping in another provider is a change to this one function.
     """
-    if requests is None:
-        logger.warning("requests not installed — Stooq fallback unavailable")
-        return None
-
-    freq = {"1d": "d", "1wk": "w", "1mo": "m"}.get(interval)
-    if freq is None:
-        # Intraday intervals are not available on this endpoint. Say so rather
-        # than silently returning daily bars where minutes were requested.
-        logger.info("Stooq has no %s bars — fallback skipped", interval)
-        return None
-
-    sym = to_stooq_symbol(ticker)
-    try:
-        r = requests.get(STOOQ_URL, params={"s": sym, "i": freq},
-                         timeout=STOOQ_TIMEOUT)
-        if r.status_code != 200 or not r.text:
-            logger.warning("Stooq HTTP %s for %s", r.status_code, sym)
-            return None
-        # Stooq answers an unknown symbol with a plain-text body rather than a
-        # 404, so check the payload actually looks like the CSV we expect.
-        head = r.text[:200].lower()
-        if "date" not in head or "open" not in head:
-            logger.warning("Stooq returned no data for %s (%s)",
-                           sym, r.text[:60].strip())
-            return None
-
-        df = pd.read_csv(io.StringIO(r.text))
-    except Exception as e:
-        logger.warning("Stooq fetch failed for %s (%s)", sym, e)
-        return None
-
-    if df is None or df.empty or "Date" not in df.columns:
-        return None
-
-    try:
-        df["Date"] = pd.to_datetime(df["Date"])
-        df = df.set_index("Date").sort_index()      # Stooq can return newest-first
-        keep = [c for c in ("Open", "High", "Low", "Close", "Volume")
-                if c in df.columns]
-        df = df[keep].astype(float)
-        if "Volume" not in df.columns:
-            # Some Stooq series omit volume. The volume filter would then
-            # reject everything, so fill rather than let it fail silently.
-            df["Volume"] = 0.0
-        df = df.dropna(subset=["Close"])
-        if df.empty:
-            return None
-
-        days = _PERIOD_DAYS.get(period, 366)
-        if days < 100_000:
-            cutoff = df.index.max() - pd.Timedelta(days=days)
-            df = df[df.index >= cutoff]
-        return df if not df.empty else None
-    except Exception as e:
-        logger.warning("Stooq parse failed for %s (%s)", sym, e)
-        return None
+    return None
 
 
 def fetch_daily(ticker: str, period: str = "1y", interval: str = "1d",
@@ -149,13 +87,13 @@ def fetch_daily(ticker: str, period: str = "1y", interval: str = "1d",
             df = yahoo_fetch(ticker, period, interval)
             if df is not None and not getattr(df, "empty", True):
                 return df, "yahoo"
-            logger.info("Yahoo empty for %s — trying Stooq", ticker)
+            logger.info("Yahoo returned nothing for %s — trying fallback", ticker)
         except Exception as e:
-            logger.warning("Yahoo failed for %s (%s) — trying Stooq", ticker, e)
+            logger.warning("Yahoo failed for %s (%s) — trying fallback", ticker, e)
 
     df = fetch_stooq(ticker, period, interval)
     if df is not None and not df.empty:
-        logger.info("Stooq supplied %d bars for %s", len(df), ticker)
+        logger.info("Fallback provider supplied %d bars for %s", len(df), ticker)
         return df, "stooq"
     return None, "none"
 
@@ -164,16 +102,7 @@ def fetch_daily(ticker: str, period: str = "1y", interval: str = "1d",
 # Self-test — no network
 # ---------------------------------------------------------------------------
 
-_SAMPLE_CSV = """Date,Open,High,Low,Close,Volume
-2026-08-27,168.10,170.40,167.80,169.90,4210000
-2026-08-26,166.50,168.60,166.10,168.20,3980000
-2026-08-25,165.20,166.90,164.70,166.40,4550000
-"""
-
-
 def selftest() -> int:
-    import types, sys
-
     print("symbol mapping")
     for raw, want in [("TGT", "tgt.us"), ("tgt", "tgt.us"),
                       ("^SPX", "^spx"), ("BRK.B", "brk.b")]:
@@ -181,70 +110,32 @@ def selftest() -> int:
         print(f"  {raw:<8} -> {got:<10} {'OK' if got == want else 'FAIL'}")
         assert got == want
 
-    # stub requests so the parser can be exercised offline
-    class _Resp:
-        def __init__(self, text, code=200):
-            self.text, self.status_code = text, code
+    print("\nprovider stub")
+    assert fetch_stooq("TGT") is None
+    print("  fetch_stooq         : returns None (Stooq disabled)")
 
-    global requests
-    real = requests
-    requests = types.SimpleNamespace(
-        get=lambda url, params=None, timeout=None: _Resp(_SAMPLE_CSV))
-    try:
-        df = fetch_stooq("TGT")
-        print(f"\nparsed frame          : {len(df)} rows, cols {list(df.columns)}")
-        assert list(df.columns) == ["Open", "High", "Low", "Close", "Volume"]
-        assert df.index.is_monotonic_increasing, "must be oldest-first"
-        print(f"  index ascending     : {df.index[0].date()} -> {df.index[-1].date()}")
-        assert float(df['Close'].iloc[-1]) == 169.90
+    print("\nrouting — the part that still matters")
+    good = pd.DataFrame({"Open": [1.0], "High": [1.0], "Low": [1.0],
+                         "Close": [1.0], "Volume": [1.0]},
+                        index=pd.to_datetime(["2026-08-27"]))
 
-        # unknown symbol: Stooq answers 200 with a text body, not a 404
-        requests = types.SimpleNamespace(
-            get=lambda url, params=None, timeout=None: _Resp("No data"))
-        assert fetch_stooq("NOPE") is None
-        print("  unknown symbol      : returns None, not a crash")
+    df, src = fetch_daily("TGT", yahoo_fetch=lambda t, p, i: good)
+    print(f"  yahoo healthy       : source={src}")
+    assert src == "yahoo" and df is not None
 
-        requests = types.SimpleNamespace(
-            get=lambda url, params=None, timeout=None: _Resp("", 429))
-        assert fetch_stooq("TGT") is None
-        print("  HTTP 429            : returns None")
+    df, src = fetch_daily("TGT", yahoo_fetch=lambda t, p, i: pd.DataFrame())
+    print(f"  yahoo empty         : source={src}, frame=None")
+    assert src == "none" and df is None
 
-        def _boom(*a, **k): raise ConnectionError("network down")
-        requests = types.SimpleNamespace(get=_boom)
-        assert fetch_stooq("TGT") is None
-        print("  network exception   : swallowed, returns None")
+    def _raise(t, p, i): raise RuntimeError("rate limited")
+    df, src = fetch_daily("TGT", yahoo_fetch=_raise)
+    print(f"  yahoo raised        : source={src}, frame=None")
+    assert src == "none" and df is None
 
-        # intraday is not offered here
-        requests = types.SimpleNamespace(
-            get=lambda url, params=None, timeout=None: _Resp(_SAMPLE_CSV))
-        assert fetch_stooq("TGT", interval="5m") is None
-        print("  intraday interval   : skipped rather than faked")
-
-        # ── the routing itself ──
-        print("\nrouting")
-        good = pd.DataFrame({"Open": [1.0], "High": [1.0], "Low": [1.0],
-                             "Close": [1.0], "Volume": [1.0]},
-                            index=pd.to_datetime(["2026-08-27"]))
-        df, src = fetch_daily("TGT", yahoo_fetch=lambda t, p, i: good)
-        print(f"  yahoo healthy       : source={src}")
-        assert src == "yahoo"
-
-        df, src = fetch_daily("TGT", yahoo_fetch=lambda t, p, i: pd.DataFrame())
-        print(f"  yahoo empty         : source={src}  <- the throttle case")
-        assert src == "stooq" and len(df) == 3
-
-        def _raise(t, p, i): raise RuntimeError("rate limited")
-        df, src = fetch_daily("TGT", yahoo_fetch=_raise)
-        print(f"  yahoo raised        : source={src}")
-        assert src == "stooq"
-
-        requests = types.SimpleNamespace(
-            get=lambda url, params=None, timeout=None: _Resp("No data"))
-        df, src = fetch_daily("TGT", yahoo_fetch=lambda t, p, i: pd.DataFrame())
-        print(f"  both unavailable    : source={src}, frame={df}")
-        assert src == "none" and df is None
-    finally:
-        requests = real
+    print("\n  With no second provider, fetch_daily degrades to Yahoo-only —")
+    print("  which is the pre-fallback behaviour, so nothing regressed. When a")
+    print("  replacement provider arrives, only fetch_stooq() changes and these")
+    print("  routing tests start asserting a real fallback again.")
 
     print("\nAll self-tests passed.")
     return 0
