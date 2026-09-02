@@ -437,9 +437,34 @@ def build_regime_series(spy_df: pd.DataFrame) -> pd.Series:
     return out.reset_index(drop=True)
 
 
+# ── price adjustment ──
+# auto_adjust=True has been the backtest's setting since it was written, while
+# app.py, scanner.py and exit_monitor.py all fetch with False. That mismatch
+# was recorded as an open item for weeks; on 2026-09-02 it stopped being
+# theoretical. A --refresh-cache twelve minutes after a fetch rewrote THOUSANDS
+# of historical rows in 8 of 13 series, across the full 15-year window:
+#
+#   AVGO 2769 rows   CRM 2376   GOOGL 2337   LRCX 2846
+#   MU   2692        ORCL 2801  QCOM  2893   SPY   2825
+#   ADBE 0   AMD 0   NFLX 0   NOW 0   PANW 0
+#
+# The five that did not move pay no dividend. The eight that did, all do.
+# Under auto_adjust=True every bar is scaled by a cumulative dividend factor,
+# so a change anywhere in that factor rewrites the entire history — and Yahoo
+# does not return a stable factor between requests. That single mechanism
+# accounts for every result we saw today: 592/591/586/585/593 trades and
+# -0.016 to -0.031 R, all from the same command.
+#
+# --raw-prices measures the alternative rather than assuming it. Do NOT switch
+# the default on this note alone: raw bars trade a known instability for an
+# unknown one (how Yahoo handles splits without adjustment), and the frozen OOS
+# baseline was measured on adjusted prices.
+AUTO_ADJUST = True
+
+
 def _yahoo_download(ticker: str, period: str, interval: str) -> pd.DataFrame | None:
     return yf.download(ticker, period=period, interval=interval,
-                       progress=False, auto_adjust=True)
+                       progress=False, auto_adjust=AUTO_ADJUST)
 
 
 # ── on-disk bars (bar_cache.py) ──
@@ -547,7 +572,8 @@ def download(ticker: str, years: int,
     df, meta, status = bar_cache.get_or_fetch(
         ticker, interval, years,
         lambda: _download_uncached(ticker, years, interval),
-        refresh=CACHE_REFRESH, enabled=CACHE_ENABLED)
+        refresh=CACHE_REFRESH, enabled=CACHE_ENABLED,
+        variant="" if AUTO_ADJUST else "raw")
     _CACHE_LOG.append((meta, status))
     return df
 
@@ -563,6 +589,7 @@ def run(cfg: dict) -> None:
           f"ATR tgt×: {cfg['atr_tgt_mult']}   Min R:R: {cfg['min_rr']}")
     print(f"Max hold     : {cfg['max_hold']} bars   Slippage: {cfg['slippage_bps']}bps/side   "
           f"Regime filter: {'ON (SPY 200-SMA)' if cfg['use_regime'] else 'OFF'}")
+    print(f"Prices       : {'auto_adjust=True (split+dividend adjusted)' if AUTO_ADJUST else 'auto_adjust=False — RAW, matches every live path'}")
     print(f"Weekly filter: {'ON (price vs 20w EMA)' if cfg.get('use_weekly') else 'OFF'}"
           f"{'   <- OFF live since 2026-09-02; this re-measures it' if cfg.get('use_weekly') else '   (matches the live default)'}")
     print("=" * 78)
@@ -934,11 +961,30 @@ def selftest() -> int:
             assert d1.equals(d2), "cached bars must come back identical"
             print(f"bar cache               : 2 downloads, 1 fetch, identical bars")
 
+            # The adjusted and raw arms must not share a cache entry. If they
+            # did, running one after the other would silently compare a price
+            # series against itself — the same non-measurement as the weekly
+            # filter, but harder to spot, because both frames look plausible.
+            global AUTO_ADJUST
+            AUTO_ADJUST = False
+            n_before = len(_fetches)
+            download("ZZZ", 5)
+            assert len(_fetches) == n_before + 1, \
+                "--raw-prices must fetch its OWN series, not reuse the " \
+                "adjusted one — otherwise the A/B compares a series to itself"
+            AUTO_ADJUST = True
+            download("ZZZ", 5)
+            assert len(_fetches) == n_before + 1, \
+                "switching back must hit the ORIGINAL adjusted entry"
+            print(f"raw vs adjusted         : separate cache entries, no collision")
+
             # --no-cache must genuinely bypass, or the escape hatch is a lie.
             global CACHE_ENABLED
             CACHE_ENABLED = False
+            n_pre = len(_fetches)
             download("ZZZ", 5)
-            assert len(_fetches) == 2, "--no-cache must actually refetch"
+            assert len(_fetches) == n_pre + 1, \
+                "--no-cache must actually refetch"
             CACHE_ENABLED = True
             print(f"--no-cache              : bypasses the cache, refetches")
         finally:
@@ -946,6 +992,7 @@ def selftest() -> int:
             _sh.rmtree(_tmp, ignore_errors=True)
             bar_cache.CACHE_DIR, bar_cache.MANIFEST = _real
             CACHE_ENABLED = True
+            AUTO_ADJUST = True
 
     # ── weekly trend map: the filter the OOS test never measured ──
     # Built so weekly_confirm can finally be A/B'd. Two things must hold: it
@@ -1050,6 +1097,11 @@ def parse_args() -> tuple[dict, bool]:
     p.add_argument("--commission", type=float, default=DEFAULTS["commission"])
     p.add_argument("--cooldown", type=int, default=DEFAULTS["cooldown_bars"])
     p.add_argument("--use-regime", action="store_true", default=DEFAULTS["use_regime"])
+    p.add_argument("--raw-prices", action="store_true",
+                   help="fetch with auto_adjust=False, matching every LIVE "
+                        "path (app.py, scanner.py, exit_monitor.py). Cached "
+                        "separately from the adjusted series, so both arms "
+                        "can be held at once and compared.")
     p.add_argument("--no-cache", action="store_true",
                    help="bypass bar_cache.py and fetch live. Makes the run "
                         "NON-reproducible — two runs minutes apart can differ "
@@ -1064,9 +1116,10 @@ def parse_args() -> tuple[dict, bool]:
                         "The live config runs this ON but it has never been measured.")
     a = p.parse_args()
 
-    global CACHE_ENABLED, CACHE_REFRESH
+    global CACHE_ENABLED, CACHE_REFRESH, AUTO_ADJUST
     CACHE_ENABLED = not a.no_cache
     CACHE_REFRESH = a.refresh_cache
+    AUTO_ADJUST = not a.raw_prices
 
     cfg = dict(
         tickers       = [t.strip().upper() for t in a.tickers.split(",") if t.strip()],

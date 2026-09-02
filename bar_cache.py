@@ -84,8 +84,16 @@ MANIFEST = CACHE_DIR / "manifest.json"
 COLUMNS = ["Date", "Open", "High", "Low", "Close", "Volume"]
 
 
-def _key(ticker: str, interval: str, years: int) -> str:
-    return f"{ticker.strip().upper()}_{interval}_{years}y"
+def _key(ticker: str, interval: str, years: int, variant: str = "") -> str:
+    """
+    Cache key. `variant` separates series that describe the same ticker and
+    window but are NOT interchangeable — adjusted vs raw prices, above all.
+    Without it an adjusted run and a raw run would overwrite each other's
+    entry and the A/B between them would compare a series against itself,
+    which is exactly how the weekly-filter measurement went wrong.
+    """
+    base = f"{ticker.strip().upper()}_{interval}_{years}y"
+    return f"{base}_{variant}" if variant else base
 
 
 def _path(key: str) -> Path:
@@ -135,9 +143,10 @@ def _save_manifest(m: dict) -> None:
     MANIFEST.write_text(json.dumps(m, indent=2, sort_keys=True) + "\n")
 
 
-def load(ticker: str, interval: str, years: int) -> tuple["pd.DataFrame | None", dict | None]:
+def load(ticker: str, interval: str, years: int,
+         variant: str = "") -> tuple["pd.DataFrame | None", dict | None]:
     """Cached bars for this exact (ticker, interval, years), or (None, None)."""
-    k = _key(ticker, interval, years)
+    k = _key(ticker, interval, years, variant)
     p = _path(k)
     if not p.exists():
         return None, None
@@ -171,10 +180,10 @@ def load(ticker: str, interval: str, years: int) -> tuple["pd.DataFrame | None",
 
 
 def store(ticker: str, interval: str, years: int, df: "pd.DataFrame",
-          source: str = "unknown") -> dict:
+          source: str = "unknown", variant: str = "") -> dict:
     """Freeze a frame and record what it is. Returns the manifest entry."""
     CACHE_DIR.mkdir(exist_ok=True)
-    k = _key(ticker, interval, years)
+    k = _key(ticker, interval, years, variant)
     keep = [c for c in COLUMNS if c in df.columns]
     out = df[keep].copy()
     # %.17g is the shortest format that round-trips a float64 EXACTLY. With
@@ -189,6 +198,7 @@ def store(ticker: str, interval: str, years: int, df: "pd.DataFrame",
         "ticker": ticker.strip().upper(),
         "interval": interval,
         "years": years,
+        "variant": variant,
         "rows": int(len(out)),
         "first": str(dates.min().date()) if dates is not None and len(out) else None,
         "last": str(dates.max().date()) if dates is not None and len(out) else None,
@@ -203,8 +213,8 @@ def store(ticker: str, interval: str, years: int, df: "pd.DataFrame",
 
 
 def get_or_fetch(ticker: str, interval: str, years: int, fetch,
-                 refresh: bool = False,
-                 enabled: bool = True) -> tuple["pd.DataFrame | None", dict | None, str]:
+                 refresh: bool = False, enabled: bool = True,
+                 variant: str = "") -> tuple["pd.DataFrame | None", dict | None, str]:
     """
     The one entry point callers need.
 
@@ -224,7 +234,7 @@ def get_or_fetch(ticker: str, interval: str, years: int, fetch,
         return (df, None, "bypass") if df is not None else (None, None, "miss")
 
     if not refresh:
-        df, meta = load(ticker, interval, years)
+        df, meta = load(ticker, interval, years, variant)
         if df is not None:
             return df, meta, "hit"
 
@@ -232,19 +242,19 @@ def get_or_fetch(ticker: str, interval: str, years: int, fetch,
     # characterised rather than merely detected.
     previous = None
     if refresh:
-        previous, _ = load(ticker, interval, years)
+        previous, _ = load(ticker, interval, years, variant)
 
     df = fetch()
     if df is None or getattr(df, "empty", True):
         return None, None, "miss"
-    meta = store(ticker, interval, years, df, source="fetch")
+    meta = store(ticker, interval, years, df, source="fetch", variant=variant)
     if previous is not None:
         meta = dict(meta, refresh_diff=diff_rows(previous, df))
     # Return what is ON DISK, not the frame we just fetched. The run that
     # populates the cache must see exactly what every later run will see —
     # otherwise the first run of an A/B is silently the odd one out, which is
     # the same class of bug as the data drift this module was built to stop.
-    reread, meta2 = load(ticker, interval, years)
+    reread, meta2 = load(ticker, interval, years, variant)
     if reread is not None:
         # meta2 comes from the manifest, which does not carry refresh_diff
         # (it describes a transition, not the stored frame). Merge it back on
@@ -293,7 +303,8 @@ def fingerprint(metas: "list[dict]") -> str:
     byte-identical inputs; two runs that differ are not comparable, whatever
     their aggregate numbers say.
     """
-    parts = sorted(f"{m['ticker']}|{m['interval']}|{m['years']}|{m['hash']}"
+    parts = sorted(f"{m['ticker']}|{m['interval']}|{m['years']}"
+                   f"|{m.get('variant', '')}|{m['hash']}"
                    for m in metas if m and m.get("hash"))
     if not parts:
         return "none"
@@ -452,6 +463,29 @@ def selftest() -> int:
             "constant column would make cached frames differ from fetched ones"
         assert stored_meta["hash"] == frame_hash(back)
         print(f"fidelity            : disk bars == fetched bars, bit for bit")
+
+        # ── the variant dimension keeps adjusted and raw series apart ──
+        # Without it, an auto_adjust=True run and an auto_adjust=False run
+        # write the same key, so the second silently overwrites the first and
+        # an A/B between them compares a series against itself. That is the
+        # precise shape of the weekly-filter non-measurement, and it would be
+        # far harder to spot here because both frames look equally plausible.
+        adj = frame(30)
+        raw = frame(30, bump=0.5)
+        _, m_adj, _ = get_or_fetch("DUAL", "1d", 5, lambda: adj)
+        _, m_raw, s_raw = get_or_fetch("DUAL", "1d", 5, lambda: raw, variant="raw")
+        assert s_raw == "stored", \
+            f"a new variant must be its own entry, not a hit on the base key"
+        assert m_adj["hash"] != m_raw["hash"]
+        back_adj, _ = load("DUAL", "1d", 5)
+        back_raw, _ = load("DUAL", "1d", 5, variant="raw")
+        assert back_adj["Open"].iloc[0] != back_raw["Open"].iloc[0], \
+            "each variant must read back its OWN bars"
+        assert fingerprint([m_adj]) != fingerprint([m_raw]), \
+            "the run fingerprint must distinguish variants, or two runs on " \
+            "different price series look comparable"
+        print(f"variant separation  : adjusted and raw coexist, own bars, "
+              f"own fingerprints")
 
         # ── keys do not collide across interval or window ──
         _, m_wk, s_wk = get_or_fetch("AAA", "1wk", 5, fetch_ok)
