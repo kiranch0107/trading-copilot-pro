@@ -198,14 +198,25 @@ def evaluate_signal(df: pd.DataFrame, i: int, params: sc.SignalParams,
     which over this slice are the same rows as
     df.iloc[max(0,i-9):i+1] / df.iloc[max(0,i-19):i+1] were.
 
-    signal_core.evaluate() does NOT block on the ADX or regime filters
-    itself — they only feed the "high_quality" tier that gates live Telegram
-    alerts (see scanner.py's analyze()). This backtest's own definition of
-    "a trade" has always been looser than "high_quality" (no weekly/earnings/
-    strength requirement — see the module docstring), so it checks the ADX
-    and regime filter results directly, matching the pre-refactor behaviour
-    exactly rather than silently tightening or loosening what counts as a
-    signal.
+    signal_core.evaluate() does NOT block on ANY of its four enhancement
+    filters — they only feed the "high_quality" tier that gates live Telegram
+    alerts (see scanner.py's analyze()). A caller that wants a filter applied
+    must read filters[...]["pass"] itself. This function therefore checks the
+    three filters this backtest treats as gates:
+
+      ADX Trend Strength — always, matching the pre-refactor inline gate
+      Macro Regime       — signal_core already no-ops it when spy_regime_on
+                           is False or no regime was supplied
+      Multi-TF Alignment — signal_core already no-ops it (pass=True) when
+                           params.weekly_confirm is False, so this check is
+                           inert on the default OFF arm and only bites under
+                           --use-weekly
+
+    THE BUG THIS SHAPE EXISTS TO PREVENT: the Multi-TF check was missing when
+    --use-weekly was first added, so both arms of the weekly A/B ran the same
+    signal and the "measurement" compared a filter against itself. Earnings is
+    deliberately NOT checked — the backtest has no earnings calendar for
+    history, and signal_core defaults it to pass.
     """
     window = df.iloc[: i + 1]
     spy_regime = {"regime": regime} if regime is not None else None
@@ -216,6 +227,8 @@ def evaluate_signal(df: pd.DataFrame, i: int, params: sc.SignalParams,
     if not r["filters"]["ADX Trend Strength"]["pass"]:
         return None
     if not r["filters"]["Macro Regime"]["pass"]:
+        return None
+    if not r["filters"]["Multi-TF Alignment"]["pass"]:
         return None
 
     return {"trend": r["trend"], "entry": r["entry"], "stop": r["stop"],
@@ -627,6 +640,45 @@ def selftest() -> int:
     for k in ("trend", "entry", "stop", "target", "rr", "atr"):
         assert k in sig, f"simulate_trade() reads '{k}' — missing from evaluate_signal()"
     print(f"clean bearish bar        : trades, keys present for simulate_trade()")
+
+    # ── the weekly filter must actually GATE, not just get reported ──
+    # THE REGRESSION THIS TEST EXISTS TO CATCH: --use-weekly turns on
+    # params.weekly_confirm and run() feeds a per-bar weekly trend, but
+    # signal_core.evaluate() only RECORDS the verdict in
+    # filters["Multi-TF Alignment"] — it does not block on it. The first
+    # version of evaluate_signal() never read that key, so both arms of the
+    # weekly A/B ran an identical signal and produced identical trades; the
+    # measurement compared the filter against itself and looked like "the
+    # weekly filter does nothing", which was a statement about the wiring,
+    # not about the market.
+    #
+    # The fixture is a Bullish setup. weekly="Bearish" is the disagreement
+    # case; weekly=None is the fetch-failed case, which signal_core treats as
+    # BLOCKING on purpose (see its own selftest) so a dead Yahoo call cannot
+    # silently loosen the system.
+    df_wk = _synthetic_ohlc(adx=40.0)
+    params_wk = build_signal_params(dict(cfg, use_weekly=True))
+
+    assert evaluate_signal(df_wk, len(df_wk) - 1, params_wk,
+                           weekly="Bullish") is not None, \
+        "weekly agreeing with the daily trend must still trade"
+    assert evaluate_signal(df_wk, len(df_wk) - 1, params_wk,
+                           weekly="Bearish") is None, \
+        "weekly DISAGREEING must block — otherwise --use-weekly measures nothing"
+    assert evaluate_signal(df_wk, len(df_wk) - 1, params_wk,
+                           weekly=None) is None, \
+        "weekly unavailable must block, matching signal_core and the live app"
+    print("weekly filter ON        : aligned trades, misaligned and missing block")
+
+    # And the mirror image: with the filter OFF the weekly value is inert, so
+    # the default arm of the A/B is byte-identical to every run before
+    # --use-weekly existed. If this ever fails, the fix above has moved the
+    # BASELINE, which would invalidate the OOS lock rather than test it.
+    for _wk in ("Bullish", "Bearish", None):
+        assert evaluate_signal(df_wk, len(df_wk) - 1, params,
+                               weekly=_wk) is not None, \
+            f"weekly={_wk!r} must not affect the run when weekly_confirm is off"
+    print("weekly filter OFF       : weekly value inert, baseline unmoved")
 
     # ── weekly trend map: the filter the OOS test never measured ──
     # Built so weekly_confirm can finally be A/B'd. Two things must hold: it
