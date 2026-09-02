@@ -56,6 +56,7 @@ import ta
 import yfinance as yf
 
 import data_source
+import market_context
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(),format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("scanner")
@@ -470,25 +471,23 @@ def get_weekly_trend(ticker: str) -> str | None:
     """
     Weekly-timeframe direction, for the multi-timeframe filter.
 
-    app.py has always applied this; the scanner never did, which is one of the
-    four gates the scanner was missing. Returns None on any failure — the
-    shared core treats None as non-blocking rather than guessing.
+    Now delegates to market_context — the SAME rule app.py uses. app.py used to
+    run an EMA10w-vs-EMA20w crossover here while this file used price-vs-EMA20w:
+    different questions, opposite verdicts on ordinary pullbacks, on a BLOCKING
+    filter. Returns None on any failure — signal_core treats None as blocking
+    rather than guessing.
     """
-    try:
+    def _fetch(t, period, interval):
         time.sleep(FETCH_GAP_SEC)
-        wdf = yf.download(ticker, period="2y", interval="1wk",
-                          progress=False, auto_adjust=False)
-        if wdf is None or wdf.empty or len(wdf) < 30:
-            return None
-        if isinstance(wdf.columns, pd.MultiIndex):
-            wdf.columns = wdf.columns.get_level_values(0)
-        close = wdf["Close"]
-        ema20 = close.ewm(span=20, adjust=False).mean()
-        price_w, ema_w = float(close.iloc[-1]), float(ema20.iloc[-1])
-        return "Bullish" if price_w > ema_w else "Bearish"
-    except Exception as e:
-        logger.debug("Weekly trend unavailable for %s (%s)", ticker, e)
-        return None
+        df, source = data_source.fetch_daily(
+            t, period=period, interval=interval,
+            yahoo_fetch=lambda tt, pp, ii: yf.download(
+                tt, period=pp, interval=ii, progress=False, auto_adjust=False))
+        if df is not None and source != "yahoo":
+            logger.info("%s weekly: Yahoo unavailable, used %s fallback",
+                        t, source)
+        return df
+    return market_context.get_weekly_trend(ticker, _fetch)
 
 
 def check_earnings_blackout(ticker: str) -> tuple[bool, str]:
@@ -526,27 +525,30 @@ def check_earnings_blackout(ticker: str) -> tuple[bool, str]:
 
 
 def get_spy_regime() -> dict | None:
-    """SPY vs its 200-SMA — the macro regime gate app.py applies."""
-    try:
+    """
+    SPY vs its 200-SMA — the macro regime gate, via market_context so app.py
+    and this file cannot diverge. Two-state and ungated, matching
+    backtest.build_regime_series(), which is the version the 591-trade
+    out-of-sample test actually ran (oos_validate FROZEN use_regime=True).
+
+    Returns None when the regime is Unknown, preserving this function's
+    previous contract with run(): signal_core skips the filter on a falsy
+    spy_regime, which is the right response to "no data".
+    """
+    def _fetch(t, period, interval):
         time.sleep(FETCH_GAP_SEC)
         spy, source = data_source.fetch_daily(
-            "SPY", period="2y", interval="1d",
-            yahoo_fetch=lambda t, p, i: yf.download(
-                t, period=p, interval=i, progress=False, auto_adjust=False))
-        if spy is None or spy.empty or len(spy) < 200:
-            return None
-        if source != "yahoo":
+            t, period=period, interval=interval,
+            yahoo_fetch=lambda tt, pp, ii: yf.download(
+                tt, period=pp, interval=ii, progress=False, auto_adjust=False))
+        if spy is not None and source != "yahoo":
             logger.info("SPY regime: Yahoo unavailable, used %s fallback", source)
-        if isinstance(spy.columns, pd.MultiIndex):
-            spy.columns = spy.columns.get_level_values(0)
-        close = spy["Close"]
-        price = float(close.iloc[-1])
-        sma200 = float(close.tail(200).mean())
-        return {"regime": "Bullish" if price > sma200 else "Bearish",
-                "price": round(price, 2), "sma200": round(sma200, 2)}
-    except Exception as e:
-        logger.warning("SPY regime unavailable (%s)", e)
+        return spy
+    r = market_context.get_spy_regime(_fetch)
+    if r.get("regime") in (None, "Unknown"):
+        logger.warning("SPY regime unavailable (%s)", r.get("reasoning"))
         return None
+    return r
 
 
 def analyze(df: pd.DataFrame, ticker: str,

@@ -283,6 +283,71 @@ def check_backtest_callers() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 6. The three injected inputs to signal_core.evaluate() must be ONE rule
+# ---------------------------------------------------------------------------
+
+def check_market_context_shared() -> None:
+    """
+    signal_core.evaluate() is a single implementation, but it takes
+    weekly_trend and spy_regime as INJECTED values — and app.py and scanner.py
+    each used to compute those their own way:
+        weekly   app: EMA10w vs EMA20w crossover   scanner: price vs EMA20w
+        regime   app: 3-state, ADX>=20 gated       scanner: 2-state, ungated
+    Opposite verdicts on ordinary pullbacks, on a BLOCKING filter. Both now
+    delegate to market_context, so this checks the delegation is still in place
+    rather than quietly reimplemented.
+    """
+    import market_context as mc
+
+    for path in ("app.py", "scanner.py"):
+        txt = Path(path).read_text()
+        if "import market_context" not in txt:
+            raise AssertionError(
+                f"{path} no longer imports market_context — the weekly trend "
+                f"and SPY regime must come from the shared module or the two "
+                f"callers will feed signal_core different values again.")
+        for fn in ("get_weekly_trend", "get_spy_regime"):
+            i = txt.index(f"def {fn}(")
+            body = txt[i:i + 1600]
+            if f"market_context.{fn}" not in body:
+                raise AssertionError(
+                    f"{path}: {fn}() no longer delegates to "
+                    f"market_context.{fn}(). Reimplementing it here is how "
+                    f"app.py and scanner.py diverged in the first place.")
+        print(f"  {path:12} delegates weekly trend + SPY regime to market_context")
+
+    # The regime rule must still match the one the OOS test actually validated.
+    import numpy as np
+    import pandas as pd
+    import backtest as bt
+    for series in (np.linspace(300, 500, 260), np.linspace(500, 300, 260)):
+        want = bt.build_regime_series(pd.DataFrame({"Close": series})).iloc[-1]
+        got = mc.spy_regime_from_bars(
+            pd.DataFrame({"Close": series, "High": series + 1,
+                          "Low": series - 1}))["regime"]
+        if got != want:
+            raise AssertionError(
+                f"live SPY regime {got!r} != backtest.build_regime_series() "
+                f"{want!r}. The 591-trade OOS test ran with use_regime=True, "
+                f"so live must use the rule the backtest validated.")
+    print("  live SPY regime == backtest.build_regime_series() (the validated rule)")
+
+    # ADX must not have been reintroduced as a gate. Uses market_context's own
+    # verified low-ADX fixture (ADX ~11) — an earlier fixture here measured
+    # ADX 26, above the old threshold, so it passed whether or not the gate
+    # existed and this guard was silently useless.
+    r = mc.spy_regime_from_bars(mc._choppy_above_sma200())
+    assert r["adx"] is not None and r["adx"] < 20, (
+        f"guard fixture must have ADX < 20 to be meaningful, got {r['adx']}")
+    if r["regime"] != "Bull":
+        raise AssertionError(
+            f"a low-ADX tape returned regime {r['regime']!r}. ADX is reported "
+            f"only — gating on it (app.py's old ADX>=20 -> 'Neutral') disables "
+            f"the regime filter in choppy markets, which the backtest never did.")
+    print("  SPY ADX is reported, not gating (matches the backtest)")
+
+
+# ---------------------------------------------------------------------------
 # 5. Every production module must at least import
 # ---------------------------------------------------------------------------
 
@@ -290,7 +355,8 @@ def check_backtest_callers() -> None:
 # script body, which renders the UI and makes live Yahoo calls. CI compiles it
 # instead (see tests.yml).
 IMPORTABLE_MODULES = [
-    "signal_core", "data_source", "rate_limit", "gh_sync", "journal_store",
+    "signal_core", "data_source", "rate_limit", "market_context", "gh_sync",
+    "journal_store",
     "option_chain", "universe", "scanner", "exit_monitor", "backtest",
     "oos_validate", "data_reservation", "excursion_analysis", "churn_tracker",
     "universe_backtest", "option_backtest", "liquidity_check",
@@ -317,6 +383,7 @@ CHECKS = [
     ("app.py compute() indicator set intact",      check_app_compute_source),
     ("app.py defaults derive from signal_core",    check_app_defaults_derived),
     ("backtest.evaluate_signal callers correct",   check_backtest_callers),
+    ("weekly trend + SPY regime are one rule",     check_market_context_shared),
     ("every production module imports",            check_modules_import),
 ]
 
