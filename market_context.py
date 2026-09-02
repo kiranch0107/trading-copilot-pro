@@ -46,12 +46,16 @@ price version.
      not evidence: every other trend test in this system is price against a
      moving average (daily base condition is price > EMA20 > EMA50; the regime
      is price vs 200-SMA). The EMA10w/EMA20w crossover was the odd one out.
-  2. weekly_confirm defaults to TRUE live, so the live system applies a
-     BLOCKING filter that its own validation never tested. That is a real
-     config-vs-validation gap, separate from which rule is used. Either
-     measure the filter (add weekly bars to backtest.py) or turn it off to
-     match the validated config. It is recorded in oos_validate.lock.json's
-     live_divergence_note.
+  2. weekly_confirm defaulted to TRUE live, so the live system applied a
+     BLOCKING filter that its own validation never tested. RESOLVED
+     2026-09-02: backtest.py --use-weekly measured it over 15 years x 12
+     tickers and it rejected 5 of the 13,748 bars that reached the filters,
+     none that another gate would not also have stopped. Since it FAILS
+     CLOSED (a missing weekly trend blocks — see get_weekly_trend below), a
+     rate-limited fetch was costing more than the filter earned.
+     signal_core's default is now weekly_confirm=False, matching the
+     validated config. The rule below is unchanged and still used whenever a
+     caller turns the filter on (app.py's sidebar checkbox).
 
 DESIGN
 ------
