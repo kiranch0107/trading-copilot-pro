@@ -32,8 +32,13 @@
     "notes": "Paper trade on 9/1",
     "opened": "2026-09-02 13:04 ET",
     "opened_epoch": 1788368698.6172805,
-    "last_check_epoch": 1788368698.6172805,
-    "status": "OPEN",
-    "exit_alerted": false
+    "last_check_epoch": 1788373509.6067543,
+    "status": "EXIT_SIGNALLED",
+    "exit_alerted": true,
+    "exit_reason": "STOP",
+    "exit_detail": "Premium -99.2% (limit \u221250%)",
+    "exit_premium": 1.92,
+    "exit_pnl_pct": -99.2,
+    "exit_detected": "2026-09-02 14:25 ET"
   }
 ]
