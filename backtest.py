@@ -187,7 +187,8 @@ def build_signal_params(cfg: dict) -> sc.SignalParams:
 
 def evaluate_signal(df: pd.DataFrame, i: int, params: sc.SignalParams,
                     regime: str | None = None,
-                    weekly: str | None = None) -> dict | None:
+                    weekly: str | None = None,
+                    tally: dict | None = None) -> dict | None:
     """
     Evaluate the signal at bar i using ONLY rows 0..i (no lookahead), through
     signal_core.evaluate() — see the module docstring for why this is no
@@ -218,18 +219,28 @@ def evaluate_signal(df: pd.DataFrame, i: int, params: sc.SignalParams,
     deliberately NOT checked — the backtest has no earnings calendar for
     history, and signal_core defaults it to pass.
     """
+    def _count(key: str) -> None:
+        if tally is not None:
+            tally[key] = tally.get(key, 0) + 1
+
     window = df.iloc[: i + 1]
     spy_regime = {"regime": regime} if regime is not None else None
     r = sc.evaluate(window, "BT", params, spy_regime=spy_regime,
                     weekly_trend=weekly)
     if r["blocked"]:
+        _count("base")
         return None
+    _count("reached_filters")
     if not r["filters"]["ADX Trend Strength"]["pass"]:
+        _count("adx")
         return None
     if not r["filters"]["Macro Regime"]["pass"]:
+        _count("regime")
         return None
     if not r["filters"]["Multi-TF Alignment"]["pass"]:
+        _count("weekly")
         return None
+    _count("passed")
 
     return {"trend": r["trend"], "entry": r["entry"], "stop": r["stop"],
             "target": r["target"], "rr": r["rr"], "atr": r["atr"]}
@@ -307,7 +318,8 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
 # ══════════════════════════════════════════════════════════════════════
 def backtest_ticker(df: pd.DataFrame, cfg: dict, params: sc.SignalParams,
                     regime_series: pd.Series | None = None,
-                    weekly_series: pd.Series | None = None) -> list[dict]:
+                    weekly_series: pd.Series | None = None,
+                    tally: dict | None = None) -> list[dict]:
     trades = []
     i = 0
     n = len(df)
@@ -318,7 +330,8 @@ def backtest_ticker(df: pd.DataFrame, cfg: dict, params: sc.SignalParams,
         weekly = None
         if weekly_series is not None and i < len(weekly_series):
             weekly = weekly_series.iloc[i]
-        sig = evaluate_signal(df, i, params, regime=regime, weekly=weekly)
+        sig = evaluate_signal(df, i, params, regime=regime, weekly=weekly,
+                              tally=tally)
         if sig:
             res = simulate_trade(df, i, sig, cfg)
             if res.get("filled"):
@@ -469,6 +482,12 @@ def run(cfg: dict) -> None:
 
     per_ticker_rows = []
     all_trades = []
+    # Per-gate rejection counts across every bar of every ticker. This exists
+    # because the first --use-weekly A/B reported a plausible-looking result
+    # while the weekly gate was not wired in at all: the aggregate numbers
+    # alone could not tell "the filter barely matters" apart from "the filter
+    # never ran". These counts distinguish the two from the output itself.
+    tally: dict[str, int] = {}
 
     for tk in cfg["tickers"]:
         raw = download(tk, cfg["years"])
@@ -502,7 +521,7 @@ def run(cfg: dict) -> None:
             ).reset_index(drop=True)
 
         trades = backtest_ticker(df, cfg, params, regime_series=reg_series,
-                                 weekly_series=wk_series)
+                                 weekly_series=wk_series, tally=tally)
         s = stats(trades)
         all_trades.extend(trades)
 
@@ -538,6 +557,34 @@ def run(cfg: dict) -> None:
     print(f"  Max drawdown   : {agg['max_dd']:+.1f} R")
     print(f"  Avg hold       : {agg['avg_hold']:.1f} bars")
     print(f"  Best / worst   : {agg['best']:+.2f} R / {agg['worst']:+.2f} R")
+
+    # ── which gate rejected what ──
+    reached = tally.get("reached_filters", 0)
+    if reached:
+        print("\n" + "=" * 78)
+        print("GATE REJECTIONS (bars that formed a valid setup, then were filtered)")
+        print("=" * 78)
+        print(f"  Bars reaching the filters : {reached}")
+        for key, label in (("adx", "ADX below minimum"),
+                           ("regime", "Macro regime conflict"),
+                           ("weekly", "Weekly misaligned/missing")):
+            n_rej = tally.get(key, 0)
+            state = ""
+            if key == "weekly" and not cfg.get("use_weekly"):
+                state = "   (filter OFF)"
+            elif key == "regime" and not cfg.get("use_regime"):
+                state = "   (filter OFF)"
+            print(f"  rejected by {label:<26}: {n_rej:>6}"
+                  f"  ({n_rej / reached * 100:5.1f}%){state}")
+        print(f"  survived every gate       : {tally.get('passed', 0)}")
+
+        # A gate that is ON and rejects nothing is a wiring failure, not a
+        # finding about the market. Say so in the output rather than leaving
+        # it to be read as "the filter does not matter".
+        if cfg.get("use_weekly") and tally.get("weekly", 0) == 0:
+            print("\n  !! WEEKLY FILTER IS ON BUT REJECTED ZERO BARS — treat this run as")
+            print("     INVALID. The gate is not reaching signal_core; do not compare")
+            print("     it against the filter-OFF arm.")
 
     # Interpretation
     print("\nINTERPRETATION")
@@ -679,6 +726,19 @@ def selftest() -> int:
                                weekly=_wk) is not None, \
             f"weekly={_wk!r} must not affect the run when weekly_confirm is off"
     print("weekly filter OFF       : weekly value inert, baseline unmoved")
+
+    # The tally that makes the above visible in a REAL run's output. Without
+    # it the aggregate numbers cannot distinguish "the filter barely matters"
+    # from "the filter never ran" — which is precisely how the first weekly
+    # A/B produced a confident-looking result from a dead gate.
+    _tal: dict[str, int] = {}
+    evaluate_signal(df_wk, len(df_wk) - 1, params_wk, weekly="Bearish", tally=_tal)
+    assert _tal.get("weekly") == 1, \
+        f"a weekly rejection must be counted, got {_tal!r}"
+    evaluate_signal(df_wk, len(df_wk) - 1, params_wk, weekly="Bullish", tally=_tal)
+    assert _tal.get("passed") == 1 and _tal.get("reached_filters") == 2, \
+        f"tally must count survivors and bars reaching the filters, got {_tal!r}"
+    print("gate tally              : counts weekly rejections and survivors")
 
     # ── weekly trend map: the filter the OOS test never measured ──
     # Built so weekly_confirm can finally be A/B'd. Two things must hold: it
