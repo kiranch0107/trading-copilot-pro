@@ -69,26 +69,36 @@ MAX_PER_SECTOR = 2         # risk control, not a performance knob — eight name
 # sector is stable on the timescale that matters, so this introduces no
 # lookahead the way a price-derived label would.
 SECTORS = {
-    "AAPL": "Tech", "MSFT": "Tech", "GOOGL": "Tech", "AMZN": "ConsDisc",
-    "META": "Tech", "NVDA": "Semis", "AVGO": "Semis", "ORCL": "Tech",
-    "CRM": "Tech", "ADBE": "Tech", "AMD": "Semis", "QCOM": "Semis",
-    "TXN": "Semis", "INTC": "Semis", "MU": "Semis", "AMAT": "Semis",
-    "LRCX": "Semis", "KLAC": "Semis", "NOW": "Tech", "PANW": "Tech",
-    "SNPS": "Tech", "CDNS": "Tech", "INTU": "Tech", "IBM": "Tech",
-    "CSCO": "Tech",
-    "NFLX": "Comms", "DIS": "Comms", "TSLA": "ConsDisc", "HD": "ConsDisc",
-    "LOW": "ConsDisc", "NKE": "ConsDisc", "SBUX": "ConsDisc",
-    "MCD": "ConsDisc", "COST": "Staples", "TGT": "ConsDisc",
-    "WMT": "Staples", "PG": "Staples", "KO": "Staples", "PEP": "Staples",
-    "JPM": "Financials", "BAC": "Financials", "GS": "Financials",
-    "MS": "Financials", "V": "Financials", "MA": "Financials",
-    "AXP": "Financials", "BLK": "Financials",
+    "AAPL": "Tech", "MSFT": "Tech", "GOOGL": "Tech", "META": "Tech",
+    "ORCL": "Tech", "CRM": "Tech", "ADBE": "Tech", "NOW": "Tech",
+    "PANW": "Tech", "ACN": "Tech", "ANET": "Tech", "CRWD": "Tech",
+    "FTNT": "Tech",
+    "NVDA": "Semis", "AVGO": "Semis", "AMD": "Semis", "QCOM": "Semis",
+    "MU": "Semis", "LRCX": "Semis", "ADI": "Semis", "MRVL": "Semis",
+    "NXPI": "Semis", "ON": "Semis",
+    "NFLX": "Comms", "CMCSA": "Comms", "T": "Comms", "TMUS": "Comms",
+    "VZ": "Comms",
+    "AMZN": "ConsDisc", "TSLA": "ConsDisc", "TGT": "ConsDisc", "ABNB":
+    "ConsDisc", "BKNG": "ConsDisc", "CMG": "ConsDisc", "ROST":
+    "ConsDisc", "TJX": "ConsDisc",
+    "WMT": "Staples", "PG": "Staples", "KO": "Staples", "PEP":
+    "Staples", "CL": "Staples", "MDLZ": "Staples", "MO": "Staples",
+    "PM": "Staples",
+    "JPM": "Financials", "BAC": "Financials", "GS": "Financials", "MS":
+    "Financials", "V": "Financials", "MA": "Financials", "AXP":
+    "Financials", "BLK": "Financials", "C": "Financials", "CME":
+    "Financials", "SCHW": "Financials", "SPGI": "Financials", "WFC":
+    "Financials",
     "CAT": "Industrials", "DE": "Industrials", "HON": "Industrials",
     "GE": "Industrials", "BA": "Industrials", "UNP": "Industrials",
-    "UPS": "Industrials",
+    "UPS": "Industrials", "CSX": "Industrials", "ETN": "Industrials",
+    "FDX": "Industrials", "LMT": "Industrials", "RTX": "Industrials",
     "UNH": "Health", "JNJ": "Health", "LLY": "Health", "ABBV": "Health",
     "MRK": "Health", "PFE": "Health", "TMO": "Health", "ABT": "Health",
+    "AMGN": "Health", "BMY": "Health", "CVS": "Health", "GILD":
+    "Health", "ISRG": "Health", "SYK": "Health",
     "XOM": "Energy", "CVX": "Energy", "COP": "Energy", "SLB": "Energy",
+    "MPC": "Energy", "OXY": "Energy", "PSX": "Energy",
 }
 
 # The candidate pool. This is the one judgement call that cannot be fully
@@ -96,19 +106,57 @@ SECTORS = {
 # (which yfinance does not provide). It is deliberately BROAD — the ranking
 # does the selecting, not this list. Widening it is safe; hand-picking
 # winners into it reintroduces exactly the bias this module exists to remove.
+#
+# 2026-09-02 — THE POOL WAS SPENDING HELD-OUT DATA.
+# Every one of the previous 66 names was either contaminated (18, already used
+# in the Aug sweep or the 591-trade OOS) or RESERVED in data_reservation.py's
+# ledger (48, tranches A and B). Zero were free. So the dynamic ranker could
+# not pick a ticker without either trading in-sample names or burning a
+# held-out tranche — and the scanner had in fact been alerting on six Tranche B
+# names (ABT, TGT, TMO, BAC, MA, UNP). data_reservation.py exists to stop
+# exactly that, but nothing connected it to this file, so the ledger was being
+# spent by the live system it was built to protect.
+#
+# Resolution:
+#   - Tranche B is now recorded as SPENT, because it was: live trading, not a
+#     test, consumed it. Marking it honestly beats leaving it looking pristine.
+#     Its names stay in the pool — there is nothing left to protect.
+#   - Tranche A (AMAT, CDNS, COST, CSCO, DIS, HD, IBM, INTC, INTU, KLAC, LOW,
+#     MCD, NKE, SBUX, SNPS, TXN) is REMOVED from the pool so it stays genuinely
+#     unspent. It is the last clean shot at an out-of-sample test.
+#   - 40 fresh names were added to restore the breadth that removal cost.
+#
+# HOW THE FRESH NAMES WERE PICKED, since this is the file that warns about
+# hand-picking: large-cap US listings with liquid options, selected to refill
+# the sectors Tranche A emptied, and deliberately including well-known recent
+# LAGGARDS (T, VZ, CMCSA, MO, BMY, CVS, ON) so the additions are not a
+# momentum-winner list. None appear in any reservation tranche — asserted by
+# consistency_check.py, which fails CI if a reserved-but-unspent ticker ever
+# reappears here.
 CANDIDATE_POOL = [
-    # mega/large-cap tech
-    "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "AVGO", "ORCL",
-    "CRM", "ADBE", "AMD", "QCOM", "TXN", "INTC", "MU", "AMAT", "LRCX",
-    "KLAC", "NOW", "PANW", "SNPS", "CDNS", "INTU", "IBM", "CSCO",
-    # comms / consumer
-    "NFLX", "DIS", "TSLA", "HD", "LOW", "NKE", "SBUX", "MCD", "COST",
-    "TGT", "WMT", "PG", "KO", "PEP",
-    # financials / industrials / health / energy
-    "JPM", "BAC", "GS", "MS", "V", "MA", "AXP", "BLK",
-    "CAT", "DE", "HON", "GE", "BA", "UNP", "UPS",
-    "UNH", "JNJ", "LLY", "ABBV", "MRK", "PFE", "TMO", "ABT",
-    "XOM", "CVX", "COP", "SLB",
+    # Tech
+    "AAPL", "MSFT", "GOOGL", "META", "ORCL", "CRM", "ADBE", "NOW",
+    "PANW", "ACN", "ANET", "CRWD", "FTNT",
+    # Semis
+    "NVDA", "AVGO", "AMD", "QCOM", "MU", "LRCX", "ADI", "MRVL", "NXPI",
+    "ON",
+    # Comms
+    "NFLX", "CMCSA", "T", "TMUS", "VZ",
+    # ConsDisc
+    "AMZN", "TSLA", "TGT", "ABNB", "BKNG", "CMG", "ROST", "TJX",
+    # Staples
+    "WMT", "PG", "KO", "PEP", "CL", "MDLZ", "MO", "PM",
+    # Financials
+    "JPM", "BAC", "GS", "MS", "V", "MA", "AXP", "BLK", "C", "CME",
+    "SCHW", "SPGI", "WFC",
+    # Industrials
+    "CAT", "DE", "HON", "GE", "BA", "UNP", "UPS", "CSX", "ETN", "FDX",
+    "LMT", "RTX",
+    # Health
+    "UNH", "JNJ", "LLY", "ABBV", "MRK", "PFE", "TMO", "ABT", "AMGN",
+    "BMY", "CVS", "GILD", "ISRG", "SYK",
+    # Energy
+    "XOM", "CVX", "COP", "SLB", "MPC", "OXY", "PSX",
 ]
 
 

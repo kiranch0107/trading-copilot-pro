@@ -81,7 +81,9 @@
         "COP",
         "SLB"
       ],
-      "spent": false
+      "spent": true,
+      "spent_on": "Spent de facto by live trading, not by a test. universe.py's dynamic RS ranking has been selecting Tranche B names (ABT, TGT, TMO, BAC, MA, UNP in the 2026-08-30 snapshot) and the scanner has been alerting on them, so their outcomes have been observed. Recorded honestly rather than left looking pristine. Tranche A is now excluded from CANDIDATE_POOL so it stays genuinely unspent.",
+      "spent_at": "2026-09-02T04:49:13+00:00"
     }
   },
   "ledger": [
@@ -106,6 +108,45 @@
         "SBUX",
         "MCD",
         "COST"
+      ]
+    },
+    {
+      "tranche": "B",
+      "purpose": "Spent de facto by live trading, not by a test. universe.py's dynamic RS ranking has been selecting Tranche B names (ABT, TGT, TMO, BAC, MA, UNP in the 2026-08-30 snapshot) and the scanner has been alerting on them, so their outcomes have been observed. Recorded honestly rather than left looking pristine. Tranche A is now excluded from CANDIDATE_POOL so it stays genuinely unspent.",
+      "at": "2026-09-02T04:49:13+00:00",
+      "tickers": [
+        "TGT",
+        "WMT",
+        "PG",
+        "KO",
+        "PEP",
+        "JPM",
+        "BAC",
+        "GS",
+        "MS",
+        "V",
+        "MA",
+        "AXP",
+        "BLK",
+        "CAT",
+        "DE",
+        "HON",
+        "GE",
+        "BA",
+        "UNP",
+        "UPS",
+        "UNH",
+        "JNJ",
+        "LLY",
+        "ABBV",
+        "MRK",
+        "PFE",
+        "TMO",
+        "ABT",
+        "XOM",
+        "CVX",
+        "COP",
+        "SLB"
       ]
     }
   ]
