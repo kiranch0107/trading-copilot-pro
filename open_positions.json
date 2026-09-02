@@ -1,1 +1,25 @@
-[]
+[
+  {
+    "id": "OPT_NKE_1788373742",
+    "ticker": "NKE",
+    "right": "PUT",
+    "strike": 40.0,
+    "expiry": "2026-09-18",
+    "contracts": 1.0,
+    "entry_premium": 2.32,
+    "rules": {
+      "tp_pct": 200,
+      "sl_pct": 50,
+      "dte_exit": 7,
+      "max_hold_bars": 30,
+      "invalidate_ema": false
+    },
+    "entry_features": {},
+    "notes": "Paper trade on 9/1",
+    "opened": "2026-09-02 14:29 ET",
+    "opened_epoch": 1788373742.7716753,
+    "last_check_epoch": 1788373742.7716753,
+    "status": "OPEN",
+    "exit_alerted": false
+  }
+]
