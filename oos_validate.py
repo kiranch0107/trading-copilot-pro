@@ -51,6 +51,14 @@ FROZEN = {
     "slippage_bps": 2.0,
     "use_regime": True,
     "years": 15,
+    # Added 2026-09-02. It was ALWAYS part of this config — the harness just
+    # never said so, and inherited whatever backtest.py happened to default to.
+    # That is the divergence class this project keeps getting bitten by: the
+    # original run was measured on auto_adjust=True bars, which cannot be
+    # reproduced (a refetch rewrites the full history of every dividend payer),
+    # and which no live path uses. Pinning it here means the hash moves when it
+    # moves, instead of the series changing underneath a "frozen" config.
+    "price_adjustment": "raw",     # raw | adjusted
     # Held-out universe: liquid US large/mid-cap names of similar character to
     # NVDA/META/MSFT, none of which appeared anywhere in the August sweep.
     "tickers": [
@@ -68,6 +76,7 @@ CRITERIA = {
 }
 
 LOCK_FILE = "oos_validate.lock.json"
+_LOCK_ARCHIVE_KEY = "superseded"
 LEDGER_FILE = "oos_validate.ledger.json"
 BACKTEST = "backtest.py"
 
@@ -79,6 +88,67 @@ BACKTEST = "backtest.py"
 def config_hash():
     blob = json.dumps({"frozen": FROZEN, "criteria": CRITERIA}, sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def relock(reason: str) -> int:
+    """
+    Record a NEW pre-registration, keeping the old one.
+
+    The alternative the report used to suggest — delete the lock file — throws
+    away the only record that the original test was pre-registered at all, and
+    leaves no trace that a second one replaced it. That is precisely the
+    evidence you would want later when asking whether a result was found or
+    fitted.
+
+    This does NOT restore out-of-sample status. The held-out tickers have
+    already been looked at; re-locking changes the config on record, not the
+    independence of the data. Only a fresh universe does that — see
+    data_reservation.py.
+    """
+    if not reason or not reason.strip():
+        raise SystemExit("--relock requires a reason: why is the frozen "
+                         "config being replaced? It goes on the record.")
+    prior = {}
+    if os.path.exists(LOCK_FILE):
+        with open(LOCK_FILE) as f:
+            prior = json.load(f)
+
+    archive = list(prior.get(_LOCK_ARCHIVE_KEY, []))
+    if prior.get("config_hash"):
+        archive.append({
+            "config_hash": prior.get("config_hash"),
+            "frozen_at": prior.get("frozen_at"),
+            "frozen": prior.get("frozen"),
+            "criteria": prior.get("criteria"),
+            "superseded_at": datetime.now(timezone.utc).isoformat(),
+            "superseded_because": reason.strip(),
+        })
+
+    new_lock = {
+        "config_hash": config_hash(),
+        "frozen_at": datetime.now(timezone.utc).isoformat(),
+        "frozen": FROZEN,
+        "criteria": CRITERIA,
+        _LOCK_ARCHIVE_KEY: archive,
+    }
+    # Carry forward any human-written notes; they are the project's memory.
+    for k, v in prior.items():
+        if k not in new_lock and k != _LOCK_ARCHIVE_KEY:
+            new_lock[k] = v
+
+    with open(LOCK_FILE, "w") as f:
+        json.dump(new_lock, f, indent=2)
+        f.write("\n")
+
+    print(f"Previous config hash : {prior.get('config_hash')}")
+    print(f"New config hash      : {config_hash()}")
+    print(f"Reason               : {reason.strip()}")
+    print(f"Archived {len(archive)} superseded pre-registration(s) in {LOCK_FILE}.")
+    print()
+    print("NOTE: this does not make the held-out set fresh again. Those")
+    print("      tickers have been looked at; re-locking records a new")
+    print("      config, not new independence.")
+    return 0
 
 
 def check_lock():
@@ -116,6 +186,15 @@ def build_cmd():
     ]
     if FROZEN["use_regime"]:
         cmd.append("--use-regime")
+
+    # Pinned, never inherited. backtest.py's default has changed once already;
+    # a pre-registration that silently follows it is not pre-registered.
+    adj = FROZEN.get("price_adjustment", "raw")
+    if adj == "adjusted":
+        cmd.append("--adjusted-prices")
+    elif adj != "raw":
+        raise SystemExit(f"FROZEN['price_adjustment'] must be 'raw' or "
+                         f"'adjusted', got {adj!r}")
     return cmd
 
 
@@ -324,8 +403,12 @@ def report(per_ticker, agg, stats, run_number, hash_changed):
         print("!" * W)
         print("CONFIG CHANGED SINCE THE LOCK FILE WAS WRITTEN.")
         print("This is no longer an out-of-sample test. The p-value below is")
-        print("not valid. Delete the lock only if you are starting a genuinely")
-        print("new pre-registration on a fresh held-out universe.")
+        print("not valid.")
+        print("If the change is deliberate, record it:")
+        print('    python oos_validate.py --relock "why"')
+        print("which archives the old pre-registration rather than deleting")
+        print("it. Re-locking records a new config; it does NOT make the")
+        print("held-out tickers independent again.")
         print("!" * W)
         print()
 
@@ -441,6 +524,77 @@ def selftest():
     fs = pooled_stats(fake, fa)
     print(f"  t {fs['t']:+.2f}, p {fs['p_value']:.4f} for a SINGLE pre-specified test")
     print(f"  Bonferroni across ~60 sweep cells: p ~ {min(1.0, fs['p_value']*60):.3f}")
+
+    # ── the frozen config must PIN the price series, not inherit it ──
+    # The original run measured auto_adjust=True bars because FROZEN said
+    # nothing and backtest.py happened to default that way. A pre-registration
+    # that follows a default is not pre-registered — the series can change
+    # underneath it without the hash moving, which is exactly what happened.
+    assert "price_adjustment" in FROZEN, \
+        "FROZEN must pin the price series, or the hash cannot notice it moving"
+    _saved = FROZEN["price_adjustment"]
+    try:
+        FROZEN["price_adjustment"] = "raw"
+        assert "--adjusted-prices" not in build_cmd()
+        FROZEN["price_adjustment"] = "adjusted"
+        assert "--adjusted-prices" in build_cmd(), \
+            "FROZEN asking for adjusted prices must actually pass the flag"
+        FROZEN["price_adjustment"] = "nonsense"
+        try:
+            build_cmd()
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("an unknown adjustment mode must not run "
+                                 "silently against whatever the default is")
+    finally:
+        FROZEN["price_adjustment"] = _saved
+    print("\nfrozen config pins the price series (raw | adjusted, else refuses)")
+
+    # ── --relock archives, never destroys ──
+    # The report used to tell you to delete the lock file, which throws away
+    # the only evidence that the first test was pre-registered at all.
+    import tempfile as _tf, shutil as _sh
+    global LOCK_FILE
+    _real_lock = LOCK_FILE
+    _tmpdir = _tf.mkdtemp(prefix="oos_relock_test_")
+    LOCK_FILE = os.path.join(_tmpdir, "lock.json")
+    try:
+        with open(LOCK_FILE, "w") as f:
+            json.dump({"config_hash": "aaaaaaaaaaaaaaaa",
+                       "frozen_at": "2026-08-21T00:00:00+00:00",
+                       "frozen": {"marker": "original"},
+                       "criteria": {"min_trades": 60},
+                       "live_divergence_note": {"keep": "me"}}, f)
+        try:
+            relock("")
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("--relock must refuse an empty reason")
+
+        relock("price series pinned after the auto_adjust measurement")
+        with open(LOCK_FILE) as f:
+            after = json.load(f)
+        assert after["config_hash"] == config_hash()
+        assert len(after[_LOCK_ARCHIVE_KEY]) == 1, \
+            "the previous pre-registration must be archived, not overwritten"
+        arch = after[_LOCK_ARCHIVE_KEY][0]
+        assert arch["config_hash"] == "aaaaaaaaaaaaaaaa"
+        assert arch["frozen"] == {"marker": "original"}
+        assert arch["superseded_because"]
+        assert after["live_divergence_note"] == {"keep": "me"}, \
+            "human-written notes are the project's memory and must survive"
+
+        relock("second supersession")
+        with open(LOCK_FILE) as f:
+            after2 = json.load(f)
+        assert len(after2[_LOCK_ARCHIVE_KEY]) == 2, \
+            "archives must accumulate, not replace each other"
+        print("relock archives the prior pre-registration and keeps notes")
+    finally:
+        _sh.rmtree(_tmpdir, ignore_errors=True)
+        LOCK_FILE = _real_lock
     return True
 
 
@@ -456,6 +610,11 @@ def main():
                     help="verify parser and stats on known output, run nothing")
     ap.add_argument("--show-config", action="store_true",
                     help="print the frozen config and its hash, then exit")
+    ap.add_argument("--relock", metavar="REASON", type=str, default=None,
+                    help="record a NEW pre-registration, archiving the "
+                         "current one in the lock file rather than deleting "
+                         "it. Requires a reason, which goes on the record. "
+                         "Does NOT make the held-out set independent again.")
     ap.add_argument("--backtest", default=BACKTEST,
                     help="path to backtest.py (default: ./backtest.py)")
     args = ap.parse_args()
@@ -469,6 +628,9 @@ def main():
     if args.selftest:
         selftest()
         return 0
+
+    if args.relock is not None:
+        return relock(args.relock)
 
     BACKTEST = args.backtest
     if not os.path.exists(BACKTEST):
