@@ -5,10 +5,8 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import ta
-import os
 import json
 import logging
-import requests
 import math
 import time
 from datetime import datetime, date as _date, timedelta as _timedelta
@@ -17,6 +15,8 @@ import pytz
 import signal_core
 import data_source
 import market_context
+import risk_params
+import notify
 import gh_sync
 from journal_store import (
     load_alerts, save_alerts, load_journal, save_journal,
@@ -293,8 +293,16 @@ st.sidebar.caption("Alerts come from `exit_monitor.py` on a scheduler, not from 
                    "this app — an app only runs while a tab is open.")
 st.sidebar.divider()
 st.sidebar.header("💰 Position Sizing")
-ACCOUNT_SIZE = int(st.sidebar.number_input("Account size ($)",   value=1500, min_value=100, step=500))
-RISK_PCT     = st.sidebar.number_input("Risk per trade (%)",     value=1.0,   min_value=0.1, max_value=10.0, step=0.1)
+# Defaults from risk_params.py, the single home shared with scanner.py.
+# RISK_PCT here is POSITION SIZING — the fraction of the account risked
+# between entry and stop. scanner.py's percentage is a different quantity
+# (max premium per contract); see risk_params.py for why they differ and
+# why they are no longer both called RISK_PCT.
+ACCOUNT_SIZE = int(st.sidebar.number_input("Account size ($)",
+                   value=risk_params.DEFAULT_ACCOUNT_SIZE, min_value=100, step=500))
+RISK_PCT     = st.sidebar.number_input("Risk per trade (%)",
+                   value=risk_params.DEFAULT_RISK_PCT, min_value=0.1,
+                   max_value=10.0, step=0.1)
 # ─────────────────────────────────────────────
 # PERSISTENCE, ALERTS, JOURNAL, POSITIONS, POSITION SIZING — see journal_store.py
 #
@@ -451,15 +459,15 @@ def is_market_open() -> bool:
 # TELEGRAM
 # ─────────────────────────────────────────────
 def send_telegram_alert(ticker: str, message: str) -> None:
-    TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN")
-    CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-    if not TOKEN or not CHAT_ID:
-        return
-    try:
-        requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-                      data={"chat_id": CHAT_ID, "text": message}, timeout=5)
-    except Exception:
-        logger.exception("Failed to send Telegram alert for %s", ticker)
+    """
+    Fire-and-forget alert, now through notify.py so transient failures retry.
+
+    This was a bare requests.post with timeout=5, no status check and the
+    exception swallowed — the loosest of the three copies this repo had. A
+    dropped alert was completely invisible.
+    """
+    if not notify.send(message):
+        logger.warning("Telegram alert for %s was not delivered", ticker)
 
 
 # ─────────────────────────────────────────────

@@ -573,7 +573,118 @@ def check_oos_parses_backtest_output() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8. Every production module must at least import
+# 8. The unattended workflows must not depend on Streamlit
+# ---------------------------------------------------------------------------
+
+def check_unattended_modules_are_streamlit_free() -> None:
+    """
+    scanner.py and exit_monitor.py run on GitHub Actions, whose workflows
+    install a SHORT list of packages:
+
+        scanner.yml       yfinance pandas ta requests pytz
+        exit-monitor.yml  yfinance pandas pytz requests
+
+    No Streamlit. gh_sync.py imports Streamlit at module scope, and
+    journal_store.py imports gh_sync — so the day either unattended module
+    imports journal_store (to log an alert, say, which is a very natural thing
+    to want), both workflows die with ModuleNotFoundError and the alerts stop
+    arriving. Silently, because nobody reads a green-until-it-isn't cron log.
+
+    A review claimed this had already happened. It has not — exit_monitor.py
+    imports neither — but nothing prevented it. This does.
+
+    Import-graph based rather than a grep for "streamlit", because the danger
+    is the TRANSITIVE edge, which no grep of these two files would ever show.
+    """
+    import ast
+
+    repo = Path(".")
+
+    def direct_imports(mod: str) -> set[str]:
+        try:
+            tree = ast.parse((repo / f"{mod}.py").read_text())
+        except FileNotFoundError:
+            return set()
+        out = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                out.update(a.name.split(".")[0] for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                out.add(node.module.split(".")[0])
+        return out
+
+    local = {p.stem for p in repo.glob("*.py")}
+
+    for entry in ("scanner", "exit_monitor"):
+        seen, stack, path_to = set(), [entry], {entry: [entry]}
+        while stack:
+            mod = stack.pop()
+            if mod in seen:
+                continue
+            seen.add(mod)
+            for dep in sorted(direct_imports(mod)):
+                if dep == "streamlit":
+                    chain = " -> ".join(path_to[mod] + ["streamlit"])
+                    raise AssertionError(
+                        f"{entry}.py transitively imports Streamlit:\n"
+                        f"    {chain}\n"
+                        f"Its GitHub Actions workflow does not install "
+                        f"Streamlit, so this run will die with "
+                        f"ModuleNotFoundError and the alerts will stop "
+                        f"arriving without anyone being told.")
+                if dep in local and dep not in seen:
+                    path_to[dep] = path_to[mod] + [dep]
+                    stack.append(dep)
+        print(f"  {entry}.py imports no Streamlit "
+              f"(checked {len(seen)} modules transitively)")
+
+
+# ---------------------------------------------------------------------------
+# 9. Position sizing constants live in exactly one place
+# ---------------------------------------------------------------------------
+
+def check_sizing_constants_shared() -> None:
+    """
+    app.py and scanner.py each hardcoded ACCOUNT_SIZE and RISK_PCT. A review
+    read the 1.0 vs 5.0 gap as a 5x position-sizing bug. It was not — they are
+    different quantities (stop-distance risk vs max option premium) that
+    happened to share a name — but one identifier meaning two things across
+    two modules is how the earlier signal divergences started, and the account
+    size really was duplicated.
+
+    Both now read risk_params.py. This check keeps them there.
+    """
+    import risk_params
+
+    assert risk_params.option_budget(1500, 5.0) == 75.0
+
+    for path, forbidden in (
+        ("app.py", ["ACCOUNT_SIZE = 1500"]),
+        ("scanner.py", ["ACCOUNT_SIZE = 1500", "RISK_PCT     = 5.0",
+                        "RISK_PCT = 5.0"]),
+    ):
+        txt = Path(path).read_text()
+        for lit in forbidden:
+            if lit in txt:
+                raise AssertionError(
+                    f"{path} hardcodes '{lit}' again. Sizing constants belong "
+                    f"in risk_params.py so app.py and scanner.py cannot drift.")
+        if "risk_params" not in txt:
+            raise AssertionError(
+                f"{path} no longer reads risk_params.py — the two files can "
+                f"drift apart again with nothing to notice.")
+
+    # scanner's percentage must keep the name that says what it governs.
+    stxt = Path("scanner.py").read_text()
+    assert "OPTION_BUDGET_PCT" in stxt, (
+        "scanner.py's premium cap must not be called RISK_PCT again — that "
+        "name means stop-distance risk in app.py, and one identifier meaning "
+        "two things is the bug this check exists to prevent.")
+    print("  app.py + scanner.py share risk_params.py; premium cap is named apart")
+
+
+# ---------------------------------------------------------------------------
+# 10. Every production module must at least import
 # ---------------------------------------------------------------------------
 
 # app.py is excluded on purpose: importing it executes the whole Streamlit
@@ -581,7 +692,7 @@ def check_oos_parses_backtest_output() -> None:
 # instead (see tests.yml).
 IMPORTABLE_MODULES = [
     "signal_core", "data_source", "rate_limit", "market_context", "gh_sync",
-    "journal_store", "bar_cache",
+    "journal_store", "bar_cache", "risk_params", "notify",
     "option_chain", "universe", "scanner", "exit_monitor", "backtest",
     "oos_validate", "data_reservation", "excursion_analysis", "churn_tracker",
     "universe_backtest", "option_backtest", "liquidity_check",
@@ -613,6 +724,8 @@ CHECKS = [
     ("scan failures are surfaced, not swallowed",  check_scan_failures_surfaced),
     ("backtest prices match the live paths",       check_adjustment_matches_live),
     ("oos_validate parses backtest.py's output",   check_oos_parses_backtest_output),
+    ("unattended modules are Streamlit-free",      check_unattended_modules_are_streamlit_free),
+    ("sizing constants live in one place",         check_sizing_constants_shared),
     ("every production module imports",            check_modules_import),
 ]
 

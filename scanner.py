@@ -51,7 +51,6 @@ from pathlib import Path
 
 import pandas as pd
 import pytz
-import requests
 import ta
 import yfinance as yf
 
@@ -114,6 +113,8 @@ def resolve_watchlist() -> list[str]:
 WATCHLIST = resolve_watchlist()
 
 import signal_core as sc
+import risk_params
+import notify
 
 # ── Tunables ──
 # These now come from signal_core.DEFAULTS so app.py and scanner.py cannot
@@ -149,8 +150,15 @@ OPT_MAX_SPREAD   = 15.0     # % of mid; above this the round trip eats the edge
 
 # Shown in the alert for context. NOT used to filter during the test phase —
 # you asked to see every suggestion and judge affordability yourself.
-ACCOUNT_SIZE = 1500
-RISK_PCT     = 5.0
+# Sizing constants come from risk_params.py so app.py and this file cannot
+# drift. NOTE the rename: this percentage is the MAX PREMIUM PER CONTRACT,
+# because on a long option the premium is the maximum loss. app.py's RISK_PCT
+# is a different quantity — the fraction of the account risked between entry
+# and stop. They were both called RISK_PCT and a review read the 1% vs 5% gap
+# as a 5x position-sizing bug; it was not, but one name meaning two things is
+# exactly how the earlier app/scanner divergences started.
+ACCOUNT_SIZE      = risk_params.DEFAULT_ACCOUNT_SIZE
+OPTION_BUDGET_PCT = risk_params.DEFAULT_OPTION_BUDGET_PCT
 
 # Indicator warm-up — same reasoning as the Streamlit app
 FETCH_PERIOD          = "1y"
@@ -254,26 +262,14 @@ def recently_alerted(state: dict, ticker: str, trend: str) -> bool:
 # TELEGRAM
 # ══════════════════════════════════════════════════════════════════
 def send_alert(message: str, dry_run: bool = False) -> bool:
-    if dry_run:
-        print("\n--- TELEGRAM (dry-run) ---\n" + message + "\n--- end ---\n")
-        return True
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat  = os.environ.get("TELEGRAM_CHAT_ID")
-    if not token or not chat:
-        logger.error("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set — no alert sent.")
-        return False
-    try:
-        # The old version had no timeout (could hang the job) and swallowed
-        # every error with a bare `except: pass`, so failures were invisible.
-        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                          data={"chat_id": chat, "text": message}, timeout=10)
-        if r.status_code != 200:
-            logger.error("Telegram API %s: %s", r.status_code, r.text[:200])
-            return False
-        return True
-    except Exception as e:
-        logger.error("Telegram send failed: %s", e)
-        return False
+    """
+    Delegates to notify.py, which retries transient failures.
+
+    This used to be a bare requests.post with no retry: a single blip between
+    the Actions runner and Telegram dropped the alert silently, and "it did
+    not send" looked exactly like "there was nothing to send".
+    """
+    return notify.send(message, dry_run=dry_run)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -458,7 +454,7 @@ def suggest_option(ticker: str, price: float, trend: str,
         row, exp, dte = best
         mid  = float(row["mid"])
         cost = mid * 100
-        budget = ACCOUNT_SIZE * RISK_PCT / 100
+        budget = risk_params.option_budget(ACCOUNT_SIZE, OPTION_BUDGET_PCT)
         return {
             "right": right, "strike": float(row["strike"]), "expiry": exp,
             "dte": dte, "mid": round(mid, 2), "bid": float(row["bid"]),
@@ -670,7 +666,7 @@ def run(args) -> int:
                 ]
                 if not opt["within_budget"]:
                     lines.append(f"⚠️ Above your ${opt['budget']:,.0f} risk budget "
-                                 f"({RISK_PCT:g}% of ${ACCOUNT_SIZE:,}) — on a long "
+                                 f"({OPTION_BUDGET_PCT:g}% of ${ACCOUNT_SIZE:,}) — on a long "
                                  f"option the premium IS the max loss.")
                 if opt["spread_pct"] > 10:
                     lines.append(f"⚠️ Spread {opt['spread_pct']:.0f}% of mid — a wide "
