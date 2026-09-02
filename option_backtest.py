@@ -180,6 +180,11 @@ def _result(reason, entry_prem, exit_prem, held, dte_left, pnl_pct) -> dict:
 # DRIVER
 # ══════════════════════════════════════════════════════════════════
 def run_ticker(tk: str, cfg: dict, sig_cfg: dict) -> list[dict]:
+    # backtest.evaluate_signal() takes a signal_core.SignalParams, not the
+    # sig_cfg dict — it delegates to signal_core.evaluate() rather than
+    # reimplementing the signal. sig_cfg still supplies the values it is
+    # built from, so the share-leg signal here stays identical to backtest.py's.
+    params = bt.build_signal_params(sig_cfg)
     raw = bt.download(tk, cfg["years"])
     if raw is None:
         return []
@@ -193,7 +198,7 @@ def run_ticker(tk: str, cfg: dict, sig_cfg: dict) -> list[dict]:
 
     trades, i, n = [], 0, len(df)
     while i < n - 1:
-        sig = bt.evaluate_signal(df, i, sig_cfg)
+        sig = bt.evaluate_signal(df, i, params)
         if sig:
             res = simulate_option_trade(df, i, sig["trend"], cfg)
             if res:

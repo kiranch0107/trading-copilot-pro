@@ -136,6 +136,12 @@ def run_arm(name: str, tickers: list[str], years: int, cfg: dict,
     all_trades: list[dict] = []
     per_ticker: list[dict] = []
 
+    # backtest.evaluate_signal() takes a signal_core.SignalParams, not the cfg
+    # dict — it delegates to signal_core.evaluate() rather than reimplementing
+    # the signal. Build it once per arm; cfg still carries the simulation-only
+    # settings (slippage, max_hold, cooldown) that simulate_trade() reads.
+    params = bt.build_signal_params(cfg)
+
     for tk in sorted(tickers):
         raw = bt.download(tk, years)
         if raw is None:
@@ -153,7 +159,7 @@ def run_arm(name: str, tickers: list[str], years: int, cfg: dict,
                 if tk not in held_on(membership, dates.iloc[i]):
                     i += 1
                     continue
-            sig = bt.evaluate_signal(df, i, cfg)
+            sig = bt.evaluate_signal(df, i, params)
             if sig:
                 res = bt.simulate_trade(df, i, sig, cfg)
                 if res.get("filled"):

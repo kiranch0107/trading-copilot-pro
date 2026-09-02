@@ -189,7 +189,27 @@ if _fallback_src:
                     f"option data is unaffected (it is always Yahoo).")
 st.sidebar.divider()
 
-ADX_MIN       = st.sidebar.number_input("ADX minimum",              value=35,   min_value=1,    max_value=100)
+# ── Sidebar defaults come FROM signal_core.DEFAULTS ──────────────────
+# Not hardcoded. Every one of these used to be a literal, and three of them
+# had silently drifted away from the values scanner.py runs on:
+#     atr_stop_mult  app 1.0  vs core 1.25   <- changes the STOP, the R:R,
+#                                               and therefore which setups
+#                                               clear min_rr / hq_min_rr
+#     hq_min_rr      app 1.5  vs core 1.0    <- scanner Telegrams "high
+#                                               quality" at 1.0-1.5 that the
+#                                               app would not badge as such
+#     volume_mult    app 1.0  vs core 1.2    <- different "Strong" tag, which
+#                                               feeds high_quality
+# That is the same class of bug signal_core.py was created to end (see its
+# docstring): one signal implementation is not enough if the two callers feed
+# it different parameters. oos_validate.lock.json's live_divergence_note even
+# recorded "Live now matches frozen.atr_stop=1.25" — true of scanner.py, but
+# not of this file, which is the surface you actually read before trading.
+# Sourcing them here means a default cannot drift again without editing
+# signal_core.SignalParams, where both callers see it.
+_D = signal_core.DEFAULTS
+
+ADX_MIN       = st.sidebar.number_input("ADX minimum",              value=int(_D.adx_min), min_value=1, max_value=100)
 EARNINGS_DAYS      = int(st.sidebar.number_input("Earnings blackout days",      value=3,   min_value=0, max_value=30))
 POST_EARNINGS_DAYS = int(st.sidebar.number_input("Post-earnings cooling (days)", value=1,   min_value=0, max_value=7,
     help="Also block signals N days AFTER earnings (avoids IV crush residual)"))
@@ -198,20 +218,24 @@ MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",   value=12,  
     help="Minimum days-to-expiry to consider. Your swing target (2.5× ATR) usually needs "
          "~8 sessions to play out — a 1-2 DTE contract will lose to theta even if the "
          "trade thesis is correct. 7+ is a sane floor for swing trades."))
-MIN_RR        = st.sidebar.number_input("Min Reward/Risk",           value=0.5,  min_value=0.1,  step=0.1)
-HQ_MIN_RR     = st.sidebar.number_input("High-Quality R:R threshold", value=1.5,  min_value=0.2,  step=0.1,
+MIN_RR        = st.sidebar.number_input("Min Reward/Risk",           value=float(_D.min_rr),  min_value=0.1,  step=0.1)
+HQ_MIN_RR     = st.sidebar.number_input("High-Quality R:R threshold", value=float(_D.hq_min_rr), min_value=0.2, step=0.1,
     help="R:R needed to qualify as a 🔥 HIGH QUALITY setup (these trigger Telegram alerts). "
-         "Must also be 'Strong' strength with all 4 filters passing.")
+         "Must also be 'Strong' strength with all 4 filters passing. The default matches "
+         "signal_core.DEFAULTS.hq_min_rr, which is the threshold scanner.py actually "
+         "alerts on — raise it here and the app will stop badging setups the scanner "
+         "still Telegrams you.")
 MIN_ROWS      = int(st.sidebar.number_input("Min history bars",      value=50,   min_value=10))
-VOLUME_MULT   = st.sidebar.number_input("Volume multiplier",         value=1.0,  min_value=0.1,  step=0.1)
-ATR_STOP_MULT = st.sidebar.number_input("ATR stop multiplier",       value=1.0,  min_value=0.5, max_value=4.0, step=0.25,
-    help="Stop distance = this × ATR. Tighter stops raise per-trade expectancy (1.0 → "
-         "+0.252 R vs 1.5 → +0.162 R across 300 series) because losers are cut faster and "
-         "the R multiple per win is larger — BUT they also whipsaw more, so drawdown per "
-         "trade is deeper (more frequent small losses). 1.0 maximises expectancy; 1.25–1.5 "
-         "trades some edge for a smoother equity curve. Pick based on your tolerance for "
-         "consecutive small losses.")
-ATR_TGT_MULT  = st.sidebar.number_input("ATR target multiplier",     value=4.0,  min_value=1.0, max_value=6.0, step=0.25,
+VOLUME_MULT   = st.sidebar.number_input("Volume multiplier",         value=float(_D.volume_mult), min_value=0.1, step=0.1)
+ATR_STOP_MULT = st.sidebar.number_input("ATR stop multiplier",       value=float(_D.atr_stop_mult), min_value=0.5, max_value=4.0, step=0.25,
+    help="Stop distance = this × ATR. The default matches signal_core.DEFAULTS and the "
+         "frozen out-of-sample config (oos_validate.py FROZEN.atr_stop = 1.25) — i.e. the "
+         "only value that has actually been validated end to end, and the one scanner.py "
+         "runs on. Note the synthetic sweep scored 1.0 higher on raw expectancy (+0.252 R "
+         "vs +0.162 R at 1.5) because tighter stops cut losers faster; it also whipsaws "
+         "more. Changing this here makes the app disagree with the scanner and with the "
+         "OOS test, so change it knowing that.")
+ATR_TGT_MULT  = st.sidebar.number_input("ATR target multiplier",     value=float(_D.atr_tgt_mult), min_value=1.0, max_value=6.0, step=0.25,
     help="Target distance = this × ATR. Backtested across 300 simulated market series, "
          "3.0 lifted per-trade expectancy ~29% over 2.5 (+0.196 → +0.252 R) with the same "
          "stop and same trade count — the edge in trend-following comes from letting "
@@ -237,8 +261,8 @@ if MIN_DTE < _days_needed_preview:
         f"or lower the ATR target multiplier."
     )
 
-WEEKLY_CONFIRM = st.sidebar.checkbox("Require weekly TF alignment",  value=True)
-SPY_REGIME     = st.sidebar.checkbox("Apply SPY regime filter",      value=True)
+WEEKLY_CONFIRM = st.sidebar.checkbox("Require weekly TF alignment",  value=bool(_D.weekly_confirm))
+SPY_REGIME     = st.sidebar.checkbox("Apply SPY regime filter",      value=bool(_D.spy_regime_on))
 st.sidebar.divider()
 st.sidebar.header("📍 Exit Monitoring")
 

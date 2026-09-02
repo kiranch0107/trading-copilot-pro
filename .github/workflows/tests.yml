@@ -63,3 +63,25 @@ jobs:
 
       - name: churn_tracker.py — universe snapshot/diff/turnover
         run: python churn_tracker.py --selftest
+
+      # ── The half CI used to miss ──────────────────────────────────────
+      # Everything above is an offline research module. The modules that
+      # actually run unattended and send money-affecting alerts — scanner.py,
+      # exit_monitor.py, option_chain.py, journal_store.py, gh_sync.py — had
+      # NO coverage at all, which is how universe_backtest.py and
+      # option_backtest.py sat broken (AttributeError on every run) after
+      # backtest.evaluate_signal()'s signature changed under them.
+
+      - name: consistency_check.py — invariants that span modules
+        run: python consistency_check.py
+
+      # app.py is a Streamlit script: importing it renders the UI and makes
+      # live Yahoo calls, so CI compiles it and lints it instead of running it.
+      - name: app.py — compiles and has no undefined names
+        run: |
+          python -m py_compile app.py
+          pip install pyflakes
+          python -m pyflakes app.py \
+            | grep -v "f-string is missing placeholders" \
+            | tee /tmp/pyflakes.out
+          test ! -s /tmp/pyflakes.out

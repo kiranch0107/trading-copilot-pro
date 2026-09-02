@@ -35,7 +35,6 @@ import argparse
 import time
 from datetime import datetime, date
 
-import pandas as pd
 
 try:
     import yfinance as yf
