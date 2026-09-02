@@ -1,6 +1,6 @@
 {
-  "config_hash": "4e05e4a2bfa4017d",
-  "frozen_at": "2026-08-22T05:22:55.376743+00:00",
+  "config_hash": "a3c94a897f4d6f11",
+  "frozen_at": "2026-09-02T16:34:10.514206+00:00",
   "frozen": {
     "adx_min": 35.0,
     "atr_stop": 1.25,
@@ -9,6 +9,7 @@
     "slippage_bps": 2.0,
     "use_regime": true,
     "years": 15,
+    "price_adjustment": "raw",
     "tickers": [
       "GOOGL",
       "AVGO",
@@ -30,6 +31,43 @@
     "min_profit_factor": 1.3,
     "require_ci_above_zero": true
   },
+  "superseded": [
+    {
+      "config_hash": "4e05e4a2bfa4017d",
+      "frozen_at": "2026-08-22T05:22:55.376743+00:00",
+      "frozen": {
+        "adx_min": 35.0,
+        "atr_stop": 1.25,
+        "atr_tgt": 4.0,
+        "max_hold": 30,
+        "slippage_bps": 2.0,
+        "use_regime": true,
+        "years": 15,
+        "tickers": [
+          "GOOGL",
+          "AVGO",
+          "AMD",
+          "NFLX",
+          "CRM",
+          "ADBE",
+          "QCOM",
+          "MU",
+          "ORCL",
+          "NOW",
+          "PANW",
+          "LRCX"
+        ]
+      },
+      "criteria": {
+        "min_trades": 60,
+        "min_expectancy": 0.2,
+        "min_profit_factor": 1.3,
+        "require_ci_above_zero": true
+      },
+      "superseded_at": "2026-09-02T16:34:10.514029+00:00",
+      "superseded_because": "price_adjustment pinned to raw: the original run measured auto_adjust=True bars, which are not reproducible (a refetch rewrites the history of every dividend payer) and which no live path uses"
+    }
+  ],
   "live_divergence_note": {
     "recorded": "2026-08-28",
     "universe": "Live scans the dynamic RS-ranked universe (universe.py, top_n=8, weekly rebalance), NOT the 12 tickers in frozen.tickers. Those 12 are the OOS validation universe only. Chosen deliberately; universe_backtest.py measures the rule point-in-time.",

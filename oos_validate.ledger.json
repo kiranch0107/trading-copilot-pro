@@ -32,5 +32,39 @@
       "profit factor 0.98 < 1.30",
       "95% CI lower bound -0.124 R does not clear 0"
     ]
+  },
+  {
+    "timestamp": "2026-09-02T16:39:06.894448+00:00",
+    "config_hash": "a3c94a897f4d6f11",
+    "hash_changed": false,
+    "tickers": [
+      "GOOGL",
+      "AVGO",
+      "AMD",
+      "NFLX",
+      "CRM",
+      "ADBE",
+      "QCOM",
+      "MU",
+      "ORCL",
+      "NOW",
+      "PANW",
+      "LRCX"
+    ],
+    "n_trades": 585,
+    "expectancy": -0.021,
+    "profit_factor": 0.97,
+    "t": -0.367,
+    "p_value": 0.7135,
+    "ci": [
+      -0.1331,
+      0.0911
+    ],
+    "passed": false,
+    "fail_reasons": [
+      "expectancy -0.021 R < +0.20 R",
+      "profit factor 0.97 < 1.30",
+      "95% CI lower bound -0.133 R does not clear 0"
+    ]
   }
 ]
