@@ -198,8 +198,19 @@ def build_cmd():
     return cmd
 
 
+# The Bars column was added to backtest.py's table on 2026-09-02 and this
+# regex was not updated, so every real run died on "Could not parse backtest
+# output". The selftest did not catch it because it parsed a hardcoded SAMPLE
+# that still carried the old layout — a test pinning the stale copy of a format
+# owned by another module. consistency_check.py now runs backtest.py's ACTUAL
+# stdout through this parser so the two cannot drift again.
+#
+# Bars is optional in the pattern so output produced before that change still
+# parses; it is captured when present because a silently truncated download is
+# visible in it and nowhere else.
 PER_TICKER_RE = re.compile(
     r"^\s*([A-Z][A-Z0-9.\-]{0,9})\s+"   # ticker
+    r"(?:(\d+)\s+)?"                     # bars (optional, added 2026-09-02)
     r"(\d+)\s+"                          # trades
     r"(-?[\d.]+)%\s+"                    # win rate
     r"(-?[\d.]+)\s+"                     # avg R
@@ -238,13 +249,14 @@ def parse_output(text):
         if m:
             per_ticker.append({
                 "ticker": m.group(1),
-                "trades": int(m.group(2)),
-                "win_rate": float(m.group(3)) / 100.0,
-                "avg_r": float(m.group(4)),
-                "total_r": float(m.group(5)),
-                "profit_factor": float(m.group(6)),
-                "max_dd": float(m.group(7)),
-                "avg_hold": float(m.group(8)),
+                "bars": int(m.group(2)) if m.group(2) else None,
+                "trades": int(m.group(3)),
+                "win_rate": float(m.group(4)) / 100.0,
+                "avg_r": float(m.group(5)),
+                "total_r": float(m.group(6)),
+                "profit_factor": float(m.group(7)),
+                "max_dd": float(m.group(8)),
+                "avg_hold": float(m.group(9)),
             })
 
     agg = {}
@@ -481,11 +493,11 @@ Max hold   : 30 bars  Slippage: 2.0bps/side  Regime filter: ON (SPY 200-SMA)
 ==========================================================
 
 PER-TICKER RESULTS
-Ticker    Trades  Win%    Avg R     Total R    PF     MaxDD   Hold
-------    ------  ----    -----     -------    --     -----   ----
-NVDA      43      58%     0.618     26.6       2.52   -3.0    7
-META      50      38%     0.068     3.4        1.11   -13.0   6
-MSFT      56      36%     0.226     12.7       1.35   -12.5   6
+Ticker    Bars    Trades  Win%    Avg R     Total R    PF     MaxDD   Hold
+------    ----    ------  ----    -----     -------    --     -----   ----
+NVDA      3771    43      58%     0.618     26.6       2.52   -3.0    7
+META      3771    50      38%     0.068     3.4        1.11   -13.0   6
+MSFT      3771    56      36%     0.226     12.7       1.35   -12.5   6
 
 ==========================================================
 AGGREGATE (all tickers combined)
@@ -501,6 +513,15 @@ AGGREGATE (all tickers combined)
 """
 
 
+# The layout before the Bars column existed. Kept so the optional-group path
+# is exercised: a saved oos_raw_output.txt from an older run must still parse.
+SAMPLE_LEGACY = SAMPLE.replace(
+    "Ticker    Bars    Trades", "Ticker    Trades"
+).replace("NVDA      3771    43", "NVDA      43").replace(
+    "META      3771    50", "META      50").replace(
+    "MSFT      3771    56", "MSFT      56")
+
+
 def selftest():
     per_ticker, agg = parse_output(SAMPLE)
     assert len(per_ticker) == 3, f"expected 3 tickers, got {len(per_ticker)}"
@@ -511,8 +532,17 @@ def selftest():
     assert abs(agg["expectancy"] - 0.286) < 1e-9
     assert abs(agg["profit_factor"] - 1.51) < 1e-9
 
+    assert per_ticker[0]["bars"] == 3771, "the Bars column must be captured"
+
+    legacy, agg_l = parse_output(SAMPLE_LEGACY)
+    assert len(legacy) == 3 and legacy[0]["trades"] == 43, \
+        "output saved before the Bars column existed must still parse"
+    assert legacy[0]["bars"] is None
+    assert abs(agg_l["expectancy"] - 0.286) < 1e-9
+
     stats = pooled_stats(per_ticker, agg)
-    print("Parser OK — 3 tickers, 149 trades, +0.286 R aggregate.")
+    print("Parser OK — 3 tickers, 149 trades, +0.286 R aggregate "
+          "(with and without the Bars column).")
     print(f"Recovered sigma {stats['sigma']:.2f} R, SE {stats['se']:.3f}, "
           f"t {stats['t']:+.2f}, p {stats['p_value']:.4f}")
     print(f"95% CI [{stats['ci_low']:+.3f}, {stats['ci_high']:+.3f}] R")
