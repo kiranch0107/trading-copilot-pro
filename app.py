@@ -1116,18 +1116,37 @@ _SCAN_MAX_WORKERS = 2   # reduced from 3 → 2 for Streamlit Cloud memory headro
 
 
 def _scan_one_ticker(ticker: str, data_map: dict, spy_regime: dict,
-                     settings_key: str) -> dict | None:
+                     settings_key: str) -> tuple[dict | None, str | None]:
+    """
+    Returns (setup, skip_reason). At most one of them is not None.
+
+    THE BUG THIS SHAPE FIXES: every path below used to `return None`, and the
+    caller dropped them all identically. So "Yahoo rate-limited all 8 tickers"
+    and "the market is quiet and nothing set up" rendered as the same screen —
+    0 / 0 / 0 with an empty failure drawer. Observed in production on
+    2026-09-02, minutes after the logs recorded a YFRateLimitError.
+
+    A data outage is not a market opinion, and the UI must never show one as
+    the other. A blocked setup returns (None, None): that is a real finding,
+    not a failure, and it is already counted elsewhere.
+    """
     df = data_map.get(ticker)
-    if df is None: return None
+    if df is None:
+        return None, "no data"
     df = compute(df)
     df, _ = drop_partial_bar(df)      # bug #7: never analyse an in-progress bar
-    if not has_sufficient_history(df, ticker): return None
+    if not has_sufficient_history(df, ticker):
+        return None, "not enough history"
     # fetch_options=False: the scan must not pull option chains (see the LAZY
     # note in _analyze_uncached). This is the single biggest reduction in
     # Yahoo call volume — a 5-ticker scan drops from ~16-32 calls to ~12.
     r = analyze(df, ticker, f"{ticker}_{df.index[-1]}", settings_key,
                 spy_regime=spy_regime, fetch_options=False)
-    return r if r and not r.get("blocked") else None
+    if not r:
+        return None, "analysis returned nothing"
+    if r.get("blocked"):
+        return None, None          # no setup today — a result, not a failure
+    return r, None
 
 
 def _run_scan_uncached(scan_list: tuple, spy_regime: dict,
@@ -1135,27 +1154,39 @@ def _run_scan_uncached(scan_list: tuple, spy_regime: dict,
     """Does the actual parallel work — not cached so threads don't OOM cache."""
     data_map = batch_get_data(scan_list, min_rows=MIN_ROWS)
     results  = []
+    skipped: list[tuple[str, str]] = []
     with ThreadPoolExecutor(max_workers=_SCAN_MAX_WORKERS) as executor:
         futures = {
             executor.submit(_scan_one_ticker, t, data_map, spy_regime, settings_key): t
             for t in scan_list
         }
         for future in as_completed(futures):
+            tk = futures[future]
             try:
-                r = future.result()
-                if r: results.append(r)
+                r, reason = future.result()
+                if r:
+                    results.append(r)
+                elif reason:
+                    skipped.append((tk, reason))
             except Exception as e:
+                # An exception is a failure to LOOK, never a finding. Surfaced
+                # next to the results instead of swallowed into a log the UI
+                # never shows.
                 logger.exception("Scan ticker failed: %s", e)
-    return sorted(results, key=lambda x: x["rr"], reverse=True)
+                skipped.append((tk, type(e).__name__))
+    return (sorted(results, key=lambda x: x["rr"], reverse=True), skipped)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def run_watchlist_scan(scan_list: tuple, spy_regime_key: str,
-                       settings_key: str) -> list[dict]:
+                       settings_key: str) -> tuple[list[dict], list[tuple[str, str]]]:
     """
     Cached wrapper. Both spy_regime_key AND settings_key are part of the cache
     signature so the scan re-runs when either the macro regime OR any sidebar
     tunable changes (BUG FIX #1).
+
+    Returns (setups, skipped) — see _scan_one_ticker for why the second half
+    of that tuple exists.
     """
     spy_regime = get_spy_regime()   # cached at ttl=1800, cheap
     return _run_scan_uncached(scan_list, spy_regime, settings_key)
@@ -1338,7 +1369,7 @@ with TAB_SCAN:
         st.info("👆 Click **Run / Refresh Scan** to scan the watchlist.")
     else:
         with st.spinner("Scanning watchlist…"):
-            all_setups = run_watchlist_scan(tuple(SCAN_LIST), regime_key,
+            all_setups, scan_skipped = run_watchlist_scan(tuple(SCAN_LIST), regime_key,
                                             get_settings_key())
 
         # Defensive: only keep well-formed setup dicts (must have "ticker").
@@ -1349,6 +1380,31 @@ with TAB_SCAN:
         # Store in session_state so other tabs can reuse the last scan
         # can safely read it without a NameError when no scan has run yet.
         st.session_state["all_setups"] = all_setups
+        st.session_state["scan_skipped"] = scan_skipped
+
+        # A ticker that could not be LOOKED AT is not a ticker with no setup.
+        # Without this block an all-tickers-failed scan renders as 0 / 0 / 0
+        # with an empty drawer, which reads as "quiet market" — the exact
+        # misreading that hid a full Yahoo rate-limit outage in production.
+        if scan_skipped:
+            no_data = [t for t, why in scan_skipped if why == "no data"]
+            detail = ", ".join(f"{t} ({why})" for t, why in sorted(scan_skipped))
+            if len(scan_skipped) == len(SCAN_LIST):
+                st.error(
+                    f"**No ticker could be scanned.** All {len(SCAN_LIST)} "
+                    f"failed to return usable data, so the counts below are "
+                    f"NOT a statement about the market — nothing was examined. "
+                    f"This is usually a Yahoo rate limit; wait a minute and "
+                    f"press Run / Refresh Scan again.\n\n{detail}")
+            else:
+                st.warning(
+                    f"**{len(scan_skipped)} of {len(SCAN_LIST)} tickers were "
+                    f"not scanned** — they returned no usable data, so they "
+                    f"are absent from the counts below rather than rejected "
+                    f"by them.\n\n{detail}")
+            if no_data:
+                logger.warning("Scan skipped %d ticker(s) for missing data: %s",
+                               len(no_data), ", ".join(no_data))
 
         high_quality = [s for s in all_setups if s["high_quality"]]
         partial      = [s for s in all_setups

@@ -397,7 +397,64 @@ def check_universe_not_spending_reserved() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Every production module must at least import
+# 5. A ticker that could not be scanned must not look like a ticker with no
+#    setup
+# ---------------------------------------------------------------------------
+
+def check_scan_failures_surfaced() -> None:
+    """
+    On 2026-09-02 the live app showed 0 high-quality / 0 all-filters /
+    0 partial and "Partial / failed signals (0 tickers)" for an 8-name
+    watchlist, minutes after its own logs recorded a YFRateLimitError. Every
+    failure path in the scan did a bare `return None`, and the caller dropped
+    them all identically — so a total data outage and a quiet market rendered
+    as the same screen.
+
+    Source-level, because importing app.py executes the Streamlit script and
+    makes live Yahoo calls (same reason CI compiles it instead of running it).
+    What is pinned here is the CONTRACT: failures travel back to the UI.
+    """
+    txt = Path("app.py").read_text()
+
+    if "return r if r and not r.get(\"blocked\") else None" in txt:
+        raise AssertionError(
+            "_scan_one_ticker() is back to collapsing every outcome into "
+            "None. A rate-limited fetch then renders identically to 'no "
+            "setup today' and a data outage becomes invisible.")
+
+    for needed, why in (
+        ('return None, "no data"',
+         "a missing frame must report WHY, not just vanish"),
+        ('return None, "not enough history"',
+         "a short history must be distinguishable from a rejected setup"),
+        ("skipped.append((tk, reason))",
+         "the scan must collect per-ticker skip reasons"),
+        ("skipped.append((tk, type(e).__name__))",
+         "an exception is a failure to look, and must be surfaced too"),
+        ("all_setups, scan_skipped = run_watchlist_scan(",
+         "the caller must unpack the skip list, not discard it"),
+        ("No ticker could be scanned",
+         "an all-tickers-failed scan must say so instead of showing zeros"),
+    ):
+        if needed not in txt:
+            raise AssertionError(f"app.py: missing {needed!r} — {why}")
+
+    # scanner.py runs unattended, so its failures can only ever be seen in the
+    # run log. They must at least get there.
+    stxt = Path("scanner.py").read_text()
+    for needed in ('failed.append(f"{tk} (no data)")',
+                   "Failed tickers:"):
+        if needed not in stxt:
+            raise AssertionError(
+                f"scanner.py: missing {needed!r} — an unattended scan that "
+                f"silently fetches nothing looks exactly like a scan that "
+                f"found nothing.")
+    print("  app.py scan reports unscannable tickers separately from no-setup")
+    print("  scanner.py logs failed tickers rather than dropping them")
+
+
+# ---------------------------------------------------------------------------
+# 6. Every production module must at least import
 # ---------------------------------------------------------------------------
 
 # app.py is excluded on purpose: importing it executes the whole Streamlit
@@ -405,7 +462,7 @@ def check_universe_not_spending_reserved() -> None:
 # instead (see tests.yml).
 IMPORTABLE_MODULES = [
     "signal_core", "data_source", "rate_limit", "market_context", "gh_sync",
-    "journal_store",
+    "journal_store", "bar_cache",
     "option_chain", "universe", "scanner", "exit_monitor", "backtest",
     "oos_validate", "data_reservation", "excursion_analysis", "churn_tracker",
     "universe_backtest", "option_backtest", "liquidity_check",
@@ -434,6 +491,7 @@ CHECKS = [
     ("backtest.evaluate_signal callers correct",   check_backtest_callers),
     ("weekly trend + SPY regime are one rule",     check_market_context_shared),
     ("live universe spends no reserved data",     check_universe_not_spending_reserved),
+    ("scan failures are surfaced, not swallowed",  check_scan_failures_surfaced),
     ("every production module imports",            check_modules_import),
 ]
 

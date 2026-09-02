@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 trades.csv
 oos_raw_output.txt
+
+# Frozen bars for reproducible backtests (bar_cache.py). Local by design:
+# committing them would make the repo the data store and the diffs unreadable.
+.bar_cache/
