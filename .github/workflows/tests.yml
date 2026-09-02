@@ -78,6 +78,15 @@ jobs:
       # option_backtest.py sat broken (AttributeError on every run) after
       # backtest.evaluate_signal()'s signature changed under them.
 
+      - name: risk_params.py — account/risk constants
+        run: python risk_params.py
+
+      - name: notify.py — Telegram retry policy (offline)
+        run: python notify.py
+
+      - name: gh_sync.py — 409 retry + position merge (offline)
+        run: python gh_sync.py
+
       - name: scanner.py — outage detection + alert cooldown (offline)
         run: python scanner.py --selftest
 

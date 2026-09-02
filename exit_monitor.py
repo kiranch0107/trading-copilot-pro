@@ -48,6 +48,7 @@ Run
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import sys
@@ -62,12 +63,16 @@ try:
     import yfinance as yf
 except ImportError:
     raise SystemExit("Missing yfinance. Run: pip install yfinance pandas pytz requests")
-try:
-    import requests
-except ImportError:
+# requests is no longer imported here — notify.py owns the Telegram call — but
+# it IS still a hard dependency through notify and data_source. The check is
+# kept so a missing package fails immediately with an actionable message
+# instead of surfacing as an obscure ImportError two modules down. find_spec
+# rather than an import, so there is no unused name for the linter to flag.
+if importlib.util.find_spec("requests") is None:
     raise SystemExit("Missing requests. Run: pip install requests")
 
 import data_source
+import notify
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("exit_monitor")
@@ -117,17 +122,11 @@ def send_telegram(message: str, dry_run: bool = False) -> bool:
         logger.error("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set — cannot alert. "
                      "This is the most common reason no message arrives.")
         return False
-    try:
-        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                          data={"chat_id": chat_id, "text": message,
-                                "parse_mode": "HTML"}, timeout=10)
-        if r.status_code != 200:
-            logger.error("Telegram API %s: %s", r.status_code, r.text[:200])
-            return False
-        return True
-    except Exception as e:
-        logger.exception("Telegram send failed: %s", e)
-        return False
+    # notify.send() retries transient failures (timeouts, 429, 5xx). This used
+    # to be a bare requests.post with no retry, so one blip between the Actions
+    # runner and Telegram silently dropped an EXIT alert — the single most
+    # consequential message this system sends.
+    return notify.send(message, parse_mode="HTML")
 
 
 # ══════════════════════════════════════════════════════════════════
