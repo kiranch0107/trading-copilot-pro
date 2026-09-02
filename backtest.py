@@ -36,17 +36,33 @@ tested the real thing. Delegating means a future change to
 signal_core.evaluate() is automatically re-tested next run, not something
 that requires a second manual edit that can quietly not happen.
 
-Filters intentionally SIMPLIFIED for a clean historical test — enforced by
-building a SignalParams with weekly_confirm=False (no weekly-timeframe
-data is fetched here, and leaving it on would BLOCK every bar, not
-"simplify" the filter — see build_signal_params()):
+Filters:
   • ADX filter: applied (same threshold) — signal_core.evaluate() does not
     block on ADX itself (it only feeds the "high_quality" tier), so this file
     checks the filter's own pass/fail explicitly, same as the old inline gate.
-  • Weekly alignment / earnings blackout: OFF — these need external calendars
-    or a second data feed and would add lookahead/complexity.
-  • SPY regime: OFF by default. Turn USE_REGIME on to approximate the SPY
-    macro filter using SPY's own 200-SMA (computed from the same download).
+  • SPY regime: OFF by default. --use-regime applies the SAME rule live uses
+    (market_context / build_regime_series: price vs its own 200-SMA).
+  • Weekly alignment: OFF by default, --use-weekly to apply it.
+  • Earnings blackout: OFF — needs an external calendar with point-in-time
+    accuracy, which yfinance does not provide historically.
+
+WHY --use-weekly EXISTS
+-----------------------
+weekly_confirm defaults to TRUE in signal_core, so the LIVE system (app.py
+and scanner.py) applies weekly alignment as a BLOCKING filter. This file used
+to force it off unconditionally, which meant the 591-trade out-of-sample
+validation never measured it: live was running a gate that nothing had
+tested. --use-weekly fetches weekly bars and supplies the same
+price-vs-20w-EMA verdict market_context computes live, so the filter can
+finally be A/B'd.
+
+The hard part is lookahead. A weekly bar labelled Monday does not CLOSE until
+Friday, so its verdict is not knowable during its own week — using it on
+Wednesday would leak Thursday and Friday into a Wednesday decision. Each
+week's verdict is therefore shifted to apply from the START OF THE FOLLOWING
+WEEK. Both properties (parity with the live rule, and the shift) are asserted
+in --selftest against a fixture that oscillates, so a broken shift actually
+fails rather than comparing two identical verdicts.
 
 Run
 ---
@@ -71,6 +87,7 @@ import numpy as np
 import pandas as pd
 
 import signal_core as sc
+import market_context as mc
 
 try:
     import data_source
@@ -109,6 +126,7 @@ DEFAULTS = dict(
     slippage_bps  = 2.0,      # per side, in basis points of price
     commission    = 0.0,      # $ per trade (round trip), for share trades
     use_regime    = False,    # approximate SPY 200-SMA macro filter
+    use_weekly    = False,    # weekly-timeframe alignment filter
     cooldown_bars = 3,        # bars to wait after a trade before re-entering
 )
 
@@ -148,11 +166,12 @@ def build_signal_params(cfg: dict) -> sc.SignalParams:
     per bar — the dataclass is immutable and identical for every bar of every
     ticker in a given run).
 
-    weekly_confirm is forced OFF regardless of cfg: no weekly-timeframe data
-    is fetched in this module (see the module docstring), and
-    signal_core.evaluate() BLOCKS every bar when weekly_trend is None and
-    weekly_confirm is True. Leaving the default on here would not "simplify"
-    the filter, it would silently zero out every trade.
+    weekly_confirm follows cfg["use_weekly"], default False. It MUST stay off
+    unless run() is actually supplying a weekly trend per bar: signal_core
+    BLOCKS every bar when weekly_trend is None and weekly_confirm is True, so
+    turning it on without the data does not "simplify" the filter, it silently
+    zeroes out every trade. build_weekly_trend_map() supplies that data when
+    --use-weekly is passed.
     """
     return replace(
         sc.DEFAULTS,
@@ -161,13 +180,14 @@ def build_signal_params(cfg: dict) -> sc.SignalParams:
         atr_tgt_mult=cfg["atr_tgt_mult"],
         min_rr=cfg["min_rr"],
         volume_mult=cfg["volume_mult"],
-        weekly_confirm=False,
+        weekly_confirm=bool(cfg.get("use_weekly", False)),
         spy_regime_on=cfg["use_regime"],
     )
 
 
 def evaluate_signal(df: pd.DataFrame, i: int, params: sc.SignalParams,
-                    regime: str | None = None) -> dict | None:
+                    regime: str | None = None,
+                    weekly: str | None = None) -> dict | None:
     """
     Evaluate the signal at bar i using ONLY rows 0..i (no lookahead), through
     signal_core.evaluate() — see the module docstring for why this is no
@@ -189,7 +209,8 @@ def evaluate_signal(df: pd.DataFrame, i: int, params: sc.SignalParams,
     """
     window = df.iloc[: i + 1]
     spy_regime = {"regime": regime} if regime is not None else None
-    r = sc.evaluate(window, "BT", params, spy_regime=spy_regime)
+    r = sc.evaluate(window, "BT", params, spy_regime=spy_regime,
+                    weekly_trend=weekly)
     if r["blocked"]:
         return None
     if not r["filters"]["ADX Trend Strength"]["pass"]:
@@ -272,7 +293,8 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
 # BACKTEST DRIVER
 # ══════════════════════════════════════════════════════════════════════
 def backtest_ticker(df: pd.DataFrame, cfg: dict, params: sc.SignalParams,
-                    regime_series: pd.Series | None = None) -> list[dict]:
+                    regime_series: pd.Series | None = None,
+                    weekly_series: pd.Series | None = None) -> list[dict]:
     trades = []
     i = 0
     n = len(df)
@@ -280,7 +302,10 @@ def backtest_ticker(df: pd.DataFrame, cfg: dict, params: sc.SignalParams,
         regime = None
         if regime_series is not None and i < len(regime_series):
             regime = regime_series.iloc[i]
-        sig = evaluate_signal(df, i, params, regime=regime)
+        weekly = None
+        if weekly_series is not None and i < len(weekly_series):
+            weekly = weekly_series.iloc[i]
+        sig = evaluate_signal(df, i, params, regime=regime, weekly=weekly)
         if sig:
             res = simulate_trade(df, i, sig, cfg)
             if res.get("filled"):
@@ -313,6 +338,45 @@ def stats(trades: list[dict]) -> dict:
     }
 
 
+def build_weekly_trend_map(ticker: str, years: int) -> "pd.Series | None":
+    """
+    Weekly trend as of each date, for testing the weekly_confirm filter.
+
+    THE POINT OF THIS FUNCTION: weekly_confirm defaults to TRUE live but
+    backtest.build_signal_params() forces it OFF, so the 591-trade OOS test
+    never applied the weekly filter at all. The live config was therefore
+    running a BLOCKING gate that nothing had measured. This makes it
+    measurable.
+
+    NO LOOKAHEAD, and it is the whole difficulty here. A weekly bar labelled
+    Monday only CLOSES on Friday, so its verdict is not knowable during its
+    own week — using it on Wednesday would leak Thursday and Friday into a
+    Wednesday decision. Each week's verdict is therefore shifted forward and
+    applies from the START OF THE FOLLOWING WEEK onward.
+
+    Uses the same price-vs-EMA20w rule as market_context (asserted against it
+    in selftest), so what is measured here is what runs live.
+    """
+    raw = download(ticker, years, interval="1wk")
+    if raw is None or raw.empty or "Date" not in raw.columns:
+        return None
+    w = raw.dropna(subset=["Close"]).reset_index(drop=True)
+    if len(w) < mc.WEEKLY_MIN_BARS + 1:
+        return None
+
+    close = w["Close"]
+    ema = close.ewm(span=mc.WEEKLY_EMA_SPAN, adjust=False).mean()
+    verdict = np.where(close > ema, "Bullish", "Bearish").astype(object)
+    # Not enough history for the EMA to mean anything -> None, which
+    # signal_core treats as BLOCKING when weekly_confirm is on.
+    verdict[: mc.WEEKLY_MIN_BARS - 1] = None
+
+    dates = pd.to_datetime(w["Date"])
+    # Shift: week i's verdict becomes usable at week i+1's start.
+    effective_from = list(dates.iloc[1:]) + [dates.iloc[-1] + pd.Timedelta(days=7)]
+    return pd.Series(verdict, index=pd.DatetimeIndex(effective_from)).sort_index()
+
+
 def build_regime_series(spy_df: pd.DataFrame) -> pd.Series:
     """Approximate app.py's SPY macro filter: price vs its own 200-SMA."""
     sma200 = spy_df["Close"].rolling(200, min_periods=50).mean()
@@ -327,7 +391,8 @@ def _yahoo_download(ticker: str, period: str, interval: str) -> pd.DataFrame | N
                        progress=False, auto_adjust=True)
 
 
-def download(ticker: str, years: int) -> pd.DataFrame | None:
+def download(ticker: str, years: int,
+             interval: str = "1d") -> pd.DataFrame | None:
     """
     Yahoo first, falling back through data_source.fetch_daily() (currently
     Tiingo, if TIINGO_API_KEY is set) when Yahoo comes back empty — the same
@@ -340,13 +405,13 @@ def download(ticker: str, years: int) -> pd.DataFrame | None:
     try:
         if data_source is not None:
             df, source = data_source.fetch_daily(
-                ticker, period=f"{years}y", interval="1d",
+                ticker, period=f"{years}y", interval=interval,
                 yahoo_fetch=_yahoo_download)
             if source not in ("yahoo", "none"):
                 print(f"  ! {ticker}: Yahoo unavailable, used {source} fallback "
                      f"(not split/dividend-adjusted the way auto_adjust=True is)")
         else:
-            df = _yahoo_download(ticker, f"{years}y", "1d")
+            df = _yahoo_download(ticker, f"{years}y", interval)
         if df is None or df.empty:
             return None
         # flatten possible multiindex columns
@@ -372,6 +437,8 @@ def run(cfg: dict) -> None:
           f"ATR tgt×: {cfg['atr_tgt_mult']}   Min R:R: {cfg['min_rr']}")
     print(f"Max hold     : {cfg['max_hold']} bars   Slippage: {cfg['slippage_bps']}bps/side   "
           f"Regime filter: {'ON (SPY 200-SMA)' if cfg['use_regime'] else 'OFF'}")
+    print(f"Weekly filter: {'ON (price vs 20w EMA)' if cfg.get('use_weekly') else 'OFF'}"
+          f"{'   <- the live default, measured here' if cfg.get('use_weekly') else ''}")
     print("=" * 78)
 
     params = build_signal_params(cfg)
@@ -409,7 +476,20 @@ def run(cfg: dict) -> None:
         if regime_by_date is not None and "Date" in df.columns:
             reg_series = df["Date"].map(regime_by_date).fillna("Neutral").reset_index(drop=True)
 
-        trades = backtest_ticker(df, cfg, params, regime_series=reg_series)
+        # per-bar weekly trend, as of the last CLOSED weekly bar (no lookahead)
+        wk_series = None
+        if cfg.get("use_weekly") and "Date" in df.columns:
+            wmap = build_weekly_trend_map(tk, cfg["years"])
+            if wmap is None:
+                print(f"  ! {tk}: no weekly data — weekly filter would block "
+                      f"every bar, skipping ticker")
+                continue
+            wk_series = pd.Series(
+                [wmap.asof(pd.Timestamp(d)) for d in df["Date"]]
+            ).reset_index(drop=True)
+
+        trades = backtest_ticker(df, cfg, params, regime_series=reg_series,
+                                 weekly_series=wk_series)
         s = stats(trades)
         all_trades.extend(trades)
 
@@ -495,10 +575,12 @@ def selftest() -> int:
               min_rr=0.5, use_regime=False)
     params = build_signal_params(cfg)
     assert params.weekly_confirm is False, \
-        "weekly_confirm must be forced off — signal_core BLOCKS every bar " \
-        "otherwise, since no weekly data is fetched here"
+        "weekly_confirm must default off — signal_core BLOCKS every bar " \
+        "otherwise, and no weekly data is fetched unless --use-weekly"
+    assert build_signal_params(dict(cfg, use_weekly=True)).weekly_confirm is True, \
+        "--use-weekly must actually turn the filter on"
     assert params.adx_min == 35.0 and params.atr_stop_mult == 1.25
-    print("build_signal_params    : weekly_confirm forced off, tunables mapped through")
+    print("build_signal_params    : weekly off by default, on with use_weekly")
 
     # Clean bullish setup, ADX comfortably above threshold -> a trade.
     df = _synthetic_ohlc(adx=40.0)
@@ -545,6 +627,56 @@ def selftest() -> int:
     for k in ("trend", "entry", "stop", "target", "rr", "atr"):
         assert k in sig, f"simulate_trade() reads '{k}' — missing from evaluate_signal()"
     print(f"clean bearish bar        : trades, keys present for simulate_trade()")
+
+    # ── weekly trend map: the filter the OOS test never measured ──
+    # Built so weekly_confirm can finally be A/B'd. Two things must hold: it
+    # must agree with the LIVE rule (market_context), and it must not peek.
+    #
+    # The fixture OSCILLATES on purpose. An earlier version used a monotonic
+    # uptrend, where every week's verdict is "Bullish" — so the lookahead
+    # assertion below compared "Bullish" to "Bullish" and passed even with the
+    # no-lookahead shift deleted. A fixture that cannot distinguish the bug
+    # from the fix tests nothing; the assert on _flip below now guarantees
+    # this one can.
+    import market_context as mc_
+    wk_idx = pd.bdate_range("2024-01-01", periods=120, freq="W-MON")
+    _t = np.arange(120)
+    wk_close = 100 + 12 * np.sin(2 * np.pi * _t / 7) + 0.05 * _t
+    wk_raw = pd.DataFrame({"Date": wk_idx, "Close": wk_close,
+                           "Open": wk_close, "High": wk_close + 1,
+                           "Low": wk_close - 1, "Volume": 1e6})
+
+    _real_download = globals()["download"]
+    globals()["download"] = lambda t, y, interval="1d": wk_raw
+    try:
+        wmap = build_weekly_trend_map("TEST", 5)
+    finally:
+        globals()["download"] = _real_download
+    assert wmap is not None and len(wmap) == len(wk_raw)
+
+    # PARITY: the vectorised verdict must equal market_context's function on
+    # the same bars. If these diverge, the backtest measures a filter the live
+    # system does not apply — the whole point of this file.
+    for k in (40, 70, 119):
+        expanding = mc_.weekly_trend_from_bars(wk_raw.iloc[:k + 1])
+        assert wmap.iloc[k] == expanding, (
+            f"week {k}: backtest says {wmap.iloc[k]!r}, market_context says "
+            f"{expanding!r} — the backtest would be testing a different rule")
+    print(f"weekly map parity      : matches market_context on sampled weeks")
+
+    # NO LOOKAHEAD: week k's verdict must not be readable until week k+1 has
+    # STARTED. A weekly bar labelled Monday only closes on Friday, so reading
+    # it mid-week leaks Thursday and Friday into a Wednesday decision.
+    _flip = next(k for k in range(mc_.WEEKLY_MIN_BARS, len(wk_raw) - 2)
+                 if wmap.iloc[k] != wmap.iloc[k + 1])
+    assert wmap.iloc[_flip] != wmap.iloc[_flip + 1], "fixture must discriminate"
+    wednesday = pd.Timestamp(wk_idx[_flip + 1]) + pd.Timedelta(days=2)
+    assert wmap.asof(wednesday) == wmap.iloc[_flip], (
+        f"mid-week lookup returned {wmap.asof(wednesday)!r}; the week "
+        f"beginning {wk_idx[_flip + 1].date()} has NOT closed yet, so its "
+        f"verdict must not be visible — this leaks future bars")
+    print(f"weekly map lookahead   : week k readable only from week k+1 "
+          f"(checked at a week where the verdict flips)")
 
     # End-to-end: real ta-computed indicators through compute() ->
     # backtest_ticker() -> simulate_trade(), no exceptions, sane R-multiples.
@@ -599,6 +731,9 @@ def parse_args() -> tuple[dict, bool]:
     p.add_argument("--commission", type=float, default=DEFAULTS["commission"])
     p.add_argument("--cooldown", type=int, default=DEFAULTS["cooldown_bars"])
     p.add_argument("--use-regime", action="store_true", default=DEFAULTS["use_regime"])
+    p.add_argument("--use-weekly", action="store_true", default=DEFAULTS["use_weekly"],
+                   help="apply the weekly-alignment filter (fetches weekly bars). "
+                        "The live config runs this ON but it has never been measured.")
     a = p.parse_args()
     cfg = dict(
         tickers       = [t.strip().upper() for t in a.tickers.split(",") if t.strip()],
@@ -612,6 +747,7 @@ def parse_args() -> tuple[dict, bool]:
         slippage_bps  = a.slippage_bps,
         commission    = a.commission,
         use_regime    = a.use_regime,
+        use_weekly    = a.use_weekly,
         cooldown_bars = a.cooldown,
     )
     return cfg, a.selftest
