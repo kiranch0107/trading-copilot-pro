@@ -3,7 +3,17 @@ numpy==2.4.6
 pandas==3.0.5
 pytz==2026.3.post1
 requests==2.34.2
-scipy==1.17.1
 streamlit==1.62.0
 ta==0.11.0
+tabulate==0.10.0
 yfinance==1.6.0
+
+# tabulate is NOT optional despite backtest.py shipping a fallback formatter.
+# oos_validate.py parses backtest.py's stdout with regexes tuned to tabulate's
+# column layout; against the fallback format the per-ticker parser returns ZERO
+# rows and the harness exits 3 ("Could not parse backtest output"). Without
+# this pin the project's single most important validation harness cannot run
+# in the project's own declared environment.
+#
+# scipy was pinned here but is imported by nothing in the repo — removed rather
+# than carried through every CI run and Streamlit Cloud cold start.
