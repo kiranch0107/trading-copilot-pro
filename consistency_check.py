@@ -454,7 +454,49 @@ def check_scan_failures_surfaced() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. Every production module must at least import
+# 6. The backtest and the live paths must price bars the same way
+# ---------------------------------------------------------------------------
+
+def check_adjustment_matches_live() -> None:
+    """
+    backtest.py fetched auto_adjust=True while app.py, scanner.py and
+    exit_monitor.py all fetched False. So the backtest measured a DIFFERENT
+    price series from the one live signals fire on, and nothing caught it for
+    weeks — it was carried as a known-open note instead of a failing test.
+
+    Measured 2026-09-02, both arms refetched twelve minutes apart:
+        adjusted  -0.018 R, 593 trades, 8 of 13 series rewrote 2337-2893 rows
+        raw       -0.021 R, 585 trades, ZERO rows rewritten
+    Performance is a tie; reproducibility is not. Raw also matches live.
+
+    This check fails if either side drifts again.
+    """
+    import backtest as bt
+
+    assert bt.AUTO_ADJUST is False, (
+        "backtest.AUTO_ADJUST is True. That series is NOT reproducible — a "
+        "refetch rewrites the full history of every dividend payer — and it "
+        "no longer matches the live paths. --adjusted-prices exists for a "
+        "deliberate comparison; the default must stay raw.")
+    print("  backtest defaults to auto_adjust=False (raw, reproducible)")
+
+    for path in ("app.py", "scanner.py", "exit_monitor.py"):
+        txt = Path(path).read_text()
+        if "auto_adjust=True" in txt:
+            raise AssertionError(
+                f"{path} fetches auto_adjust=True somewhere. Live paths use "
+                f"raw bars; a mismatch means the backtest measures a series "
+                f"nothing trades on.")
+        if "auto_adjust=False" not in txt:
+            raise AssertionError(
+                f"{path} no longer sets auto_adjust explicitly. yfinance's "
+                f"default has changed before; leaving it implicit is how the "
+                f"backtest/live split went unnoticed in the first place.")
+    print("  app.py / scanner.py / exit_monitor.py all fetch auto_adjust=False")
+
+
+# ---------------------------------------------------------------------------
+# 7. Every production module must at least import
 # ---------------------------------------------------------------------------
 
 # app.py is excluded on purpose: importing it executes the whole Streamlit
@@ -492,6 +534,7 @@ CHECKS = [
     ("weekly trend + SPY regime are one rule",     check_market_context_shared),
     ("live universe spends no reserved data",     check_universe_not_spending_reserved),
     ("scan failures are surfaced, not swallowed",  check_scan_failures_surfaced),
+    ("backtest prices match the live paths",       check_adjustment_matches_live),
     ("every production module imports",            check_modules_import),
 ]
 

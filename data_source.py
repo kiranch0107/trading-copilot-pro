@@ -37,11 +37,12 @@ which is what the scan, the signal, the charts and the universe all run on.
 That is the majority of the calls and all of the ones that block the app from
 working.
 
-Fallback daily bars are also NOT split/dividend adjusted the way Yahoo's
-auto_adjust=True output is (Tiingo's RAW columns are used deliberately here —
-see fetch_tiingo() — because most callers in this repo fetch with
-auto_adjust=False and expect raw bars; backtest.py is the one caller that
-wants auto_adjust=True and accepts the mismatch, documented at its call site).
+Fallback daily bars match what every caller in this repo now expects: Tiingo's
+RAW columns, because all of them — app.py, scanner.py, exit_monitor.py and,
+since 2026-09-02, backtest.py — fetch Yahoo with auto_adjust=False. The
+backtest used to be the one exception; that was measured and closed (adjusted
+bars are not reproducible, see backtest.py's AUTO_ADJUST note), so the
+fallback and the primary source no longer disagree about adjustment at all.
 For indicators computed over a year of data (EMA, ADX, RSI, ATR) that is
 immaterial unless the ticker split inside the window — and a split would be
 visible as an obvious step in the chart. Worth knowing, not worth blocking on.
