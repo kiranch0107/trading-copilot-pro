@@ -67,7 +67,7 @@ import hashlib
 import json
 import shutil
 import sys
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
@@ -228,18 +228,63 @@ def get_or_fetch(ticker: str, interval: str, years: int, fetch,
         if df is not None:
             return df, meta, "hit"
 
+    # On a refresh, capture what the old copy held so the change can be
+    # characterised rather than merely detected.
+    previous = None
+    if refresh:
+        previous, _ = load(ticker, interval, years)
+
     df = fetch()
     if df is None or getattr(df, "empty", True):
         return None, None, "miss"
     meta = store(ticker, interval, years, df, source="fetch")
+    if previous is not None:
+        meta = dict(meta, refresh_diff=diff_rows(previous, df))
     # Return what is ON DISK, not the frame we just fetched. The run that
     # populates the cache must see exactly what every later run will see —
     # otherwise the first run of an A/B is silently the odd one out, which is
     # the same class of bug as the data drift this module was built to stop.
     reread, meta2 = load(ticker, interval, years)
     if reread is not None:
-        return reread, (meta2 or meta), ("refresh" if refresh else "stored")
+        # meta2 comes from the manifest, which does not carry refresh_diff
+        # (it describes a transition, not the stored frame). Merge it back on
+        # or the caller silently loses the one thing that explains the change.
+        out_meta = dict(meta2 or meta)
+        if "refresh_diff" in meta:
+            out_meta["refresh_diff"] = meta["refresh_diff"]
+        return reread, out_meta, ("refresh" if refresh else "stored")
     return df, meta, ("refresh" if refresh else "stored")
+
+
+def diff_rows(old_df: "pd.DataFrame", new_df: "pd.DataFrame") -> dict:
+    """
+    What actually changed between two fetches of the same series.
+
+    The distinction this exists to draw: ONE changed row dated today is a bar
+    that is still forming. MANY changed rows spread across history is the
+    provider re-adjusting the whole series (a dividend or split re-applied
+    under auto_adjust). Those are different problems with different fixes,
+    and a bare "the hash changed" cannot tell them apart — which is exactly
+    the position this project was in when every one of 13 series changed
+    between two fetches four minutes apart.
+    """
+    out = {"rows_before": len(old_df), "rows_after": len(new_df),
+           "changed": 0, "first_changed": None, "last_changed": None}
+    if "Date" not in old_df.columns or "Date" not in new_df.columns:
+        return out
+    o = old_df.set_index(pd.to_datetime(old_df["Date"]))
+    n = new_df.set_index(pd.to_datetime(new_df["Date"]))
+    shared = o.index.intersection(n.index)
+    if len(shared) == 0:
+        return out
+    cols = [c for c in COLUMNS[1:] if c in o.columns and c in n.columns]
+    ne = (o.loc[shared, cols].to_numpy() != n.loc[shared, cols].to_numpy()).any(axis=1)
+    changed_idx = shared[ne]
+    out["changed"] = int(len(changed_idx))
+    if len(changed_idx):
+        out["first_changed"] = str(min(changed_idx).date())
+        out["last_changed"] = str(max(changed_idx).date())
+    return out
 
 
 def fingerprint(metas: "list[dict]") -> str:
@@ -426,6 +471,44 @@ def selftest() -> int:
         assert st4 == "hit" and len(df4) == 60, \
             "after a refresh the NEW bars must be what is served"
         print(f"refresh             : explicit only, replaces the entry")
+
+        # WHAT changed, not just THAT it changed. One altered row dated today
+        # is a bar still forming; forty scattered through history is the
+        # provider re-adjusting the series. The fix differs, so the report
+        # must distinguish them.
+        d = meta3.get("refresh_diff")
+        assert d is not None, "a refresh must characterise what it replaced"
+        assert d["rows_before"] == 50 and d["rows_after"] == 60
+        assert d["changed"] == 0, \
+            f"the shared rows were untouched here, got {d}"
+        print(f"refresh diff (grew) : {d['rows_before']}->{d['rows_after']} rows, "
+              f"{d['changed']} shared rows altered")
+
+        # Now the case that matters: same length, one row rewritten — the
+        # signature of a live final bar.
+        base = frame(40)
+        get_or_fetch("TAIL", "1d", 5, lambda: base)
+        edited = base.copy()
+        edited.loc[edited.index[-1], "Close"] = edited["Close"].iloc[-1] * 1.03
+        _, m_tail, _ = get_or_fetch("TAIL", "1d", 5, lambda: edited, refresh=True)
+        dt = m_tail["refresh_diff"]
+        assert dt["changed"] == 1, f"exactly one row moved, got {dt}"
+        assert dt["first_changed"] == dt["last_changed"], \
+            "a single changed row must report the same first and last date"
+        print(f"refresh diff (tail) : 1 row altered on {dt['last_changed']} "
+              f"— the live-bar signature")
+
+        # ...versus a wholesale re-adjustment, which must look different.
+        readjusted = base.copy()
+        for c in ("Open", "High", "Low", "Close"):
+            readjusted[c] = readjusted[c] * 0.997
+        _, m_adj, _ = get_or_fetch("TAIL", "1d", 5, lambda: readjusted, refresh=True)
+        da = m_adj["refresh_diff"]
+        assert da["changed"] == 40, f"every row moved, got {da}"
+        assert da["first_changed"] != da["last_changed"], \
+            "a re-adjustment spans history and must not look like a tail edit"
+        print(f"refresh diff (adj)  : {da['changed']} rows altered from "
+              f"{da['first_changed']} — the re-adjustment signature")
 
         # ── a tampered file is refetched, never trusted ──
         # The edit is asserted to have actually changed the bytes. An earlier
