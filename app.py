@@ -32,6 +32,47 @@ from rate_limit import (
 from option_chain import get_option_data, _fetch_chain_with_retry, _OPT_MAX_EXPIRIES
 
 
+def _bridge_secrets_to_env(*names: str) -> None:
+    """
+    Copy Streamlit secrets into os.environ.
+
+    data_source.py must stay Streamlit-free — scanner.py and exit_monitor.py
+    import it and run on GitHub Actions, where Streamlit is not installed — so
+    it reads its API keys from os.environ and nothing else. The two workflows
+    pass TIINGO_API_KEY in as an env var, so the fallback works there.
+
+    This app had NO such path. The Tiingo fallback exists precisely for "Yahoo
+    is unavailable", and in the app it could never activate: the key lives in
+    st.secrets and fetch_tiingo() only ever looked at os.environ. Every
+    "No configured price source returned data" the app has ever shown was
+    Yahoo failing with the second source unreachable by construction.
+
+    Only copies a name that is not already set, so a real environment variable
+    always wins over a secret.
+    """
+    import os as _os
+    for name in names:
+        if _os.environ.get(name):
+            continue
+        try:
+            val = st.secrets.get(name)
+        except Exception:
+            val = None                 # no secrets.toml at all — fine
+        if val:
+            _os.environ[name] = str(val)
+
+
+# Must run before any data fetch, so the first request already has a fallback.
+_bridge_secrets_to_env("TIINGO_API_KEY", "TELEGRAM_BOT_TOKEN",
+                       "TELEGRAM_CHAT_ID", "GITHUB_TOKEN")
+
+
+def fallback_configured() -> bool:
+    """Whether a second price source can actually be reached."""
+    import os as _os
+    return bool(_os.environ.get(data_source.TIINGO_KEY_ENV))
+
+
 def _build_stamp() -> str:
     """
     Last-modified time of this file. On Streamlit Cloud that is when the repo
@@ -557,10 +598,20 @@ def get_data_with_error(ticker: str, period: str = "1y",
         yahoo_fetch=_yf_download_with_retry)
 
     if df is None:
-        return None, (f"No configured price source returned data for "
-                      f"'{ticker}'. If the symbol is right, Yahoo (and the "
-                      f"fallback, if configured) are unavailable — wait a "
-                      f"minute and retry.")
+        # Say which situation this is. "Yahoo is down and you have no backup"
+        # and "both sources are down" need different actions from you, and the
+        # old wording ("the fallback, if configured") made you guess.
+        if fallback_configured():
+            detail = ("Both Yahoo and the Tiingo fallback returned nothing. "
+                      "That is unusual — check the symbol first, then retry "
+                      "in a minute.")
+        else:
+            detail = ("Yahoo returned nothing and NO fallback is configured, "
+                      "so there was no second source to try. This is almost "
+                      "always Yahoo rate-limiting. Set TIINGO_API_KEY in the "
+                      "app's secrets (free key from tiingo.com) and the app "
+                      "will ride through these instead of stopping.")
+        return None, (f"No price data for '{ticker}'. {detail}")
     if source != "yahoo":
         # Surfaced so a silent source switch never goes unnoticed: fallback
         # bars are not split-adjusted the way Yahoo's are.

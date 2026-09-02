@@ -684,7 +684,56 @@ def check_sizing_constants_shared() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 10. Every production module must at least import
+# 10. Every credential the workflows supply must reach the app too
+# ---------------------------------------------------------------------------
+
+def check_app_can_reach_fallback_key() -> None:
+    """
+    data_source.py reads TIINGO_API_KEY from os.environ and nothing else, and
+    it must stay that way — scanner.py and exit_monitor.py import it and run
+    where Streamlit does not exist.
+
+    scanner.yml and exit-monitor.yml both pass that key in as an env var, so
+    the fallback works unattended. app.py had NO equivalent: the key lives in
+    st.secrets there, and nothing copied it across. The second price source —
+    the entire point of which is "Yahoo is unavailable" — could never activate
+    in the app, which is the one place a human is sitting there watching it
+    fail.
+
+    Source-level because importing app.py runs the Streamlit script and makes
+    live calls (same reason CI compiles it instead).
+    """
+    import data_source
+
+    app = Path("app.py").read_text()
+    key = data_source.TIINGO_KEY_ENV
+
+    if "_bridge_secrets_to_env" not in app:
+        raise AssertionError(
+            "app.py no longer bridges st.secrets into os.environ. "
+            f"data_source reads {key} from the environment only, so the "
+            f"fallback silently cannot activate in the app.")
+    if key not in app:
+        raise AssertionError(
+            f"app.py does not bridge {key}. Yahoo throttling will stop the "
+            f"app dead with a fallback that is configured but unreachable.")
+
+    # Whatever the workflows bother to pass, the app should be able to see.
+    for wf in ("scanner.yml", "exit-monitor.yml"):
+        txt = Path(".github/workflows") / wf
+        if not txt.exists():
+            continue
+        if key in txt.read_text() and key not in app:
+            raise AssertionError(
+                f"{wf} passes {key} but app.py cannot reach it — the "
+                f"unattended paths get a fallback and the interactive one "
+                f"does not.")
+    print(f"  app.py bridges {key} from secrets; unattended paths use env")
+    print("  data_source stays env-only (Streamlit-free for the workflows)")
+
+
+# ---------------------------------------------------------------------------
+# 11. Every production module must at least import
 # ---------------------------------------------------------------------------
 
 # app.py is excluded on purpose: importing it executes the whole Streamlit
@@ -726,6 +775,7 @@ CHECKS = [
     ("oos_validate parses backtest.py's output",   check_oos_parses_backtest_output),
     ("unattended modules are Streamlit-free",      check_unattended_modules_are_streamlit_free),
     ("sizing constants live in one place",         check_sizing_constants_shared),
+    ("app can reach the price fallback key",       check_app_can_reach_fallback_key),
     ("every production module imports",            check_modules_import),
 ]
 
