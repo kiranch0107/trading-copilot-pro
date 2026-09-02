@@ -52,6 +52,9 @@ jobs:
       - name: universe.py — universe selection, sector cap, snapshot loader
         run: python universe.py --selftest
 
+      - name: bar_cache.py — reproducible bars (hash, tamper, fidelity)
+        run: python bar_cache.py --selftest
+
       - name: backtest.py — signal_core-backed trade simulation
         run: python backtest.py --selftest
 

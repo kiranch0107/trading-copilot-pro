@@ -100,6 +100,10 @@ try:
 except ImportError:
     data_source = None    # optional — see download(); falls back to Yahoo-only
 try:
+    import bar_cache
+except ImportError:
+    bar_cache = None      # optional — see download(); runs uncached, and says so
+try:
     import yfinance as yf
 except ImportError:
     raise SystemExit("Missing yfinance. Run: pip install yfinance pandas ta tabulate numpy")
@@ -436,8 +440,21 @@ def _yahoo_download(ticker: str, period: str, interval: str) -> pd.DataFrame | N
                        progress=False, auto_adjust=True)
 
 
-def download(ticker: str, years: int,
-             interval: str = "1d") -> pd.DataFrame | None:
+# ── on-disk bars (bar_cache.py) ──
+# ON by default. A research harness that reads different bars on every run
+# cannot measure anything: two runs of an identical command on 2026-09-02
+# differed by 7 trades and 0.014 R purely because Yahoo returned different
+# history, which is larger than most effects worth testing. Cached runs are
+# reproducible by construction, and the fingerprint printed by run() says
+# whether two runs read the same inputs. --no-cache and --refresh-cache are
+# the deliberate ways out.
+CACHE_ENABLED = True
+CACHE_REFRESH = False
+_CACHE_LOG: list[tuple] = []
+
+
+def _download_uncached(ticker: str, years: int,
+                       interval: str = "1d") -> pd.DataFrame | None:
     """
     Yahoo first, falling back through data_source.fetch_daily() (currently
     Tiingo, if TIINGO_API_KEY is set) when Yahoo comes back empty — the same
@@ -472,7 +489,31 @@ def download(ticker: str, years: int,
         return None
 
 
+def download(ticker: str, years: int,
+             interval: str = "1d") -> pd.DataFrame | None:
+    """
+    Bars for (ticker, years, interval), from disk when we already have them.
+
+    The cache is deliberately never-expiring: reproducing a result means
+    reading the bars the original run read, so freshness is an explicit act
+    (--refresh-cache), not something that happens to you between two runs of
+    the same command. bar_cache.py's docstring has the full reasoning.
+
+    Every read is logged so run() can print one fingerprint over the whole
+    dataset — the line that tells you whether two runs are comparable at all.
+    """
+    if bar_cache is None:
+        return _download_uncached(ticker, years, interval)
+    df, meta, status = bar_cache.get_or_fetch(
+        ticker, interval, years,
+        lambda: _download_uncached(ticker, years, interval),
+        refresh=CACHE_REFRESH, enabled=CACHE_ENABLED)
+    _CACHE_LOG.append((meta, status))
+    return df
+
+
 def run(cfg: dict) -> None:
+    _CACHE_LOG.clear()
     print("=" * 78)
     print("TRADING COPILOT ELITE — HISTORICAL BACKTEST (real data)")
     print("=" * 78)
@@ -587,6 +628,13 @@ def run(cfg: dict) -> None:
     print(f"  Best / worst   : {agg['best']:+.2f} R / {agg['worst']:+.2f} R")
     print(f"  Bars tested    : {total_bars}   <- compare across runs FIRST; "
           f"if this moves, the data moved")
+    if bar_cache is not None and _CACHE_LOG:
+        metas = [m for m, _ in _CACHE_LOG]
+        statuses = [st for _, st in _CACHE_LOG]
+        print(f"  {bar_cache.summarise(metas, statuses)}")
+        if not CACHE_ENABLED:
+            print("     ^ caching OFF: this run is NOT reproducible, and cannot")
+            print("       be compared against any other run.")
 
     # ── which gate rejected what ──
     reached = tally.get("reached_filters", 0)
@@ -777,6 +825,50 @@ def selftest() -> int:
         f"tally must count survivors and bars reaching the filters, got {_tal!r}"
     print("gate tally              : counts weekly rejections and survivors")
 
+    # ── the on-disk bar cache actually caches ──
+    # A harness that refetches on every run cannot measure anything smaller
+    # than its data feed's own drift, which here was 7 trades and 0.014 R
+    # between two runs of the same command. These assertions are what make
+    # "reproducible" a property rather than an intention.
+    if bar_cache is not None:
+        import tempfile as _tf, shutil as _sh
+        from pathlib import Path as _P
+        _real = (bar_cache.CACHE_DIR, bar_cache.MANIFEST)
+        _tmp = _P(_tf.mkdtemp(prefix="bt_cache_selftest_"))
+        bar_cache.CACHE_DIR, bar_cache.MANIFEST = _tmp, _tmp / "manifest.json"
+        _real_unc = globals()["_download_uncached"]
+        _fetches = []
+        def _counting(t, y, interval="1d"):
+            _fetches.append(t)
+            n = 120
+            idx = pd.bdate_range("2024-01-01", periods=n)
+            c = np.linspace(100, 130, n)
+            return pd.DataFrame({"Date": idx, "Open": c, "High": c * 1.01,
+                                 "Low": c * 0.99, "Close": c,
+                                 "Volume": np.full(n, 1e6)})
+        globals()["_download_uncached"] = _counting
+        try:
+            d1 = download("ZZZ", 5)
+            d2 = download("ZZZ", 5)
+            assert d1 is not None and d2 is not None
+            assert len(_fetches) == 1, \
+                f"second download must hit the cache, got {len(_fetches)} fetches"
+            assert d1.equals(d2), "cached bars must come back identical"
+            print(f"bar cache               : 2 downloads, 1 fetch, identical bars")
+
+            # --no-cache must genuinely bypass, or the escape hatch is a lie.
+            global CACHE_ENABLED
+            CACHE_ENABLED = False
+            download("ZZZ", 5)
+            assert len(_fetches) == 2, "--no-cache must actually refetch"
+            CACHE_ENABLED = True
+            print(f"--no-cache              : bypasses the cache, refetches")
+        finally:
+            globals()["_download_uncached"] = _real_unc
+            _sh.rmtree(_tmp, ignore_errors=True)
+            bar_cache.CACHE_DIR, bar_cache.MANIFEST = _real
+            CACHE_ENABLED = True
+
     # ── weekly trend map: the filter the OOS test never measured ──
     # Built so weekly_confirm can finally be A/B'd. Two things must hold: it
     # must agree with the LIVE rule (market_context), and it must not peek.
@@ -880,10 +972,24 @@ def parse_args() -> tuple[dict, bool]:
     p.add_argument("--commission", type=float, default=DEFAULTS["commission"])
     p.add_argument("--cooldown", type=int, default=DEFAULTS["cooldown_bars"])
     p.add_argument("--use-regime", action="store_true", default=DEFAULTS["use_regime"])
+    p.add_argument("--no-cache", action="store_true",
+                   help="bypass bar_cache.py and fetch live. Makes the run "
+                        "NON-reproducible — two runs minutes apart can differ "
+                        "by more than the effect you are measuring.")
+    p.add_argument("--refresh-cache", action="store_true",
+                   help="refetch every series and replace what is cached. "
+                        "Do this deliberately, between experiments — never "
+                        "in the middle of an A/B, or the arms stop being "
+                        "comparable.")
     p.add_argument("--use-weekly", action="store_true", default=DEFAULTS["use_weekly"],
                    help="apply the weekly-alignment filter (fetches weekly bars). "
                         "The live config runs this ON but it has never been measured.")
     a = p.parse_args()
+
+    global CACHE_ENABLED, CACHE_REFRESH
+    CACHE_ENABLED = not a.no_cache
+    CACHE_REFRESH = a.refresh_cache
+
     cfg = dict(
         tickers       = [t.strip().upper() for t in a.tickers.split(",") if t.strip()],
         years         = a.years,

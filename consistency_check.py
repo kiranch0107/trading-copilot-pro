@@ -405,7 +405,7 @@ def check_universe_not_spending_reserved() -> None:
 # instead (see tests.yml).
 IMPORTABLE_MODULES = [
     "signal_core", "data_source", "rate_limit", "market_context", "gh_sync",
-    "journal_store",
+    "journal_store", "bar_cache",
     "option_chain", "universe", "scanner", "exit_monitor", "backtest",
     "oos_validate", "data_reservation", "excursion_analysis", "churn_tracker",
     "universe_backtest", "option_backtest", "liquidity_check",
