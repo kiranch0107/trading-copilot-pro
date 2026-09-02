@@ -83,6 +83,20 @@ MANIFEST = CACHE_DIR / "manifest.json"
 # make the cache a source of divergence rather than a cure for it.
 COLUMNS = ["Date", "Open", "High", "Low", "Close", "Volume"]
 
+# Bumped whenever the fingerprint FORMULA changes, and printed as a prefix.
+#
+# This exists because of a mistake: adding the `variant` field to the digest
+# changed the fingerprint of data that had not moved at all — a cached run
+# reported a new value with "13 cached / 0 fetched" and every per-ticker
+# number identical. For a tool whose entire promise is "same fingerprint means
+# same bars", a silent formula change is the one failure it must not have. The
+# prefix makes a formula change look like a formula change (v1-... vs v2-...)
+# instead of like data drift.
+#
+#   v1  ticker|interval|years|hash
+#   v2  ticker|interval|years|variant|hash   (adjusted vs raw must not collide)
+FINGERPRINT_VERSION = "v2"
+
 
 def _key(ticker: str, interval: str, years: int, variant: str = "") -> str:
     """
@@ -308,7 +322,8 @@ def fingerprint(metas: "list[dict]") -> str:
                    for m in metas if m and m.get("hash"))
     if not parts:
         return "none"
-    return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
+    digest = hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
+    return f"{FINGERPRINT_VERSION}-{digest}"
 
 
 def age_days(meta: dict | None) -> int | None:
@@ -583,6 +598,11 @@ def selftest() -> int:
         f1 = fingerprint(list(m.values()))
         assert f1 == fingerprint(list(m.values())), "fingerprint must be stable"
         assert fingerprint([]) == "none"
+        # A formula change must be VISIBLE. Without the version prefix, adding
+        # a field to the digest silently reprints every past fingerprint as a
+        # different value, so a run whose data never moved looks like it did.
+        assert f1.startswith(FINGERPRINT_VERSION + "-"), \
+            f"fingerprint must carry its formula version, got {f1!r}"
         mutated = [dict(e) for e in m.values()]
         mutated[0]["hash"] = "deadbeefdeadbeef"
         assert fingerprint(mutated) != f1, \
