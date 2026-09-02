@@ -348,6 +348,55 @@ def check_market_context_shared() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 7. The live universe must not spend reserved (held-out) data
+# ---------------------------------------------------------------------------
+
+def check_universe_not_spending_reserved() -> None:
+    """
+    data_reservation.py protects held-out tickers so a future out-of-sample
+    test is actually out-of-sample. But nothing connected it to universe.py,
+    and on 2026-09-02 every one of the 66 names in CANDIDATE_POOL was either
+    contaminated or reserved — so the dynamic ranker could not pick a ticker
+    WITHOUT spending research capital, and the scanner had been alerting on
+    six Tranche B names for weeks.
+
+    Live trading on a reserved name spends it: you see the outcome, you form a
+    view, and the tranche is no longer clean. This makes that impossible to do
+    by accident again.
+    """
+    import data_reservation as dr
+    import universe as uni
+
+    r = dr.check_clean(uni.CANDIDATE_POOL)
+    reserved = {t for v in r["reserved"].values() for t in v}
+    if reserved:
+        raise AssertionError(
+            f"universe.CANDIDATE_POOL contains {len(reserved)} RESERVED "
+            f"ticker(s): {', '.join(sorted(reserved))}.\n"
+            f"  The dynamic universe feeds scanner.py, so these would be "
+            f"traded live — which spends a held-out tranche you cannot get "
+            f"back.\n"
+            f"  Either remove them from the pool, or claim the tranche "
+            f"deliberately:  python data_reservation.py --spend <X> "
+            f"--purpose '...'")
+    print(f"  CANDIDATE_POOL ({len(uni.CANDIDATE_POOL)}) holds no "
+          f"reserved-but-unspent tickers")
+
+    # The pool must still be broad enough for the ranker to mean anything.
+    if len(uni.CANDIDATE_POOL) < 40:
+        raise AssertionError(
+            f"CANDIDATE_POOL is down to {len(uni.CANDIDATE_POOL)} names. "
+            f"Ranking by relative strength stops being a selection at that "
+            f"size — widen it with names outside the reservation tranches.")
+    labelled = [t for t in uni.CANDIDATE_POOL if t not in uni.SECTORS]
+    if labelled:
+        raise AssertionError(
+            f"unlabelled tickers in CANDIDATE_POOL: {labelled} — the sector "
+            f"cap silently treats them as one bucket ('Other').")
+    print(f"  every pool ticker has a sector label; sector cap is meaningful")
+
+
+# ---------------------------------------------------------------------------
 # 5. Every production module must at least import
 # ---------------------------------------------------------------------------
 
@@ -384,6 +433,7 @@ CHECKS = [
     ("app.py defaults derive from signal_core",    check_app_defaults_derived),
     ("backtest.evaluate_signal callers correct",   check_backtest_callers),
     ("weekly trend + SPY regime are one rule",     check_market_context_shared),
+    ("live universe spends no reserved data",     check_universe_not_spending_reserved),
     ("every production module imports",            check_modules_import),
 ]
 
