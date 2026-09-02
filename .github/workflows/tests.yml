@@ -46,6 +46,9 @@ jobs:
       - name: data_source.py — Yahoo / fallback provider routing
         run: python data_source.py
 
+      - name: market_context.py — weekly trend + SPY regime decision rules
+        run: python market_context.py
+
       - name: universe.py — universe selection, sector cap, snapshot loader
         run: python universe.py --selftest
 

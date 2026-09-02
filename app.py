@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pytz
 import signal_core
 import data_source
+import market_context
 import gh_sync
 from journal_store import (
     load_alerts, save_alerts, load_journal, save_journal,
@@ -469,10 +470,12 @@ def send_telegram_alert(ticker: str, message: str) -> None:
 # its own independent budget. Imported by name above; every call site below
 # (_rl.wait(), _rl_slow.wait(), _is_rate_limit_error(e)) is unchanged.
 # ─────────────────────────────────────────────
-# F1 FIX: SPY regime uses ADX=20 deliberately (index trends are smoother than
-# individual stocks so a lower threshold is appropriate). Documented here so
-# it's not confused with the per-ticker ADX_MIN (default 25, user-tunable).
-SPY_ADX_THRESHOLD = 20
+# SPY_ADX_THRESHOLD used to live here: the regime was only Bull/Bear when SPY's
+# ADX cleared 20, and "Neutral" below it — which signal_core reads as "no view"
+# and does not filter on. backtest.build_regime_series() has no such gate, and
+# the 591-trade OOS test ran with use_regime=True, so the gate was never part of
+# anything that was validated. It is gone, not moved: see market_context.py,
+# which reports SPY's ADX but does not let it decide the regime.
 
 _YF_RETRY_TRIES = 3
 _YF_RETRY_DELAY = 2.0
@@ -693,28 +696,21 @@ def check_adx(df: pd.DataFrame) -> tuple[bool, float]:
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_weekly_trend(ticker: str) -> str | None:
-    try:
+    """
+    Weekly trend via market_context — the SAME rule scanner.py now uses.
+
+    This used to be an EMA10w-vs-EMA20w crossover here while scanner.py used
+    price-vs-EMA20w. Different questions, opposite verdicts on ordinary
+    pullbacks, on a BLOCKING filter. See market_context.py's docstring for the
+    evidence (there is none either way — the backtest runs weekly_confirm=False,
+    so this rule is chosen for consistency with every other trend test in the
+    system, and the filter itself remains unvalidated).
+    """
+    def _fetch(t, period, interval):
         _rl_slow.wait()
-        df = yf.download(ticker, period="1y", interval="1wk", progress=False)
-        if df is None or df.empty or len(df) < 20:
-            return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df = df.dropna(subset=["Close"])
-        df["EMA10w"] = ta.trend.ema_indicator(df["Close"], window=10)
-        df["EMA20w"] = ta.trend.ema_indicator(df["Close"], window=20)
-        df = df.dropna(subset=["EMA10w","EMA20w"])
-        e10 = float(df["EMA10w"].iloc[-1])
-        e20 = float(df["EMA20w"].iloc[-1])
-        # B1 FIX: use EMA crossover only (e10 vs e20), not triple-chain
-        # price>e10>e20 was too strict — in ranging markets where price dips
-        # below e10 temporarily it returned None even in a clear uptrend.
-        if e10 > e20:   return "Bullish"
-        elif e10 < e20: return "Bearish"
-        return None
-    except Exception as e:
-        logger.exception("get_weekly_trend(%s): %s", ticker, e)
-        return None
+        return yf.download(t, period=period, interval=interval,
+                           progress=False, auto_adjust=False)
+    return market_context.get_weekly_trend(ticker, _fetch)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -768,34 +764,23 @@ def check_earnings_blackout(ticker: str) -> tuple[bool, str]:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_spy_regime() -> dict:
-    try:
-        _rl_slow.wait()   # SPY fetched once per 30 min — use slow limiter to avoid crowding data calls
-        df = yf.download("SPY", period="14mo", interval="1d", progress=False)
-        if df is None or df.empty:
-            return {"regime":"Unknown","reasoning":"SPY data unavailable"}
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df = df.dropna(subset=["Close","High","Low"])
-        df["SMA200"] = df["Close"].rolling(200).mean()
-        df["ADX"]    = ta.trend.adx(df["High"],df["Low"],df["Close"],window=14)
-        df           = df.dropna(subset=["SMA200","ADX"])
-        price   = float(df["Close"].iloc[-1])
-        sma200  = float(df["SMA200"].iloc[-1])
-        adx_val = float(df["ADX"].iloc[-1])
-        if price > sma200 and adx_val >= SPY_ADX_THRESHOLD:
-            regime    = "Bull"
-            reasoning = f"SPY ${price:.0f} above 200-SMA ${sma200:.0f} (ADX {adx_val:.0f})"
-        elif price <= sma200 and adx_val >= SPY_ADX_THRESHOLD:
-            regime    = "Bear"
-            reasoning = f"SPY ${price:.0f} below 200-SMA ${sma200:.0f} (ADX {adx_val:.0f})"
-        else:
-            regime    = "Neutral"
-            reasoning = f"SPY ${price:.0f} near 200-SMA ${sma200:.0f} — choppy (ADX {adx_val:.0f})"
-        return {"regime":regime,"price":round(price,2),"sma200":round(sma200,2),
-                "adx":round(adx_val,1),"reasoning":reasoning}
-    except Exception as e:
-        logger.exception("get_spy_regime: %s", e)
-        return {"regime":"Unknown","reasoning":str(e)}
+    """
+    Macro regime via market_context — the SAME rule scanner.py and
+    backtest.build_regime_series() use: price vs its own 200-SMA, two-state.
+
+    This used to gate the verdict on ADX >= 20 and return "Neutral" below it,
+    which signal_core reads as "no view" — so in choppy tape the app applied NO
+    regime filter at all while the scanner still blocked counter-regime setups.
+    The backtest never had that gate, and the 591-trade OOS test ran with
+    use_regime=True, so the ungated rule is the validated one. ADX is still
+    fetched and displayed; it just no longer decides anything.
+    """
+    def _fetch(t, period, interval):
+        _rl_slow.wait()   # SPY fetched once per 30 min — slow limiter so it
+                          # does not crowd the per-ticker data calls
+        return yf.download(t, period=period, interval=interval,
+                           progress=False, auto_adjust=False)
+    return market_context.get_spy_regime(_fetch)
 
 
 # ─────────────────────────────────────────────
