@@ -71,7 +71,16 @@ class SignalParams:
     volume_soft_mult: float = 0.70  # base condition floor
     atr_stop_mult: float = 1.25
     atr_tgt_mult: float = 4.0
-    weekly_confirm: bool = True
+    # OFF since 2026-09-02, on measurement. Over 15 years x 12 tickers the
+    # weekly gate rejected 5 bars out of the 13,748 that reached the filters
+    # (0.04%) — it is checked after ADX >= 35, and a name that trending is
+    # essentially never on the wrong side of its 20-week EMA. Against that it
+    # FAILS CLOSED: evaluate() treats a missing weekly trend as blocking (see
+    # below), so every rate-limited Yahoo call killed live alerts outright.
+    # It was also never in the validated config — the frozen OOS run had it
+    # off. app.py still exposes it as a sidebar checkbox; this is the default,
+    # not a removal.
+    weekly_confirm: bool = False
     spy_regime_on: bool = True
 
 
@@ -492,17 +501,37 @@ def selftest() -> int:
         assert r["filters"]["Macro Regime"]["pass"] is True, word
     print(f"regime neutral/unknown    : does not block")
 
-    # REGRESSION: weekly unavailable must BLOCK, as app.py always did.
-    r = evaluate(_frame(), "TEST", spy_regime={"regime": "Bull"},
+    # The weekly filter is OFF by default (see SignalParams), so these tests
+    # pin it on explicitly. Testing it through DEFAULTS would have quietly
+    # stopped testing anything the moment the default flipped.
+    wk_on = replace(DEFAULTS, weekly_confirm=True)
+
+    # REGRESSION: weekly unavailable must BLOCK when the filter is ON. Failing
+    # closed is deliberate — a dead fetch must not silently loosen the system.
+    # It is also the reason the filter now defaults off: it made every
+    # rate-limited Yahoo call an outage.
+    r = evaluate(_frame(), "TEST", wk_on, spy_regime={"regime": "Bull"},
                  weekly_trend=None)
     assert r["filters"]["Multi-TF Alignment"]["pass"] is False
     print(f"weekly unavailable        : blocks (not silently permissive)")
 
     # weekly disagreement
-    r = evaluate(_frame(), "TEST", spy_regime={"regime": "Bullish"},
+    r = evaluate(_frame(), "TEST", wk_on, spy_regime={"regime": "Bullish"},
                  weekly_trend="Bearish")
     assert r["filters"]["Multi-TF Alignment"]["pass"] is False
     print(f"weekly disagreement       : filter fails")
+
+    # ...and with the filter at its DEFAULT, none of that applies: the weekly
+    # value is inert and cannot block. If this fails, the default has moved
+    # back and the live scanner is fetching weekly bars again.
+    assert DEFAULTS.weekly_confirm is False, \
+        "weekly_confirm must default OFF — it rejected 5 bars in 13,748 and " \
+        "fails closed on a network error"
+    for _wk in (None, "Bearish", "Bullish"):
+        r = evaluate(_frame(), "TEST", spy_regime={"regime": "Bull"},
+                     weekly_trend=_wk)
+        assert r["filters"]["Multi-TF Alignment"]["pass"] is True, _wk
+    print(f"weekly at default (OFF)   : inert, blocks nothing")
 
     # bearish path
     r = evaluate(_frame(up=False, rsi=35), "TEST",

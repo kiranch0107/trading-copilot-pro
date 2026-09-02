@@ -48,13 +48,19 @@ Filters:
 
 WHY --use-weekly EXISTS
 -----------------------
-weekly_confirm defaults to TRUE in signal_core, so the LIVE system (app.py
-and scanner.py) applies weekly alignment as a BLOCKING filter. This file used
+weekly_confirm defaulted to TRUE in signal_core until 2026-09-02, so the LIVE
+system applied weekly alignment as a BLOCKING filter. This file used
 to force it off unconditionally, which meant the 591-trade out-of-sample
 validation never measured it: live was running a gate that nothing had
 tested. --use-weekly fetches weekly bars and supplies the same
-price-vs-20w-EMA verdict market_context computes live, so the filter can
+price-vs-20w-EMA verdict market_context computes live, so the filter could
 finally be A/B'd.
+
+RESULT (2026-09-02): the gate rejected 5 bars out of the 13,748 that reached
+the filters, and 0 that no other gate would have caught. Expectancy moved
+less than the run-to-run noise of the data feed itself. signal_core's default
+is now weekly_confirm=False, matching the config the OOS run validated, so
+live and this file finally agree. The flag stays for re-measurement.
 
 The hard part is lookahead. A weekly bar labelled Monday does not CLOSE until
 Friday, so its verdict is not knowable during its own week — using it on
@@ -230,15 +236,28 @@ def evaluate_signal(df: pd.DataFrame, i: int, params: sc.SignalParams,
     if r["blocked"]:
         _count("base")
         return None
+    # Each gate is counted INDEPENDENTLY, before any of them short-circuits.
+    # Counting on the way out instead would make every number conditional on
+    # the ones above it: ADX >= 35 rejects ~94% of setups, so a weekly gate
+    # counted after it can only ever report on the survivors and reads as
+    # "does nothing" even when it disagrees constantly. The counts therefore
+    # OVERLAP and do not sum to the total — the report says so.
+    adx_ok = r["filters"]["ADX Trend Strength"]["pass"]
+    regime_ok = r["filters"]["Macro Regime"]["pass"]
+    weekly_ok = r["filters"]["Multi-TF Alignment"]["pass"]
     _count("reached_filters")
-    if not r["filters"]["ADX Trend Strength"]["pass"]:
+    if not adx_ok:
         _count("adx")
-        return None
-    if not r["filters"]["Macro Regime"]["pass"]:
+    if not regime_ok:
         _count("regime")
-        return None
-    if not r["filters"]["Multi-TF Alignment"]["pass"]:
+    if not weekly_ok:
         _count("weekly")
+    if not (adx_ok and regime_ok and weekly_ok):
+        # What the weekly gate uniquely costs: bars nothing else would have
+        # rejected. This is the number that decides whether the filter earns
+        # its keep, and it is invisible in the overlapping counts above.
+        if adx_ok and regime_ok and not weekly_ok:
+            _count("weekly_only")
         return None
     _count("passed")
 
@@ -368,7 +387,7 @@ def build_weekly_trend_map(ticker: str, years: int) -> "pd.Series | None":
     """
     Weekly trend as of each date, for testing the weekly_confirm filter.
 
-    THE POINT OF THIS FUNCTION: weekly_confirm defaults to TRUE live but
+    THE POINT OF THIS FUNCTION: weekly_confirm defaulted to TRUE live but
     backtest.build_signal_params() forces it OFF, so the 591-trade OOS test
     never applied the weekly filter at all. The live config was therefore
     running a BLOCKING gate that nothing had measured. This makes it
@@ -464,7 +483,7 @@ def run(cfg: dict) -> None:
     print(f"Max hold     : {cfg['max_hold']} bars   Slippage: {cfg['slippage_bps']}bps/side   "
           f"Regime filter: {'ON (SPY 200-SMA)' if cfg['use_regime'] else 'OFF'}")
     print(f"Weekly filter: {'ON (price vs 20w EMA)' if cfg.get('use_weekly') else 'OFF'}"
-          f"{'   <- the live default, measured here' if cfg.get('use_weekly') else ''}")
+          f"{'   <- OFF live since 2026-09-02; this re-measures it' if cfg.get('use_weekly') else '   (matches the live default)'}")
     print("=" * 78)
 
     params = build_signal_params(cfg)
@@ -488,6 +507,7 @@ def run(cfg: dict) -> None:
     # alone could not tell "the filter barely matters" apart from "the filter
     # never ran". These counts distinguish the two from the output itself.
     tally: dict[str, int] = {}
+    total_bars = 0
 
     for tk in cfg["tickers"]:
         raw = download(tk, cfg["years"])
@@ -524,12 +544,20 @@ def run(cfg: dict) -> None:
                                  weekly_series=wk_series, tally=tally)
         s = stats(trades)
         all_trades.extend(trades)
+        total_bars += len(df)
 
+        # Bars is reported because a silently TRUNCATED download changes every
+        # number in the row with no other trace. Two runs of the identical
+        # command four minutes apart differed by 7 trades and 0.014 R purely
+        # because Yahoo returned less history the second time; nothing in the
+        # output said so, and the difference was larger than the effect the
+        # run was measuring. Compare this column across runs before comparing
+        # anything else.
         if s["trades"] == 0:
-            per_ticker_rows.append([tk, 0, "—", "—", "—", "—", "—", "—"])
+            per_ticker_rows.append([tk, len(df), 0, "—", "—", "—", "—", "—", "—"])
         else:
             per_ticker_rows.append([
-                tk, s["trades"], f"{s['win_rate']:.0f}%",
+                tk, len(df), s["trades"], f"{s['win_rate']:.0f}%",
                 f"{s['avg_r']:+.3f}", f"{s['total_r']:+.1f}",
                 f"{s['pf']:.2f}", f"{s['max_dd']:+.1f}", f"{s['avg_hold']:.0f}",
             ])
@@ -537,7 +565,7 @@ def run(cfg: dict) -> None:
     print("\nPER-TICKER RESULTS")
     print(tabulate(
         per_ticker_rows,
-        headers=["Ticker", "Trades", "Win%", "Avg R", "Total R",
+        headers=["Ticker", "Bars", "Trades", "Win%", "Avg R", "Total R",
                  "PF", "MaxDD", "Hold"],
         tablefmt="simple",
     ))
@@ -557,6 +585,8 @@ def run(cfg: dict) -> None:
     print(f"  Max drawdown   : {agg['max_dd']:+.1f} R")
     print(f"  Avg hold       : {agg['avg_hold']:.1f} bars")
     print(f"  Best / worst   : {agg['best']:+.2f} R / {agg['worst']:+.2f} R")
+    print(f"  Bars tested    : {total_bars}   <- compare across runs FIRST; "
+          f"if this moves, the data moved")
 
     # ── which gate rejected what ──
     reached = tally.get("reached_filters", 0)
@@ -565,6 +595,8 @@ def run(cfg: dict) -> None:
         print("GATE REJECTIONS (bars that formed a valid setup, then were filtered)")
         print("=" * 78)
         print(f"  Bars reaching the filters : {reached}")
+        print("  Counted independently — a bar can fail several gates, so")
+        print("  these OVERLAP and will not sum to the total.")
         for key, label in (("adx", "ADX below minimum"),
                            ("regime", "Macro regime conflict"),
                            ("weekly", "Weekly misaligned/missing")):
@@ -574,8 +606,13 @@ def run(cfg: dict) -> None:
                 state = "   (filter OFF)"
             elif key == "regime" and not cfg.get("use_regime"):
                 state = "   (filter OFF)"
-            print(f"  rejected by {label:<26}: {n_rej:>6}"
+            print(f"  failed {label:<31}: {n_rej:>6}"
                   f"  ({n_rej / reached * 100:5.1f}%){state}")
+        wk_only = tally.get("weekly_only", 0)
+        print(f"  ...of which WEEKLY ALONE rejected : {wk_only:>6}"
+              f"  ({wk_only / reached * 100:5.1f}%)")
+        print("     (bars no other gate would have stopped — what the weekly")
+        print("      filter uniquely costs you)")
         print(f"  survived every gate       : {tally.get('passed', 0)}")
 
         # A gate that is ON and rejects nothing is a wiring failure, not a

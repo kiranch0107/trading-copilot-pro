@@ -702,9 +702,10 @@ def get_weekly_trend(ticker: str) -> str | None:
     This used to be an EMA10w-vs-EMA20w crossover here while scanner.py used
     price-vs-EMA20w. Different questions, opposite verdicts on ordinary
     pullbacks, on a BLOCKING filter. See market_context.py's docstring for the
-    evidence (there is none either way — the backtest runs weekly_confirm=False,
-    so this rule is chosen for consistency with every other trend test in the
-    system, and the filter itself remains unvalidated).
+    evidence: the rule is chosen for consistency with every other trend test
+    in the system, not because it beat the alternative. The filter itself was
+    measured on 2026-09-02 and rejected 5 of 13,748 bars, so it now DEFAULTS
+    OFF (the sidebar checkbox still turns it on). See oos_validate.lock.json.
     """
     def _fetch(t, period, interval):
         _rl_slow.wait()
