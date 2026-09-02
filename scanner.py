@@ -228,6 +228,17 @@ def save_state(state: dict) -> None:
                      "expect repeat alerts next run.", STATE_FILE, e)
 
 
+def is_total_outage(failed: list, watchlist: list) -> bool:
+    """
+    Every ticker failed to return usable data — the scan did not happen.
+
+    Kept separate from the alerting so it can be tested. An empty watchlist is
+    NOT an outage: nothing was asked for, so nothing failing is consistent.
+    Without that guard a misconfigured watchlist would page you every run.
+    """
+    return bool(watchlist) and len(failed) == len(watchlist)
+
+
 def recently_alerted(state: dict, ticker: str, trend: str) -> bool:
     """
     Cooldown is keyed on ticker AND direction, so a genuine flip from Bullish
@@ -682,6 +693,29 @@ def run(args) -> int:
             logger.exception("%s failed: %s", tk, e)
             failed.append(f"{tk} ({type(e).__name__})")
 
+    # A scan where EVERY ticker failed is an outage, not a quiet market — and
+    # this runs unattended on a schedule, so the only place it would otherwise
+    # appear is a workflow log nobody opens. The app showed the same failure
+    # as "0 setups" on 2026-09-02; the scanner's version of that mistake is
+    # worse, because silence is its normal output.
+    #
+    # Cooldown-keyed like any other alert so a day-long Yahoo outage sends one
+    # message, not one per scheduled run.
+    if is_total_outage(failed, WATCHLIST):
+        if not recently_alerted(state, "SCANNER", "OUTAGE"):
+            send_alert(
+                "⚠️ SCANNER OUTAGE\n"
+                f"All {len(WATCHLIST)} watchlist tickers failed to return "
+                f"usable data, so nothing was scanned this run. This is NOT "
+                f"'no setups' — it means the scan did not happen.\n\n"
+                f"{', '.join(failed)}",
+                dry_run=args.dry_run)
+            if not args.dry_run:
+                state["SCANNER:OUTAGE"] = time.time()
+        else:
+            logger.warning("Total scan outage, but an outage alert was sent "
+                           "within %dh — suppressed.", ALERT_COOLDOWN_HRS)
+
     if not args.dry_run:
         save_state(state)
 
@@ -692,14 +726,54 @@ def run(args) -> int:
     return 0
 
 
+def selftest() -> int:
+    """
+    Offline checks for the unattended paths. This module sends real alerts on
+    a schedule and had NO test coverage at all, which is how it could have
+    fetched nothing for days while looking exactly like a quiet market.
+    """
+    wl = ["AAA", "BBB", "CCC"]
+
+    assert is_total_outage(["AAA (no data)", "BBB (x)", "CCC (y)"], wl) is True
+    print("total outage            : all tickers failed -> True")
+
+    assert is_total_outage(["AAA (no data)"], wl) is False, \
+        "a partial failure is not an outage — the scan still looked at the rest"
+    assert is_total_outage([], wl) is False
+    print("partial / no failure    : not an outage")
+
+    # An empty watchlist must not page you forever. len([]) == len([]) is the
+    # trap: a misconfigured universe would alert on every scheduled run.
+    assert is_total_outage([], []) is False, \
+        "an empty watchlist is a config problem, not a data outage — and " \
+        "alerting on it every run would train you to ignore the alert"
+    print("empty watchlist         : not an outage (no false page)")
+
+    # The cooldown that stops a day-long outage becoming one alert per run.
+    st_ = {}
+    assert recently_alerted(st_, "SCANNER", "OUTAGE") is False
+    st_["SCANNER:OUTAGE"] = time.time()
+    assert recently_alerted(st_, "SCANNER", "OUTAGE") is True
+    st_["SCANNER:OUTAGE"] = time.time() - (ALERT_COOLDOWN_HRS * 3600) - 1
+    assert recently_alerted(st_, "SCANNER", "OUTAGE") is False, \
+        "the outage alert must fire again once the cooldown has elapsed"
+    print(f"outage alert cooldown   : one per {ALERT_COOLDOWN_HRS}h, then re-arms")
+
+    print("\nAll self-tests passed.")
+    return 0
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Watchlist scanner")
     p.add_argument("--dry-run", action="store_true",
                    help="Print alerts instead of sending; don't touch state")
     p.add_argument("--force", action="store_true",
                    help="Run even when the market is closed")
+    p.add_argument("--selftest", action="store_true",
+                   help="Run offline checks and exit (no network, no alerts)")
     return p.parse_args()
 
 
 if __name__ == "__main__":
-    raise SystemExit(run(parse_args()))
+    _args = parse_args()
+    raise SystemExit(selftest() if _args.selftest else run(_args))

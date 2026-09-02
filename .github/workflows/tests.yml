@@ -78,6 +78,9 @@ jobs:
       # option_backtest.py sat broken (AttributeError on every run) after
       # backtest.evaluate_signal()'s signature changed under them.
 
+      - name: scanner.py — outage detection + alert cooldown (offline)
+        run: python scanner.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 
