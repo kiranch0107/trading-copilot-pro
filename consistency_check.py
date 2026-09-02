@@ -496,7 +496,84 @@ def check_adjustment_matches_live() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. Every production module must at least import
+# 7. oos_validate.py must be able to parse backtest.py's ACTUAL output
+# ---------------------------------------------------------------------------
+
+def check_oos_parses_backtest_output() -> None:
+    """
+    oos_validate.py reads backtest.py's stdout with regexes. That makes the
+    table layout a CONTRACT between two modules, and it broke: a Bars column
+    was added to backtest.py's per-ticker table and the parser was not
+    updated, so every real OOS run died with "Could not parse backtest
+    output".
+
+    Its selftest did not catch it, because that parses a hardcoded SAMPLE
+    string — a stale copy of a format owned by another module. A test pinning
+    its own copy of the thing under test cannot notice the thing changing.
+
+    So this runs backtest.run() for real, on synthetic bars, and feeds the
+    actual stdout through the actual parser. No network: the downloader is
+    replaced, and the cache is bypassed so the developer's real .bar_cache is
+    untouched.
+    """
+    import io
+    import contextlib
+    import numpy as np
+    import pandas as pd
+    import backtest as bt
+    import oos_validate as oo
+
+    def _synthetic(ticker, years, interval="1d"):
+        n = 700 if interval == "1d" else 160
+        rng = np.random.default_rng(abs(hash(ticker)) % 997)
+        close = 100 * np.exp(np.cumsum(rng.normal(0.0012, 0.013, n)))
+        idx = (pd.bdate_range("2020-01-02", periods=n) if interval == "1d"
+               else pd.date_range("2020-01-06", periods=n, freq="W-MON"))
+        return pd.DataFrame({
+            "Date": idx, "Open": close * 0.999, "High": close * 1.012,
+            "Low": close * 0.988, "Close": close,
+            "Volume": rng.integers(5_000_000, 20_000_000, n).astype(float)})
+
+    real_dl, real_cache = bt._download_uncached, bt.CACHE_ENABLED
+    bt._download_uncached, bt.CACHE_ENABLED = _synthetic, False
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            bt.run(dict(bt.DEFAULTS, tickers=["AAA", "BBB", "CCC"],
+                        years=2, adx_min=15, use_regime=False))
+        out = buf.getvalue()
+    finally:
+        bt._download_uncached, bt.CACHE_ENABLED = real_dl, real_cache
+
+    per_ticker, agg = oo.parse_output(out)
+
+    if not per_ticker:
+        raise AssertionError(
+            "oos_validate.parse_output() found ZERO per-ticker rows in "
+            "backtest.py's real output. The table layout has changed and "
+            "PER_TICKER_RE no longer matches it — every OOS run will exit 3 "
+            "with 'Could not parse backtest output'.")
+    if "expectancy" not in agg or "total_trades" not in agg:
+        raise AssertionError(
+            f"the aggregate block did not parse (got keys {sorted(agg)}). "
+            f"AGG_PATTERNS and backtest.py's summary have drifted.")
+
+    # The parsed rows must agree with the run, not merely be non-empty: a
+    # regex that matched the wrong columns would still produce rows.
+    assert sum(t["trades"] for t in per_ticker) == agg["total_trades"], (
+        f"per-ticker trades {sum(t['trades'] for t in per_ticker)} != "
+        f"aggregate {agg['total_trades']} — the parser is reading the wrong "
+        f"columns, which is worse than failing outright")
+    for t in per_ticker:
+        assert t["bars"] and t["bars"] > t["trades"], (
+            f"{t['ticker']}: bars={t['bars']} is not a plausible bar count — "
+            f"the Bars column is being read as something else")
+    print(f"  oos_validate parses backtest output "
+          f"({len(per_ticker)} rows, {agg['total_trades']} trades, columns agree)")
+
+
+# ---------------------------------------------------------------------------
+# 8. Every production module must at least import
 # ---------------------------------------------------------------------------
 
 # app.py is excluded on purpose: importing it executes the whole Streamlit
@@ -535,6 +612,7 @@ CHECKS = [
     ("live universe spends no reserved data",     check_universe_not_spending_reserved),
     ("scan failures are surfaced, not swallowed",  check_scan_failures_surfaced),
     ("backtest prices match the live paths",       check_adjustment_matches_live),
+    ("oos_validate parses backtest.py's output",   check_oos_parses_backtest_output),
     ("every production module imports",            check_modules_import),
 ]
 
