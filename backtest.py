@@ -85,6 +85,8 @@ from __future__ import annotations
 import argparse
 import sys
 import warnings
+from datetime import datetime
+from zoneinfo import ZoneInfo
 warnings.filterwarnings("ignore")
 
 from dataclasses import replace
@@ -453,6 +455,44 @@ CACHE_REFRESH = False
 _CACHE_LOG: list[tuple] = []
 
 
+# US market timezone. The bar labelled "today" is decided by the exchange's
+# calendar, not by wherever this process happens to run — a UTC runner would
+# otherwise start dropping tomorrow's bar at 20:00 ET.
+_ET = ZoneInfo("America/New_York")
+
+
+def _drop_todays_bar(ticker: str, df: "pd.DataFrame | None") -> "pd.DataFrame | None":
+    """
+    Remove any trailing bar dated today (ET) or later.
+
+    WHY THIS IS STRICTER THAN signal_core.drop_partial_bar(): that function
+    only trims while the market is OPEN, which is right for a live scan. It
+    does not cover the case that actually bit here — before the open, Yahoo
+    already emits a row dated today, and every live path leaves it in place.
+
+    Observed 2026-09-02 with the market closed: two fetches four minutes apart
+    returned identical row counts and DIFFERENT content for all 13 series,
+    SPY included. Every cached frame ended on that day's date. A frame whose
+    last row is still being written cannot be cached, and a fingerprint over
+    it is not a fingerprint of anything.
+
+    The backtest also gains nothing from the bar: backtest_ticker() loops to
+    n-1 and fills at the NEXT bar's open, so the final row can never be
+    entered. It is pure instability with no analytical value.
+    """
+    if df is None or "Date" not in df.columns or df.empty:
+        return df
+    today_et = datetime.now(_ET).date()
+    dates = pd.to_datetime(df["Date"]).dt.date
+    keep_mask = dates < today_et
+    n_dropped = int((~keep_mask).sum())
+    if n_dropped:
+        df = df[keep_mask].reset_index(drop=True)
+        print(f"  · {ticker}: dropped {n_dropped} bar(s) dated {today_et} or "
+              f"later — still forming, and unusable by a next-bar-open fill")
+    return df
+
+
 def _download_uncached(ticker: str, years: int,
                        interval: str = "1d") -> pd.DataFrame | None:
     """
@@ -483,7 +523,7 @@ def _download_uncached(ticker: str, years: int,
         keep = {"Date": "Date", "Open": "Open", "High": "High",
                 "Low": "Low", "Close": "Close", "Volume": "Volume"}
         df = df[[c for c in keep if c in df.columns]].rename(columns=keep)
-        return df
+        return _drop_todays_bar(ticker, df)
     except Exception as e:
         print(f"  ! download failed for {ticker}: {e}")
         return None
@@ -632,6 +672,21 @@ def run(cfg: dict) -> None:
         metas = [m for m, _ in _CACHE_LOG]
         statuses = [st for _, st in _CACHE_LOG]
         print(f"  {bar_cache.summarise(metas, statuses)}")
+        # On a refresh, say WHAT moved. One altered row dated near today is a
+        # bar that was still forming; many rows spread through history is the
+        # provider re-adjusting the series. Those need different fixes, and
+        # "the fingerprint changed" cannot tell you which you have.
+        diffs = [(m["ticker"], m["refresh_diff"]) for m in metas
+                 if m and m.get("refresh_diff")
+                 and (m["refresh_diff"]["changed"]
+                      or m["refresh_diff"]["rows_before"] != m["refresh_diff"]["rows_after"])]
+        if diffs:
+            print("  refresh changed these series:")
+            for tk_, d in sorted(diffs):
+                span = (f"{d['first_changed']}..{d['last_changed']}"
+                        if d["changed"] else "no shared row altered")
+                print(f"    {tk_:<6} rows {d['rows_before']}->{d['rows_after']}, "
+                      f"{d['changed']} altered  ({span})")
         if not CACHE_ENABLED:
             print("     ^ caching OFF: this run is NOT reproducible, and cannot")
             print("       be compared against any other run.")
@@ -824,6 +879,29 @@ def selftest() -> int:
     assert _tal.get("passed") == 1 and _tal.get("reached_filters") == 2, \
         f"tally must count survivors and bars reaching the filters, got {_tal!r}"
     print("gate tally              : counts weekly rejections and survivors")
+
+    # ── today's bar must never reach the backtest ──
+    # Yahoo emits a row dated today even before the open, and every value in
+    # it moves until the close. signal_core.drop_partial_bar() does not cover
+    # that case (it only trims while the market is OPEN), and backtest.py
+    # never called it at all — so two fetches four minutes apart returned
+    # identical row counts and different content for all 13 series.
+    _today = datetime.now(_ET).date()
+    _idx = pd.bdate_range(end=pd.Timestamp(_today), periods=6)
+    _c = np.linspace(100, 105, len(_idx))
+    _raw = pd.DataFrame({"Date": _idx, "Open": _c, "High": _c, "Low": _c,
+                         "Close": _c, "Volume": np.full(len(_idx), 1e6)})
+    assert pd.to_datetime(_raw["Date"]).dt.date.max() == _today, \
+        "fixture must actually contain a today-dated bar, or this tests nothing"
+    _trimmed = _drop_todays_bar("TEST", _raw)
+    assert len(_trimmed) == len(_raw) - 1, \
+        f"today's bar must be dropped, kept {len(_trimmed)} of {len(_raw)}"
+    assert pd.to_datetime(_trimmed["Date"]).dt.date.max() < _today
+    # ...and a frame that stops before today is left completely alone.
+    _old = _raw.iloc[:-1].copy()
+    assert len(_drop_todays_bar("TEST", _old)) == len(_old), \
+        "a frame with no today-dated bar must pass through untouched"
+    print(f"today's bar             : dropped ({_today}), older bars untouched")
 
     # ── the on-disk bar cache actually caches ──
     # A harness that refetches on every run cannot measure anything smaller
