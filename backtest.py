@@ -455,11 +455,31 @@ def build_regime_series(spy_df: pd.DataFrame) -> pd.Series:
 # accounts for every result we saw today: 592/591/586/585/593 trades and
 # -0.016 to -0.031 R, all from the same command.
 #
-# --raw-prices measures the alternative rather than assuming it. Do NOT switch
-# the default on this note alone: raw bars trade a known instability for an
-# unknown one (how Yahoo handles splits without adjustment), and the frozen OOS
-# baseline was measured on adjusted prices.
-AUTO_ADJUST = True
+# MEASURED AND SWITCHED, 2026-09-02. Both arms were run, then both were
+# REFETCHED twelve minutes later to test stability:
+#
+#              expectancy   trades   rows rewritten on refetch
+#   adjusted     -0.018 R     593    8 of 13 series, 2337-2893 rows each
+#   raw          -0.021 R     585    ZERO, all 13 series
+#
+# Performance is a tie (0.003 R apart, far inside the +/-0.11 OOS CI), so
+# stability decides, and it is not close. The raw refetch reproduced its
+# fingerprint exactly; the adjusted refetch rewrote 15 years of history in
+# every dividend-paying name.
+#
+# The one risk that argued for adjusted prices turned out not to exist. NFLX
+# split 7:1 in July 2015, inside this window, and its raw and adjusted results
+# are identical to the decimal (62 trades, -0.223 R) — as are AMD's and ADBE's,
+# the other two non-payers. auto_adjust=False output is ALREADY split-adjusted;
+# it only drops the dividend adjustment. There are no unadjusted split gaps.
+#
+# So raw is stable, performs the same, AND matches what app.py, scanner.py and
+# exit_monitor.py actually trade on. That mismatch was the last open item from
+# the original review.
+#
+# --adjusted-prices restores the old behaviour; it caches separately, so both
+# series can be held at once and neither arm can overwrite the other.
+AUTO_ADJUST = False
 
 
 def _yahoo_download(ticker: str, period: str, interval: str) -> pd.DataFrame | None:
@@ -589,7 +609,7 @@ def run(cfg: dict) -> None:
           f"ATR tgt×: {cfg['atr_tgt_mult']}   Min R:R: {cfg['min_rr']}")
     print(f"Max hold     : {cfg['max_hold']} bars   Slippage: {cfg['slippage_bps']}bps/side   "
           f"Regime filter: {'ON (SPY 200-SMA)' if cfg['use_regime'] else 'OFF'}")
-    print(f"Prices       : {'auto_adjust=True (split+dividend adjusted)' if AUTO_ADJUST else 'auto_adjust=False — RAW, matches every live path'}")
+    print(f"Prices       : {'auto_adjust=True (split+dividend adjusted) — NOT reproducible across refetches' if AUTO_ADJUST else 'auto_adjust=False (raw; splits still adjusted) — matches every live path'}")
     print(f"Weekly filter: {'ON (price vs 20w EMA)' if cfg.get('use_weekly') else 'OFF'}"
           f"{'   <- OFF live since 2026-09-02; this re-measures it' if cfg.get('use_weekly') else '   (matches the live default)'}")
     print("=" * 78)
@@ -965,17 +985,24 @@ def selftest() -> int:
             # did, running one after the other would silently compare a price
             # series against itself — the same non-measurement as the weekly
             # filter, but harder to spot, because both frames look plausible.
+            # The flip below goes raw -> adjusted because raw is now the
+            # DEFAULT; flipping to the default would be a no-op and would test
+            # nothing, which is how this assertion first went green by
+            # accident when the default changed under it.
             global AUTO_ADJUST
-            AUTO_ADJUST = False
+            assert AUTO_ADJUST is False, \
+                "raw is the default since 2026-09-02 — if this fails the " \
+                "default moved back to adjusted, which is not reproducible"
             n_before = len(_fetches)
-            download("ZZZ", 5)
-            assert len(_fetches) == n_before + 1, \
-                "--raw-prices must fetch its OWN series, not reuse the " \
-                "adjusted one — otherwise the A/B compares a series to itself"
             AUTO_ADJUST = True
             download("ZZZ", 5)
             assert len(_fetches) == n_before + 1, \
-                "switching back must hit the ORIGINAL adjusted entry"
+                "--adjusted-prices must fetch its OWN series, not reuse the " \
+                "raw one — otherwise the A/B compares a series to itself"
+            AUTO_ADJUST = False
+            download("ZZZ", 5)
+            assert len(_fetches) == n_before + 1, \
+                "switching back must hit the ORIGINAL raw entry"
             print(f"raw vs adjusted         : separate cache entries, no collision")
 
             # --no-cache must genuinely bypass, or the escape hatch is a lie.
@@ -992,7 +1019,7 @@ def selftest() -> int:
             _sh.rmtree(_tmp, ignore_errors=True)
             bar_cache.CACHE_DIR, bar_cache.MANIFEST = _real
             CACHE_ENABLED = True
-            AUTO_ADJUST = True
+            AUTO_ADJUST = False
 
     # ── weekly trend map: the filter the OOS test never measured ──
     # Built so weekly_confirm can finally be A/B'd. Two things must hold: it
@@ -1097,11 +1124,17 @@ def parse_args() -> tuple[dict, bool]:
     p.add_argument("--commission", type=float, default=DEFAULTS["commission"])
     p.add_argument("--cooldown", type=int, default=DEFAULTS["cooldown_bars"])
     p.add_argument("--use-regime", action="store_true", default=DEFAULTS["use_regime"])
+    p.add_argument("--adjusted-prices", action="store_true",
+                   help="fetch with auto_adjust=True (split+dividend "
+                        "adjusted). This is what the ORIGINAL OOS baseline "
+                        "was measured on, and it is NOT reproducible: a "
+                        "refetch rewrites the whole history of every "
+                        "dividend payer. Cached separately from the raw "
+                        "series, so the two can be compared.")
     p.add_argument("--raw-prices", action="store_true",
-                   help="fetch with auto_adjust=False, matching every LIVE "
-                        "path (app.py, scanner.py, exit_monitor.py). Cached "
-                        "separately from the adjusted series, so both arms "
-                        "can be held at once and compared.")
+                   help="fetch with auto_adjust=False. This is now the "
+                        "default and the flag is a no-op, kept so existing "
+                        "commands keep working.")
     p.add_argument("--no-cache", action="store_true",
                    help="bypass bar_cache.py and fetch live. Makes the run "
                         "NON-reproducible — two runs minutes apart can differ "
@@ -1119,7 +1152,7 @@ def parse_args() -> tuple[dict, bool]:
     global CACHE_ENABLED, CACHE_REFRESH, AUTO_ADJUST
     CACHE_ENABLED = not a.no_cache
     CACHE_REFRESH = a.refresh_cache
-    AUTO_ADJUST = not a.raw_prices
+    AUTO_ADJUST = bool(a.adjusted_prices)
 
     cfg = dict(
         tickers       = [t.strip().upper() for t in a.tickers.split(",") if t.strip()],
