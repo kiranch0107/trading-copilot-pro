@@ -18,7 +18,7 @@
     "notes": "Paper trade on 9/1",
     "opened": "2026-09-02 14:29 ET",
     "opened_epoch": 1788373742.7716753,
-    "last_check_epoch": 1788459602.6182187,
+    "last_check_epoch": 1788543815.9171052,
     "status": "OPEN",
     "exit_alerted": false
   },
@@ -55,7 +55,7 @@
     "notes": "Paper trade on 9/3",
     "opened": "2026-09-03 10:59 ET",
     "opened_epoch": 1788447584.5705652,
-    "last_check_epoch": 1788459602.6182187,
+    "last_check_epoch": 1788543815.9171052,
     "status": "OPEN",
     "exit_alerted": false
   }
