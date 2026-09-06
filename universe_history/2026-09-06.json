@@ -1,0 +1,75 @@
+{
+  "as_of": "2026-09-06",
+  "taken_at": "2026-09-06T15:42:24",
+  "tickers": [
+    "MPC",
+    "CRM",
+    "PSX",
+    "ABNB",
+    "TGT",
+    "TMO",
+    "CRWD",
+    "AMGN"
+  ],
+  "passed_gates": 68,
+  "pool_size": 90,
+  "sector_mix": {
+    "Energy": 2,
+    "Tech": 2,
+    "ConsDisc": 2,
+    "Health": 2
+  },
+  "rs_lookback": 63,
+  "top_n": 8,
+  "max_per_sector": 2,
+  "detail": [
+    {
+      "ticker": "MPC",
+      "rs": 44.0,
+      "price": 388.9,
+      "dollar_vol_m": 920.2
+    },
+    {
+      "ticker": "CRM",
+      "rs": 35.2,
+      "price": 259.23,
+      "dollar_vol_m": 3769.3
+    },
+    {
+      "ticker": "PSX",
+      "rs": 34.91,
+      "price": 255.09,
+      "dollar_vol_m": 668.7
+    },
+    {
+      "ticker": "ABNB",
+      "rs": 31.82,
+      "price": 181.94,
+      "dollar_vol_m": 949.7
+    },
+    {
+      "ticker": "TGT",
+      "rs": 29.73,
+      "price": 164.44,
+      "dollar_vol_m": 779.3
+    },
+    {
+      "ticker": "TMO",
+      "rs": 25.39,
+      "price": 613.78,
+      "dollar_vol_m": 982.4
+    },
+    {
+      "ticker": "CRWD",
+      "rs": 22.61,
+      "price": 213.1,
+      "dollar_vol_m": 2194.2
+    },
+    {
+      "ticker": "AMGN",
+      "rs": 20.65,
+      "price": 437.23,
+      "dollar_vol_m": 964.8
+    }
+  ]
+}
