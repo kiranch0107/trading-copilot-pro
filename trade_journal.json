@@ -98,5 +98,37 @@
       "captured": "2026-08-25 15:51 ET"
     },
     "notes": "Manual on 8/27. Actual"
+  },
+  {
+    "id": "OPT_AAPL_1788447584",
+    "date": "2026-09-03 10:59 ET",
+    "closed": "2026-09-08 10:58 ET",
+    "ticker": "AAPL 2026-09-18 330C",
+    "trend": "Bullish",
+    "entry": 6.25,
+    "stop": 0,
+    "target": 0,
+    "planned_rr": 0,
+    "exit_price": 1.77,
+    "outcome": "LOSS",
+    "actual_rr": -0.72,
+    "contracts": 1.0,
+    "pnl_usd": -448.0,
+    "entry_features": {
+      "adx": 14.4379,
+      "rsi": 60.9545,
+      "atr": 7.4211,
+      "close": 324.96,
+      "ema20": 315.3189,
+      "ema50": 311.4226,
+      "volume": 33746700.0,
+      "vol_avg20": 39841575.0,
+      "rvol": 0.847,
+      "ext_atr": 1.299,
+      "rs_20d": 0.0449,
+      "regime": "Unknown",
+      "captured": "2026-09-03 10:59 ET"
+    },
+    "notes": "Paper trade, closed on trigger on 9/8"
   }
 ]
