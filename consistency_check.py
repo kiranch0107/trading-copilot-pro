@@ -733,7 +733,101 @@ def check_app_can_reach_fallback_key() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 11. Every production module must at least import
+# 11. Paper trades must never be blended into the live record, and every
+#     logging path must check position size
+# ---------------------------------------------------------------------------
+
+def check_journal_and_sizing_guards() -> None:
+    """
+    Both halves of this were found by reading a week of real trades, not code.
+
+    MODE: paper vs live lived only in the free-text `notes` field. Nothing
+    parsed it, so the dashboard reported all six closed trades as one record —
+    66.7% win rate, PF 2.28, +1.55R — when the five real ones were 80% /
+    PF 7.08 / +$316 and the one paper trade was 0% / -$448. The blend
+    described neither. A convention held in prose is not a convention.
+
+    SIZE: no logging path checked the cost of a position. calc_position_size()
+    computed the right answer and no caller asked it. A paper trade was logged
+    at $625 on a $1,500 account — 42% of capital in a single long option,
+    where the premium is the whole maximum loss.
+    """
+    import journal_store as js
+    import risk_params as rp
+
+    # ── the stats function must be able to separate the two records ──
+    J = [{"outcome": "WIN",  "actual_rr": 0.5, "pnl_usd": 100.0,
+          "closed": "2026-01-01", "mode": "live"},
+         {"outcome": "LOSS", "actual_rr": -0.7, "pnl_usd": -400.0,
+          "closed": "2026-01-02", "mode": "paper"}]
+    live = js.journal_stats(J, mode="live")
+    both = js.journal_stats(J)
+
+    # Presence FIRST, with .get() throughout. Indexing a missing key raises
+    # KeyError, which selftest() does not catch — the run aborted with a
+    # traceback instead of reporting the failure, so a removed dollar metric
+    # looked like a crash rather than the specific regression it is.
+    for key in ("net_usd", "profit_factor_usd", "equity_curve_usd"):
+        if key not in (live or {}):
+            raise AssertionError(
+                f"journal_stats no longer reports {key}. The R figures are a "
+                f"return on premium and can point the opposite way from the "
+                f"money — dollars are the only figure that is simply true.")
+
+    if not live or live.get("net_usd") != 100.0:
+        raise AssertionError(
+            "journal_stats(mode='live') no longer isolates real trades. "
+            "Blending paper into the track record is how a losing week reads "
+            "as a winning one.")
+    if both.get("net_usd") != -300.0:
+        raise AssertionError("the blended total is wrong")
+    if live.get("net_usd", 0) <= both.get("net_usd", 0):
+        raise AssertionError(
+            "live and blended must be distinguishable on this fixture, or the "
+            "check has stopped discriminating")
+
+    app = Path("app.py").read_text()
+    if "journal_stats(journal, mode=_mode)" not in app:
+        raise AssertionError(
+            "app.py's dashboard no longer filters by mode — it is back to "
+            "showing one blended headline for real and simulated trades.")
+    if "net_usd" not in app:
+        raise AssertionError(
+            "app.py no longer displays dollar P&L. pnl_usd was stored from the "
+            "first trade and rendered nowhere, so the only visible numbers "
+            "were R-based ones that disagreed with the account.")
+
+    # ── every logging path must run the size gate ──
+    if "def size_gate(" not in app:
+        raise AssertionError("app.py lost size_gate()")
+    n_modes = app.count("mode=_q_mode") + app.count("mode=_o_mode") + \
+              app.count("mode=_chk_mode")
+    n_gates = app.count("size_gate(")
+    if n_modes < 3:
+        raise AssertionError(
+            f"only {n_modes} of the position-logging paths pass a mode. Any "
+            f"path that does not will silently record a paper trade as live.")
+    if n_gates < 4:      # 1 definition + 3 call sites
+        raise AssertionError(
+            f"size_gate is referenced {n_gates} times; expected the definition "
+            f"plus all 3 logging paths. An ungated path is how $625 went into "
+            f"a $1,500 account with nothing objecting.")
+
+    # ── the thresholds themselves still bite ──
+    if rp.check_option_cost(6.25, 1, account_size=1500)["level"] != "block":
+        raise AssertionError(
+            "a $625 contract on a $1,500 account no longer blocks — that is "
+            "42% of capital in one long option.")
+    if rp.check_option_cost(0.0, 1)["level"] != "invalid":
+        raise AssertionError(
+            "a zero entry premium must be rejected: a percentage stop on a $0 "
+            "entry can never fire, so the monitor would watch it forever.")
+    print(f"  journal separates paper from live and reports dollars")
+    print(f"  all {n_modes} logging paths pass mode and run the size gate")
+
+
+# ---------------------------------------------------------------------------
+# 12. Every production module must at least import
 # ---------------------------------------------------------------------------
 
 # app.py is excluded on purpose: importing it executes the whole Streamlit
@@ -776,6 +870,7 @@ CHECKS = [
     ("unattended modules are Streamlit-free",      check_unattended_modules_are_streamlit_free),
     ("sizing constants live in one place",         check_sizing_constants_shared),
     ("app can reach the price fallback key",       check_app_can_reach_fallback_key),
+    ("paper/live split + sizing gates",            check_journal_and_sizing_guards),
     ("every production module imports",            check_modules_import),
 ]
 

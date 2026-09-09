@@ -49,12 +49,30 @@ on:
     # is hit and not alerted. Hourly is the compromise between responsiveness
     # and not being deprioritised by GitHub.
     #
-    # ONLY UTC hours 15-19 sit inside 9:30am-4:00pm ET in BOTH EST and EDT.
-    # 14:00 UTC is 9:00am EST (pre-open) and 20:00 UTC is 4:00pm EDT (the
-    # close), so both were dead slots for half the year.
-    #   15:00 UTC = 11:00am EDT / 10:00am EST
-    #   19:00 UTC =  3:00pm EDT /  2:00pm EST
-    - cron: "0 15,16,17,18,19 * * 1-5"
+    # WIDENED 2026-09-09, after a position lost 72% against a 50% stop rule.
+    #
+    # The previous window (15-19 UTC) was chosen as the hours inside RTH in
+    # both EST and EDT. That is true and it was the wrong optimisation: it
+    # bought "every run is during market hours" at the cost of covering only
+    # 11:00-15:00 ET. The open (9:30-11:00) and the close (15:00-16:00) — the
+    # two windows where stops and targets are most often hit — had no run at
+    # all, all year.
+    #
+    # What it cost: a paper AAPL call opened 09-03 was last checked Fri 09-04
+    # at 15:00 EDT. Monday 09-07 was Labor Day. The next run was Tue 09-08 at
+    # 11:00 EDT — a 92-hour gap across a weekend and a holiday. It exited at
+    # -71.7% against a -50% rule.
+    #
+    # 13-21 UTC covers 9:00am-5:00pm EDT and 8:00am-4:00pm EST, so the whole
+    # session is inside the window in both halves of the year. The script
+    # re-checks real ET market hours and exits in seconds when closed, so the
+    # out-of-hours runs cost almost nothing — the same trade scanner.yml
+    # already makes.
+    #
+    # This does NOT make the stop a stop. Nine polls a day cannot act on an
+    # overnight gap, a weekend, or a holiday, and on a long option the premium
+    # is the entire risk. It is an alert, and the app now says so.
+    - cron: "0 13,14,15,16,17,18,19,20,21 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:

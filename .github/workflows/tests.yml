@@ -87,6 +87,9 @@ jobs:
       - name: gh_sync.py — 409 retry + position merge (offline)
         run: python gh_sync.py
 
+      - name: journal_store.py — paper/live split, dollar P&L (offline)
+        run: python journal_store.py
+
       - name: scanner.py — outage detection + alert cooldown (offline)
         run: python scanner.py --selftest
 

@@ -67,6 +67,48 @@ _bridge_secrets_to_env("TIINGO_API_KEY", "TELEGRAM_BOT_TOKEN",
                        "TELEGRAM_CHAT_ID", "GITHUB_TOKEN")
 
 
+def size_gate(entry_premium: float, contracts: float, key: str) -> bool:
+    """
+    Show the position-size verdict and return True if logging may proceed.
+
+    Every logging path used to call open_option_position() with no size check
+    at all. calc_position_size() computed the right answer and no caller asked
+    it. A paper trade was logged at \$625 on a \$1,500 account — 42% of capital
+    in one long option, where the premium is the entire maximum loss.
+
+    Two thresholds, so the warning keeps its meaning: over the premium budget
+    warns, over the hard ceiling blocks behind an explicit override. See
+    risk_params.check_option_cost().
+    """
+    v = risk_params.check_option_cost(
+        entry_premium, contracts,
+        account_size=ACCOUNT_SIZE,
+        budget_pct=risk_params.DEFAULT_OPTION_BUDGET_PCT)
+    if v["level"] == "invalid":
+        st.error(f"❌ {v['message']}")
+        return False
+    if v["level"] == "block":
+        st.error(f"🛑 {v['message']}")
+        return st.checkbox(
+            f"I understand this risks \\${v['cost']:,.0f} "
+            f"({v['pct']:.0f}% of the account) and want to log it anyway",
+            key=f"size_override_{key}")
+    if v["level"] == "warn":
+        st.warning(f"⚠️ {v['message']}")
+    else:
+        st.caption(f"✅ {v['message']}")
+    return True
+
+
+def mode_selector(key: str) -> str:
+    """paper / live, as a real field rather than a word in the notes."""
+    return "paper" if st.radio(
+        "Trade type", ["Live money", "Paper"], horizontal=True,
+        key=f"mode_{key}",
+        help="Paper trades are tracked separately and never mixed into your "
+             "real track record.") == "Paper" else "live"
+
+
 def fallback_configured() -> bool:
     """Whether a second price source can actually be reached."""
     import os as _os
@@ -332,6 +374,13 @@ EXIT_CHECK_MINUTES = int(st.sidebar.number_input(
          "no window is missed."))
 st.sidebar.caption("Alerts come from `exit_monitor.py` on a scheduler, not from "
                    "this app — an app only runs while a tab is open.")
+st.sidebar.warning(
+    "**Stops here are polled, not guaranteed.** The monitor checks 9 times a "
+    "trading day and cannot act overnight, at a weekend, or on a holiday. On a "
+    "long option the premium is your entire risk, so a gap can take you past "
+    "the stop before any check runs — a paper position exited at −72% against "
+    "a −50% rule across a weekend plus Labor Day. Treat these as alerts to act "
+    "on, not as orders resting at your broker.")
 st.sidebar.divider()
 st.sidebar.header("💰 Position Sizing")
 # Defaults from risk_params.py, the single home shared with scanner.py.
@@ -1884,15 +1933,20 @@ with TAB_STOCK:
                                             f"maximum loss on this contract "
                                             f"({cost/ACCOUNT_SIZE*100:.1f}% of "
                                             f"\\${ACCOUNT_SIZE:,}).")
+                                        _q_mode = mode_selector(f"qbuy_{_qkey}")
+                                        _q_ok = size_gate(q_prem, q_qty, f"qbuy_{_qkey}")
                                         if not (q_tp or q_sl or q_dte or q_hold or q_thesis):
                                             st.error("All exit rules are off — the "
                                                      "monitor would never alert on "
                                                      "this position.")
+                                        elif not _q_ok:
+                                            pass          # size_gate explained why
                                         else:
                                             if st.button("📍 Confirm — start monitoring",
                                                         type="primary",
                                                         key=f"qbuy_confirm_{_qkey}"):
                                                 open_option_position(
+                                                    mode=_q_mode,
                                                     ticker=ticker, right=opt["label"],
                                                     strike=opt["strike"],
                                                     expiry=opt["expiry"],
@@ -2238,8 +2292,12 @@ with TAB_POSITIONS:
                        f"{rule_dte} DTE" if rule_dte else "",
                        f"{rule_hold} sessions held" if rule_hold else "",
                        "EMA20 invalidation" if rule_thesis else ""])))
-        if st.button("📍 Start monitoring this contract", type="primary", key="op_save"):
+        _o_mode = mode_selector("op")
+        _o_ok = size_gate(o_prem, o_qty, "op")
+        if _o_ok and st.button("📍 Start monitoring this contract",
+                               type="primary", key="op_save"):
             open_option_position(
+                mode=_o_mode,
                 ticker=o_tkr, right=o_right, strike=o_strike,
                 expiry=o_expiry.strftime("%Y-%m-%d"), contracts=o_qty,
                 entry_premium=o_prem,
@@ -2452,23 +2510,90 @@ with TAB_JOURNAL:
                 f"this dashboard is your execution log, not a replacement "
                 f"for it. Treat these numbers as informative again past "
                 f"~{MIN_JOURNAL_TRADES_FOR_SIGNAL} closed trades.")
-        m1,m2,m3,m4,m5,m6 = st.columns(6)
-        m1.metric("Closed Trades", stats["total"])
-        m2.metric("Win Rate",      f"{stats['win_rate']}%")
-        m3.metric("Wins/Losses",   f"{stats['wins']} / {stats['losses']}")
-        m4.metric("Avg Win (R)",   stats["avg_win_r"])
-        pf_disp = "∞" if stats["profit_factor"]==float("inf") else stats["profit_factor"]
-        m5.metric("Profit Factor", pf_disp)
-        m6.metric("Total R",       stats["total_r"])
-        streak_emoji = "🔥" if stats["streak_type"]=="WIN" else "❄️"
-        st.caption(f"{streak_emoji} Current streak: **{stats['streak']} {stats['streak_type']}** in a row")
+        # MODE SPLIT. Real and paper trades used to be blended into one
+        # headline because the distinction lived only in the notes text. On
+        # 2026-09-09 that blend read 66.7% win rate / PF 2.28 / +1.55R while
+        # the five real trades were 80% / PF 7.08 / +$316 and the single paper
+        # one was -$448. The blend described neither record.
+        _mode_label = st.radio(
+            "Show", ["Live money", "Paper", "Both (blended)"],
+            horizontal=True, key="journal_mode",
+            help="Paper trades are simulated. Blending them with real trades "
+                 "produces a number that describes neither.")
+        _mode = {"Live money": "live", "Paper": "paper",
+                 "Both (blended)": None}[_mode_label]
+        _s = journal_stats(journal, mode=_mode) or {}
+        if not _s:
+            st.info(f"No closed **{_mode_label.lower()}** trades yet.")
+        else:
+            stats = _s
+            if _mode is None:
+                st.warning(
+                    "Blended view — this mixes real and simulated trades. It "
+                    "is not your track record and not your paper record. Use "
+                    "it only to see everything at once.")
 
-        # FIX #5: equity curve chart
-        eq_data = stats.get("equity_curve",[])
-        if len(eq_data) > 1:
-            eq_df = pd.DataFrame(eq_data).set_index("date")
-            st.line_chart(eq_df, height=200, width="stretch")
-            st.caption("Cumulative R over time — rising = consistent edge · steep drop = drawdown period to review")
+            # DOLLARS FIRST. pnl_usd was stored from the beginning and shown
+            # nowhere, so the only visible numbers were R-based ones that can
+            # point the opposite way from the money.
+            net = stats.get("net_usd")
+            d1, d2, d3 = st.columns(3)
+            d1.metric("Net P&L", "n/a" if net is None else f"\\${net:,.0f}",
+                      delta=None if net is None else
+                            f"{net/ACCOUNT_SIZE*100:+.1f}% of account")
+            pfu = stats.get("profit_factor_usd")
+            d2.metric("Profit Factor ($)",
+                      "n/a" if pfu is None else
+                      ("∞" if pfu == float("inf") else pfu))
+            d3.metric("Win Rate", f"{stats['win_rate']}%",
+                      delta=f"{stats['wins']}W / {stats['losses']}L",
+                      delta_color="off")
+            if stats.get("missing_usd"):
+                st.caption(f"ℹ️ {stats['missing_usd']} trade(s) have no recorded "
+                           f"dollar P&L (share trades logged before position "
+                           f"size was captured) and are excluded from the "
+                           f"dollar figures above.")
+
+            m1,m2,m3,m4 = st.columns(4)
+            m1.metric("Closed Trades", stats["total"])
+            m2.metric("Avg Win (R)",   stats["avg_win_r"])
+            pf_disp = "∞" if stats["profit_factor"]==float("inf") else stats["profit_factor"]
+            m3.metric("Profit Factor (R)", pf_disp)
+            m4.metric("Total R",       stats["total_r"])
+            st.caption(
+                "⚠️ The R figures above are a RETURN ON PREMIUM, not the "
+                "stop-distance R that backtest.py and oos_validate.py report. "
+                "Summing them across positions of different size is not "
+                "meaningful — a +131% gain on a \\$109 position and a −72% loss "
+                "on a \\$625 one sum to +59% while netting −\\$305. **Trust the "
+                "dollar row.** R only summarises honestly when risk per trade "
+                "is roughly constant, which requires sizing discipline.")
+            # Indented into the else: these read `stats`, which is only
+            # rebound to the selected mode inside it. At 8 spaces they rendered
+            # the UNFILTERED record whenever the chosen mode had no trades.
+            streak_emoji = "🔥" if stats["streak_type"]=="WIN" else "❄️"
+            st.caption(f"{streak_emoji} Current streak: **{stats['streak']} {stats['streak_type']}** in a row")
+
+            # Equity curve, in DOLLARS where we have them. The R curve is kept
+            # as a secondary view: it rises while the account falls whenever
+            # the losses land on the bigger positions.
+            eq_usd = stats.get("equity_curve_usd", [])
+            eq_data = stats.get("equity_curve", [])
+            if len(eq_usd) > 1:
+                st.line_chart(pd.DataFrame(eq_usd).set_index("date"),
+                              height=200, width="stretch")
+                st.caption("Cumulative **dollars** over time — this is the account.")
+                with st.expander("Same curve in R (return on premium)"):
+                    if len(eq_data) > 1:
+                        st.line_chart(pd.DataFrame(eq_data).set_index("date"),
+                                      height=180, width="stretch")
+                    st.caption("Shown for comparison with the backtest only. "
+                               "Where this rises and the dollar curve falls, "
+                               "the losses came on the larger positions.")
+            elif len(eq_data) > 1:
+                st.line_chart(pd.DataFrame(eq_data).set_index("date"),
+                              height=200, width="stretch")
+                st.caption("Cumulative R — no dollar P&L recorded for these trades.")
 
         st.divider()
 
@@ -2692,18 +2817,23 @@ with TAB_CHECK:
                     placeholder="DAY if this is a day trade — see the journal "
                                 "convention")
 
+                _chk_prem = res["entry_premium"] or (ct["mid"] if ct else 0.0)
+                _chk_mode = mode_selector("chk")
+                _chk_ok = size_gate(_chk_prem, chk_contracts, "chk")
                 if st.button("Log position", key="chk_log"):
-                    if not (chk_tp or chk_sl or chk_dte_exit or chk_hold):
+                    if not _chk_ok:
+                        st.error("Position size not accepted — see above.")
+                    elif not (chk_tp or chk_sl or chk_dte_exit or chk_hold):
                         st.warning("At least one exit rule is required — a "
                                    "position with no exit rule is never "
                                    "monitored.")
                     else:
                         try:
                             open_option_position(
+                                mode=_chk_mode,
                                 ticker=res["ticker"], expiry=res["expiry"],
                                 strike=res["strike"], right=res["right"],
-                                entry_premium=res["entry_premium"] or
-                                              (ct["mid"] if ct else 0.0),
+                                entry_premium=_chk_prem,
                                 contracts=chk_contracts,
                                 rules={"tp_pct": chk_tp, "sl_pct": chk_sl,
                                        "dte_exit": chk_dte_exit,

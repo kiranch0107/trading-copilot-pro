@@ -179,7 +179,10 @@ def log_skipped_signal(ticker: str, trend: str, reason: str,
 def open_option_position(ticker: str, right: str, strike: float, expiry: str,
                          contracts: float, entry_premium: float,
                          rules: dict, notes: str = "",
-                         entry_features: dict | None = None) -> dict:
+                         entry_features: dict | None = None,
+                         mode: str = "live",
+                         traded_at: str | None = None,
+                         source: str = "discretionary") -> dict:
     """
     Record an OPTION contract you bought so the exit monitor can watch it.
 
@@ -198,6 +201,23 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
     (best-effort market-data snapshot). This module doesn't fetch it itself —
     see the module docstring for why. Pass None / omit if unavailable; it is
     stored as-is, never required.
+
+    `mode`: "live" or "paper". THIS IS A REAL FIELD ON PURPOSE. It used to live
+    only in the free-text `notes` ("Paper trade on 9/1" vs "Actual"), which
+    meant journal_stats() blended real and simulated trades into one record and
+    the dashboard reported a number that was neither. On 2026-09-09 that blend
+    read 66.7% win rate / PF 2.28 across six trades, when the five real ones
+    were 80% / PF 7.08 / +$316 and the single paper one was 0% / -$448. A
+    convention held in prose is a convention that silently breaks.
+
+    `source`: "signal" if the system produced this setup, "discretionary" if
+    you did. Without it a journal of mixed origins cannot say anything about
+    the signal — which is what the 30-trade run is meant to be for.
+
+    `traded_at`: when the trade actually happened, if different from now.
+    `opened`/`opened_epoch` are LOGGING times and were being read as trade
+    times: one journal row shows a one-minute hold on a contract back-filled
+    two weeks after it was sold.
     """
     positions = load_positions()
     now_epoch = time.time()
@@ -214,6 +234,11 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
         "notes":            notes,
         "opened":           datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d %H:%M ET"),
         "opened_epoch":     now_epoch,
+        "mode":             "paper" if str(mode).lower().startswith("p") else "live",
+        "source":           source,
+        "traded_at":        traded_at or datetime.now(
+                                pytz.timezone("America/New_York")
+                            ).strftime("%Y-%m-%d %H:%M ET"),
         "last_check_epoch": now_epoch,
         "status":           "OPEN",
         "exit_alerted":     False,
@@ -224,13 +249,22 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
 
 
 def close_position(position_id: str, exit_premium: float, outcome: str,
-                   notes: str = "") -> None:
+                   notes: str = "", closed_at: str | None = None) -> None:
     """
     Move a position out of the open store and into the journal.
 
     For options the R multiple is measured in PREMIUM terms — (exit − entry) /
     entry — because that is what was actually at risk. On a long option your
     maximum loss is the premium paid, so a total loss is exactly −1.0R.
+
+    CAVEAT, because this number has misled: it is a RETURN ON PREMIUM, not the
+    stop-distance R that backtest.py and oos_validate.py speak. Summing it
+    across positions of different size is meaningless — +131% on a $109
+    position and −72% on a $625 one sum to +59% while netting −$305. Dollar
+    P&L is stored alongside it in `pnl_usd` and is the figure to trust;
+    journal_stats() now reports both and leads with dollars.
+
+    `closed_at`: when the position was actually closed, if not now.
     """
     positions = load_positions()
     pos = next((p for p in positions if p["id"] == position_id), None)
@@ -247,6 +281,12 @@ def close_position(position_id: str, exit_premium: float, outcome: str,
             "id":         position_id,
             "date":       pos["opened"],
             "closed":     datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d %H:%M ET"),
+            "mode":       pos.get("mode", "live"),
+            "source":     pos.get("source", "discretionary"),
+            "traded_at":  pos.get("traded_at"),
+            "closed_at":  closed_at or datetime.now(
+                              pytz.timezone("America/New_York")
+                          ).strftime("%Y-%m-%d %H:%M ET"),
             "ticker":     f"{pos['ticker']} {pos['expiry']} {pos['strike']:g}{pos['right'][0]}",
             "trend":      "Bullish" if pos["right"] == "CALL" else "Bearish",
             "entry":      entry_prem,
@@ -341,9 +381,43 @@ def add_journal_trade(alert_id, ticker, trend, entry, stop, target,
     save_alerts(alerts)
 
 
-def journal_stats(journal: list) -> dict:
+def trade_mode(entry: dict) -> str:
+    """
+    "paper" or "live" for one journal/position row.
+
+    Falls back to sniffing the notes for rows written before `mode` existed —
+    that prose convention is exactly what this field replaces, so it is read
+    once for back-compat and never written.
+    """
+    m = (entry.get("mode") or "").lower()
+    if m.startswith("p"):
+        return "paper"
+    if m.startswith("l"):
+        return "live"
+    return "paper" if "paper" in (entry.get("notes") or "").lower() else "live"
+
+
+def journal_stats(journal: list, mode: str | None = None) -> dict:
+    """
+    Performance over closed trades.
+
+    `mode`: "live", "paper", or None for everything. DEFAULTING TO EVERYTHING
+    is kept for callers that want the raw total, but the dashboard must not
+    show it unlabelled: blending real and simulated trades produced a headline
+    of 66.7% win rate / PF 2.28 on 2026-09-09 when the real record was 80% /
+    PF 7.08 / +$316 and the paper one was 0% / -$448. The blend described
+    neither.
+
+    Dollar figures (`net_usd`, `pf_usd`) are the ones to trust. `total_r` sums
+    a RETURN ON PREMIUM across positions of different size and can point the
+    opposite way from the money — see close_position()'s docstring.
+    """
     if not journal:
         return {}
+    if mode:
+        journal = [j for j in journal if trade_mode(j) == mode]
+        if not journal:
+            return {}
     # Cross-app safety: the Restore uploader accepts backups from the
     # discipline-enforcer app, whose journal contains OPEN trades without
     # "closed"/"exit_price" keys. Only closed outcomes count here.
@@ -374,12 +448,38 @@ def journal_stats(journal: list) -> dict:
     # FIX #5: build equity curve for chart
     sorted_j = sorted(journal, key=lambda x: x.get("closed", ""))
     cum_r    = 0.0
+    cum_usd  = 0.0
     eq_curve = []
+    eq_usd   = []
     for j in sorted_j:
         cum_r += j["actual_rr"]
         eq_curve.append({"date": j["closed"][:10], "Cumulative R": round(cum_r, 2)})
+        # A dollar curve alongside the R one. The R curve rises while the
+        # account falls whenever the losses land on the larger positions, which
+        # is exactly what happened across the blended journal: +1.55R, -$132.
+        if j.get("pnl_usd") is not None:
+            cum_usd += j["pnl_usd"]
+            eq_usd.append({"date": j["closed"][:10],
+                           "Cumulative $": round(cum_usd, 2)})
+    # ── DOLLARS — the figure that is actually true ──
+    # pnl_usd is absent on share trades (add_journal_trade never recorded a
+    # position size), so it is summed over the rows that have it and the
+    # shortfall is reported rather than quietly treated as zero.
+    with_usd = [j for j in journal if j.get("pnl_usd") is not None]
+    net_usd = round(sum(j["pnl_usd"] for j in with_usd), 2) if with_usd else None
+    gw_usd = sum(j["pnl_usd"] for j in with_usd if j["pnl_usd"] > 0)
+    gl_usd = abs(sum(j["pnl_usd"] for j in with_usd if j["pnl_usd"] < 0))
+    pf_usd = round(gw_usd / gl_usd, 2) if gl_usd else (float("inf") if gw_usd else 0.0)
+
     return {
         "total": total, "open": _n_open,
+        "net_usd": net_usd,
+        "gross_win_usd": round(gw_usd, 2) if with_usd else None,
+        "gross_loss_usd": round(gl_usd, 2) if with_usd else None,
+        "profit_factor_usd": pf_usd if with_usd else None,
+        "missing_usd": total - len(with_usd),
+        "mode": mode or "all",
+        "equity_curve_usd": eq_usd,
         "wins": len(wins), "losses": len(losses), "breakeven": len(be),
         "win_rate": wr, "avg_win_r": avg_win, "avg_loss_r": avg_loss,
         "total_r": total_r, "profit_factor": pf, "streak": streak,
@@ -504,3 +604,94 @@ def calc_position_size(entry: float, stop: float, account_size: float,
         result["note"] = f"{cap_note}\n\n{result['note']}" if result.get("note") else cap_note
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Self-test — no network, no Streamlit runtime, touches no real data
+# ---------------------------------------------------------------------------
+
+def selftest() -> int:
+    """
+    Covers the record that decides whether you think you are making money.
+
+    This module had no tests, and on 2026-09-09 its dashboard reported 66.7%
+    win rate / PF 2.28 / +1.55R for an account whose real trades were 80% /
+    PF 7.08 / +$316 and whose one paper trade was -$448. Nothing was broken in
+    a way that raised an error; the numbers were simply answering a different
+    question from the one being asked of them.
+    """
+    # A journal shaped like the real one: mixed modes, mixed sizes.
+    J = [
+        {"outcome": "WIN",  "actual_rr":  0.69, "pnl_usd":   94.0, "closed": "2026-08-12", "mode": "live"},
+        {"outcome": "WIN",  "actual_rr":  1.31, "pnl_usd":  143.0, "closed": "2026-08-14", "mode": "live"},
+        {"outcome": "WIN",  "actual_rr":  0.23, "pnl_usd":   11.0, "closed": "2026-08-19", "mode": "live"},
+        {"outcome": "LOSS", "actual_rr": -0.49, "pnl_usd":  -52.0, "closed": "2026-08-20", "mode": "live"},
+        {"outcome": "WIN",  "actual_rr":  0.53, "pnl_usd":  120.0, "closed": "2026-08-27", "mode": "live"},
+        {"outcome": "LOSS", "actual_rr": -0.72, "pnl_usd": -448.0, "closed": "2026-09-08", "mode": "paper"},
+    ]
+
+    live = journal_stats(J, mode="live")
+    paper = journal_stats(J, mode="paper")
+    both = journal_stats(J)
+
+    assert live["total"] == 5 and paper["total"] == 1
+    assert live["net_usd"] == 316.0, live["net_usd"]
+    assert paper["net_usd"] == -448.0
+    assert both["net_usd"] == -132.0
+    print(f"mode split              : live {live['total']} (${live['net_usd']:+,.0f}) · "
+          f"paper {paper['total']} (${paper['net_usd']:+,.0f})")
+
+    # THE FAILURE THIS EXISTS TO CATCH: the blended view is not a description
+    # of either record, and it points the opposite way from the real money.
+    assert live["net_usd"] > 0 > both["net_usd"], \
+        "the blend must be recognisably different from the live record — if " \
+        "these ever agree by construction the test has stopped discriminating"
+    assert live["win_rate"] == 80.0 and both["win_rate"] == 66.7
+    print(f"blend is NOT the record : live 80.0% / ${live['net_usd']:+,.0f} vs "
+          f"blended {both['win_rate']}% / ${both['net_usd']:+,.0f}")
+
+    # R and dollars can disagree in DIRECTION, because actual_rr is a return on
+    # premium summed across sizes. This is why dollars lead in the UI.
+    assert both["total_r"] > 0 > both["net_usd"], (
+        f"the blended journal should show positive R ({both['total_r']}) "
+        f"against negative dollars ({both['net_usd']}) — that divergence is "
+        f"the whole reason pnl_usd is reported")
+    print(f"R vs dollars            : total_r {both['total_r']:+.2f} but "
+          f"${both['net_usd']:+,.0f} — opposite signs, dollars are the truth")
+
+    # Dollar profit factor must be computed from dollars, not from R.
+    assert both["profit_factor_usd"] == 0.74, both["profit_factor_usd"]
+    assert both["profit_factor"] == 2.28, both["profit_factor"]
+    print(f"two profit factors      : PF$ {both['profit_factor_usd']} (real) vs "
+          f"PF_R {both['profit_factor']} (flattering)")
+
+    # Rows without pnl_usd (share trades) must be counted as missing, never as
+    # zero — a silent zero would drag the average toward nothing.
+    J2 = J + [{"outcome": "WIN", "actual_rr": 1.0, "closed": "2026-09-09", "mode": "live"}]
+    s2 = journal_stats(J2, mode="live")
+    assert s2["missing_usd"] == 1, s2["missing_usd"]
+    assert s2["net_usd"] == 316.0, "a row with no pnl_usd must not change the total"
+    print(f"missing pnl_usd         : reported ({s2['missing_usd']}), not counted as $0")
+
+    # Back-compat: rows written before `mode` existed are read from the notes
+    # once, so history classifies correctly without being rewritten.
+    assert trade_mode({"notes": "Paper trade on 9/1"}) == "paper"
+    assert trade_mode({"notes": "Manual on 8/27. Actual"}) == "live"
+    assert trade_mode({"notes": ""}) == "live"
+    assert trade_mode({"mode": "paper", "notes": "Actual"}) == "paper", \
+        "an explicit mode field must win over the legacy notes sniff"
+    print(f"legacy notes sniff      : reads old rows, explicit field wins")
+
+    # Sizing gate, exercised through the same path the UI uses.
+    import risk_params
+    assert risk_params.check_option_cost(6.25, 1)["level"] == "block"
+    assert risk_params.check_option_cost(0.48, 1)["level"] == "ok"
+    print(f"sizing gate reachable   : $625 blocks, $48 passes")
+
+    print("\nAll self-tests passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(selftest())
