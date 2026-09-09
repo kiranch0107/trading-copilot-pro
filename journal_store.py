@@ -682,6 +682,18 @@ def selftest() -> int:
         "an explicit mode field must win over the legacy notes sniff"
     print(f"legacy notes sniff      : reads old rows, explicit field wins")
 
+    # mode and source are INDEPENDENT. A paper trade can follow a system
+    # signal; a live trade can be a judgement call. Collapsing them would
+    # answer neither question.
+    import inspect
+    sig = inspect.signature(open_option_position)
+    assert sig.parameters["mode"].default == "live"
+    assert sig.parameters["source"].default == "discretionary", \
+        "source must default to discretionary — assuming a trade came from " \
+        "the signal is the assumption that flatters the signal"
+    print(f"mode / source           : independent fields, source defaults "
+          f"to the non-flattering value")
+
     # Sizing gate, exercised through the same path the UI uses.
     import risk_params
     assert risk_params.check_option_cost(6.25, 1)["level"] == "block"

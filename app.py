@@ -109,6 +109,31 @@ def mode_selector(key: str) -> str:
              "real track record.") == "Paper" else "live"
 
 
+def source_selector(key: str) -> str:
+    """
+    signal / discretionary — who produced this setup.
+
+    Separate from mode (paper vs live) because they answer different
+    questions, and a journal that cannot tell them apart cannot answer either.
+    Of the trades logged so far with a captured ADX, TGT cleared the gate at
+    35.5 and was a system signal; AAPL (14.4) and NVDA (17.6) failed it by 21
+    and 17 points and were judgement calls. Averaged together they describe
+    two different strategies as one, which is the same failure as blending
+    paper into live, one level down.
+
+    Deliberately NOT pre-selected from whether a signal currently exists for
+    the ticker: a default that is usually right is how a tag quietly becomes
+    wrong, and this field is what the 30-trade run will be judged on.
+    """
+    return "signal" if st.radio(
+        "Setup came from", ["My own idea", "A system signal"],
+        horizontal=True, key=f"src_{key}",
+        help="System signal = the scanner or watchlist flagged it and it "
+             "passed the filters. Your own idea = anything else, including a "
+             "setup the system showed but rejected.") == "A system signal" \
+        else "discretionary"
+
+
 def fallback_configured() -> bool:
     """Whether a second price source can actually be reached."""
     import os as _os
@@ -1934,6 +1959,7 @@ with TAB_STOCK:
                                             f"({cost/ACCOUNT_SIZE*100:.1f}% of "
                                             f"\\${ACCOUNT_SIZE:,}).")
                                         _q_mode = mode_selector(f"qbuy_{_qkey}")
+                                        _q_src = source_selector(f"qbuy_{_qkey}")
                                         _q_ok = size_gate(q_prem, q_qty, f"qbuy_{_qkey}")
                                         if not (q_tp or q_sl or q_dte or q_hold or q_thesis):
                                             st.error("All exit rules are off — the "
@@ -1946,7 +1972,7 @@ with TAB_STOCK:
                                                         type="primary",
                                                         key=f"qbuy_confirm_{_qkey}"):
                                                 open_option_position(
-                                                    mode=_q_mode,
+                                                    mode=_q_mode, source=_q_src,
                                                     ticker=ticker, right=opt["label"],
                                                     strike=opt["strike"],
                                                     expiry=opt["expiry"],
@@ -2293,11 +2319,12 @@ with TAB_POSITIONS:
                        f"{rule_hold} sessions held" if rule_hold else "",
                        "EMA20 invalidation" if rule_thesis else ""])))
         _o_mode = mode_selector("op")
+        _o_src = source_selector("op")
         _o_ok = size_gate(o_prem, o_qty, "op")
         if _o_ok and st.button("📍 Start monitoring this contract",
                                type="primary", key="op_save"):
             open_option_position(
-                mode=_o_mode,
+                mode=_o_mode, source=_o_src,
                 ticker=o_tkr, right=o_right, strike=o_strike,
                 expiry=o_expiry.strftime("%Y-%m-%d"), contracts=o_qty,
                 entry_premium=o_prem,
@@ -2819,6 +2846,7 @@ with TAB_CHECK:
 
                 _chk_prem = res["entry_premium"] or (ct["mid"] if ct else 0.0)
                 _chk_mode = mode_selector("chk")
+                _chk_src = source_selector("chk")
                 _chk_ok = size_gate(_chk_prem, chk_contracts, "chk")
                 if st.button("Log position", key="chk_log"):
                     if not _chk_ok:
@@ -2830,7 +2858,7 @@ with TAB_CHECK:
                     else:
                         try:
                             open_option_position(
-                                mode=_chk_mode,
+                                mode=_chk_mode, source=_chk_src,
                                 ticker=res["ticker"], expiry=res["expiry"],
                                 strike=res["strike"], right=res["right"],
                                 entry_premium=_chk_prem,
