@@ -803,10 +803,21 @@ def check_journal_and_sizing_guards() -> None:
     n_modes = app.count("mode=_q_mode") + app.count("mode=_o_mode") + \
               app.count("mode=_chk_mode")
     n_gates = app.count("size_gate(")
+    n_srcs = app.count("source=_q_src") + app.count("source=_o_src") + \
+             app.count("source=_chk_src")
     if n_modes < 3:
         raise AssertionError(
             f"only {n_modes} of the position-logging paths pass a mode. Any "
             f"path that does not will silently record a paper trade as live.")
+    if "def source_selector(" not in app:
+        raise AssertionError("app.py lost source_selector()")
+    if n_srcs < 3:
+        raise AssertionError(
+            f"only {n_srcs} of the position-logging paths pass a source. "
+            f"open_option_position() defaults to 'discretionary', so an "
+            f"unwired path silently records every trade as a judgement call "
+            f"— and the journal can then say nothing about whether the "
+            f"SIGNAL works, which is what the 30-trade run is for.")
     if n_gates < 4:      # 1 definition + 3 call sites
         raise AssertionError(
             f"size_gate is referenced {n_gates} times; expected the definition "
@@ -823,7 +834,7 @@ def check_journal_and_sizing_guards() -> None:
             "a zero entry premium must be rejected: a percentage stop on a $0 "
             "entry can never fire, so the monitor would watch it forever.")
     print(f"  journal separates paper from live and reports dollars")
-    print(f"  all {n_modes} logging paths pass mode and run the size gate")
+    print(f"  all {n_modes} logging paths pass mode, source, and the size gate")
 
 
 # ---------------------------------------------------------------------------
