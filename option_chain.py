@@ -27,10 +27,16 @@ signal_core.py, data_source.py, gh_sync.py and journal_store.py already use
 in this repo, for the same reason: this module doesn't share a namespace
 with app.py's sidebar values or its is_market_open() anymore.
 
-No selftest here, for the same reason gh_sync.py and journal_store.py have
-none: every function here makes live Yahoo calls end to end (chain fetches
-have no meaningful offline fake — the whole point is real bid/ask/volume/OI
-from the market). Correctness is exercised through the app.
+No selftest here: every function makes live Yahoo calls end to end, and a
+chain fetch has no meaningful offline fake — the whole point is real
+bid/ask/volume/OI from the market. Correctness is exercised through the app.
+(gh_sync.py and journal_store.py used to be named here as the same case. Both
+have selftests now — their pure parts turned out to be fakeable after all —
+so this file is on its own.)
+
+The one number here that IS testable offline is the bid-ask ceiling, and it
+does not live here: it is derived in risk_params.MAX_OPTION_SPREAD_PCT and
+asserted by that module's selftest and by consistency_check.py.
 """
 
 from __future__ import annotations
@@ -42,6 +48,7 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
+import risk_params
 from rate_limit import RATE_LIMITER as _rl, is_rate_limit_error as _is_rate_limit_error
 
 logger = logging.getLogger(__name__)
@@ -239,7 +246,7 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
         diag["had_oi"] += len(_oi)
         if not _oi.empty:
             _sp = (_oi["spread"] / _oi["mid"] * 100)
-            diag["spread_ok"] += int((_sp <= 15.0).sum())
+            diag["spread_ok"] += int((_sp <= risk_params.MAX_OPTION_SPREAD_PCT).sum())
             _tightest = float(_sp.min())
             if diag["best_spread_pct"] is None or _tightest < diag["best_spread_pct"]:
                 diag["best_spread_pct"] = round(_tightest, 1)
@@ -249,7 +256,11 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
             (opts["mid"] > 0) &
             (opts["bid"] > 0) &
             (opts["volume"] > 0) &
-            (opts["spread"] / opts["mid"] <= 0.15)
+            # Was 0.15. At a 15% spread this signal needs a 26.5% win rate
+            # and has 23.8% — the filter was admitting contracts that cannot
+            # win. Derived in risk_params.MAX_OPTION_SPREAD_PCT.
+            (opts["spread"] / opts["mid"]
+             <= risk_params.MAX_OPTION_SPREAD_PCT / 100.0)
         ]
         valid = valid[valid["openInterest"] > 0]   # also require some existing interest
         if valid.empty: continue

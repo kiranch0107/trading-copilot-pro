@@ -367,6 +367,21 @@ def backtest_ticker(df: pd.DataFrame, cfg: dict, params: sc.SignalParams,
     return trades
 
 
+SIDES = (("Bullish", "LONG "), ("Bearish", "SHORT"))
+
+
+def split_by_side(trades: list, side: str) -> list:
+    """
+    The long/short split, as one function so the selftest can break it.
+
+    An earlier version of this test filtered an inline fixture and asserted on
+    stats() — which passes whether or not run() splits anything, because it
+    never touched run()'s filter. Keeping the filter here means the assertion
+    below is on the code that actually runs.
+    """
+    return [t for t in trades if t.get("trend") == side]
+
+
 def stats(trades: list[dict]) -> dict:
     if not trades:
         return {"trades": 0}
@@ -715,6 +730,32 @@ def run(cfg: dict) -> None:
     print(f"  Best / worst   : {agg['best']:+.2f} R / {agg['worst']:+.2f} R")
     print(f"  Bars tested    : {total_bars}   <- compare across runs FIRST; "
           f"if this moves, the data moved")
+
+    # ── LONG vs SHORT ──
+    # A diagnostic, not a selector. The aggregate can only tell you the system
+    # loses; it cannot tell you WHICH HALF loses, and those need different
+    # answers. A long-only rule in a rising tape and a counter-trend short rule
+    # in the same tape are two strategies averaged into one number — the same
+    # shape as blending paper trades into a live track record.
+    #
+    # READ THIS AS A DIAGNOSIS, NOT A PERMISSION SLIP. If one side looks
+    # better, that is ONE comparison on data already spent; turning it into
+    # "trade only longs" is the ADX-35 mistake again, and the sweep in
+    # results/ shows where that ends. A side worth trading is one that
+    # survives a fresh pre-registered test on reserved tickers.
+    for side, label in SIDES:
+        sub = split_by_side(all_trades, side)
+        if not sub:
+            print(f"  {label}          : no trades")
+            continue
+        ss = stats(sub)
+        r = np.array([t["r"] for t in sub])
+        se = float(r.std(ddof=1)) / np.sqrt(len(r)) if len(r) > 1 else float("nan")
+        lo, hi = ss["avg_r"] - 1.96 * se, ss["avg_r"] + 1.96 * se
+        print(f"  {label}          : {ss['trades']:>4} trades  "
+              f"{ss['win_rate']:>5.1f}% win  {ss['avg_r']:+.3f} R  "
+              f"PF {ss['pf']:.2f}  95% CI [{lo:+.3f}, {hi:+.3f}]"
+              f"{'  <- CI clears 0' if lo > 0 else ''}")
     if bar_cache is not None and _CACHE_LOG:
         metas = [m for m, _ in _CACHE_LOG]
         statuses = [st for _, st in _CACHE_LOG]
@@ -949,6 +990,33 @@ def selftest() -> int:
     assert len(_drop_todays_bar("TEST", _old)) == len(_old), \
         "a frame with no today-dated bar must pass through untouched"
     print(f"today's bar             : dropped ({_today}), older bars untouched")
+
+    # ── the long/short split reports each side separately ──
+    # A diagnostic that silently mixed the sides would be worse than none: it
+    # would look like a breakdown and be an average.
+    _mixed = [{"r": 1.0, "trend": "Bullish", "hold": 5},
+              {"r": 1.0, "trend": "Bullish", "hold": 5},
+              {"r": -1.0, "trend": "Bearish", "hold": 5},
+              {"r": -1.0, "trend": "Bearish", "hold": 5}]
+    # Walk SIDES exactly as run() does, so a swapped label is caught too: the
+    # fixture's bullish trades win and its bearish trades lose, so whichever
+    # row prints "LONG " must be the +1.00 R one.
+    _by_label = {lbl.strip(): stats(split_by_side(_mixed, side))
+                 for side, lbl in SIDES}
+    assert set(_by_label) == {"LONG", "SHORT"}, _by_label
+    _long, _short = _by_label["LONG"], _by_label["SHORT"]
+    assert _long["avg_r"] == 1.0, \
+        "the row labelled LONG is not the bullish side — the labels are " \
+        f"attached to the wrong trends: {_by_label}"
+    _all = stats(_mixed)
+    assert _long["avg_r"] == 1.0 and _short["avg_r"] == -1.0, (_long, _short)
+    assert _all["avg_r"] == 0.0, _all
+    assert _long["avg_r"] != _all["avg_r"], \
+        "the split must be distinguishable from the aggregate on a fixture " \
+        "built to make them differ, or it is not testing anything"
+    assert _long["trades"] + _short["trades"] == _all["trades"]
+    print(f"long/short split        : +1.00 R long, -1.00 R short, "
+          f"0.00 R blended — sides do not leak")
 
     # ── the on-disk bar cache actually caches ──
     # A harness that refetches on every run cannot measure anything smaller

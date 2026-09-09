@@ -146,7 +146,10 @@ SUGGEST_OPTIONS  = True
 OPT_MIN_DTE      = 21
 OPT_MAX_DTE      = 45
 OPT_MAX_EXPIRIES = 3        # each expiry is one chain fetch — keep it lean
-OPT_MAX_SPREAD   = 15.0     # % of mid; above this the round trip eats the edge
+# Derived from the breakeven arithmetic, not chosen. At the old 15% the
+# strategy needed a 26.5% win rate against a measured 23.8% — the gate
+# admitted contracts that could not win. See risk_params.py.
+OPT_MAX_SPREAD   = risk_params.MAX_OPTION_SPREAD_PCT
 
 # Shown in the alert for context. NOT used to filter during the test phase —
 # you asked to see every suggestion and judge affordability yourself.
@@ -668,7 +671,7 @@ def run(args) -> int:
                     lines.append(f"⚠️ Above your ${opt['budget']:,.0f} risk budget "
                                  f"({OPTION_BUDGET_PCT:g}% of ${ACCOUNT_SIZE:,}) — on a long "
                                  f"option the premium IS the max loss.")
-                if opt["spread_pct"] > 10:
+                if opt["spread_pct"] > OPT_MAX_SPREAD * 0.75:
                     lines.append(f"⚠️ Spread {opt['spread_pct']:.0f}% of mid — a wide "
                                  f"round trip can erase the edge on its own.")
                 lines += ["", "Test rules: TP +200% · SL −50% · exit at 7 DTE · thesis OFF"]

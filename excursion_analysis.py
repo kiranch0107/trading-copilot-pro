@@ -42,6 +42,8 @@ import re
 import sys
 from datetime import datetime, timedelta
 
+import journal_store
+
 try:
     import pandas as pd
 except ImportError:
@@ -101,6 +103,7 @@ def parse_trade(j: dict) -> dict | None:
 
     return {
         "id": j.get("id", ""),
+        "mode": journal_store.trade_mode(j),
         "trade_type": classify(entry_date, exit_date, j.get("notes", "")),
         "features": j.get("entry_features") or {},
         "underlying": underlying,
@@ -117,6 +120,37 @@ def parse_trade(j: dict) -> dict | None:
         "premium_r": _f(j.get("actual_rr")),
         "notes": j.get("notes", ""),
     }
+
+
+
+def backfill_reason(t: dict) -> str | None:
+    """
+    Why this row's timestamps cannot be the trade's timestamps, or None.
+
+    `date` and `closed` are written when the row is LOGGED, which for a
+    back-filled trade is days after the fact. Rows in this journal say
+    "Sold on 8/4" in the notes while carrying a logged date of 8/19 — measuring
+    the 8/19 window would describe a week the position did not exist, and it
+    would look like a result rather than an error.
+
+    The test is the contract's own expiry, which is carried in the ticker and
+    is not editable prose: you cannot enter or exit a contract after it has
+    expired. That is provable from the row alone, so it refuses rather than
+    warns. Notes that disagree with the dates are NOT used here — freeform
+    prose is a guess, and a guess must not silently discard a real trade.
+    """
+    if not t.get("expiry"):
+        return None
+    exp = parse_dt(t["expiry"])
+    if exp is None:
+        return None
+    if t["entry_date"] > exp:
+        return (f"entry logged {t['entry_date']}, after the contract expired "
+                f"{exp} — the logged date is a back-fill, not the trade")
+    if t["exit_date"] > exp:
+        return (f"exit logged {t['exit_date']}, after the contract expired "
+                f"{exp} — the logged date is a back-fill, not the trade")
+    return None
 
 
 DAY_TOKEN = re.compile(r"\bDAY\b", re.IGNORECASE)
@@ -291,6 +325,8 @@ def report(rows: list[dict]) -> None:
     W = 78
     print("=" * W)
     print("EXCURSION ANALYSIS — measured on the underlying, in R units")
+    modes = sorted({r.get("mode", "live") for r in rows})
+    print(f"Record          : {' + '.join(m.upper() for m in modes) or 'none'}")
     print("=" * W)
     if not rows:
         print("No measurable trades. Need `date`, `closed` and a ticker on each row.")
@@ -524,6 +560,39 @@ def selftest() -> int:
     bad = parse_trade({"id": "z", "ticker": "", "date": "", "closed": ""})
     assert bad is None
     print("Malformed row       : skipped, not guessed")
+
+    # ── paper never rides along with live ──
+    live = parse_trade({"id": "L", "ticker": "NVDA 2026-12-18 100C",
+                        "date": "2026-07-01", "closed": "2026-07-05",
+                        "mode": "live", "trend": "Bullish"})
+    paper = parse_trade({"id": "P", "ticker": "NVDA 2026-12-18 100C",
+                         "date": "2026-07-01", "closed": "2026-07-05",
+                         "mode": "paper", "trend": "Bullish"})
+    legacy = parse_trade({"id": "G", "ticker": "NVDA 2026-12-18 100C",
+                          "date": "2026-07-01", "closed": "2026-07-05",
+                          "notes": "Paper trade, test only", "trend": "Bullish"})
+    assert (live["mode"], paper["mode"], legacy["mode"]) == \
+        ("live", "paper", "paper"), (live["mode"], paper["mode"], legacy["mode"])
+    only_live = [t for t in (live, paper, legacy) if t["mode"] == "live"]
+    assert [t["id"] for t in only_live] == ["L"], only_live
+    print("paper vs live       : split before measuring; notes sniff still works")
+
+    # ── a row whose logged dates postdate the contract is refused ──
+    stale = parse_trade({"id": "S", "ticker": "NVDA 2026-08-07 220C",
+                         "date": "2026-08-19 14:35 ET",
+                         "closed": "2026-08-19 14:36 ET",
+                         "mode": "live", "notes": "Sold on 8/4. Actual",
+                         "trend": "Bullish"})
+    why = backfill_reason(stale)
+    assert why and "expired" in why, why
+    assert backfill_reason(live) is None, \
+        "a trade inside its contract's life must NOT be refused — a guard " \
+        "that rejects good rows is worse than the bug it prevents"
+    # No expiry (share row) means no expiry test to apply; must not refuse.
+    share = parse_trade({"id": "H", "ticker": "TSLA", "date": "2026-07-01",
+                         "closed": "2026-07-05", "trend": "Bullish"})
+    assert backfill_reason(share) is None
+    print(f"back-filled row     : refused — {why[:46]}...")
     print("\nAll self-tests passed.")
     return 0
 
@@ -537,6 +606,10 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--journal", default="trade_journal.json")
     ap.add_argument("--csv", default=None, help="also write per-trade detail here")
+    ap.add_argument("--mode", choices=("live", "paper", "all"), default="live",
+                    help="which trades to measure. Default live. 'all' pools "
+                         "real and simulated trades and is almost never what "
+                         "you want — a blended headline describes neither.")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
 
@@ -556,6 +629,40 @@ def main() -> int:
     skipped = len(raw) - len(trades)
     if skipped:
         print(f"Skipped {skipped} row(s) missing dates or ticker.\n")
+
+    # Paper and live are separated before anything is measured, not after.
+    # Pooling them is how a real record of +$316 got reported as -$132 on
+    # 2026-09-09: one simulated loss inside five real wins. Excursions have the
+    # same exposure — a paper trade's MAE is a paper MAE.
+    if args.mode != "all":
+        kept = [t for t in trades if t["mode"] == args.mode]
+        dropped = len(trades) - len(kept)
+        if dropped:
+            print(f"Excluded {dropped} {'paper' if args.mode == 'live' else 'live'}"
+                  f" trade(s): this run measures {args.mode.upper()} only.\n")
+        trades = kept
+    else:
+        n_p = sum(1 for t in trades if t["mode"] == "paper")
+        if n_p:
+            print("!" * 78)
+            print(f"--mode all: {n_p} paper trade(s) are pooled with real ones "
+                  f"below.\nThe numbers describe neither record. Use --mode live "
+                  f"for your actual\nresults.")
+            print("!" * 78 + "\n")
+
+    # Rows whose logged dates are provably not the trade's dates are refused
+    # by name, never measured quietly.
+    refused = [(t, r) for t in trades for r in [backfill_reason(t)] if r]
+    if refused:
+        print(f"REFUSED {len(refused)} row(s) — logged timestamps are back-fills,")
+        print("so the window they name is not the window the trade was open:")
+        for t, r in refused:
+            print(f"  {t['id'] or t['underlying']:<24} {r}")
+        print("Fix the dates in the journal and re-run; measuring them anyway")
+        print("would produce numbers that look like results.\n")
+        bad = {id(t) for t, _ in refused}
+        trades = [t for t in trades if id(t) not in bad]
+
     if not trades:
         print("Nothing measurable in the journal.")
         return 1

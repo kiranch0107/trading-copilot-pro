@@ -77,6 +77,49 @@ DEFAULT_OPTION_BUDGET_PCT = 5.0
 # trading is for; the hole it found is real.
 MAX_POSITION_PCT = 25.0
 
+# MEASURED OPTION-LEVEL WIN RATE for this signal.
+#
+# 23.8% — option_backtest.py, TP +100% / SL -50%, 5 years, 7 tickers.
+#
+# It lives here because two separate places reason about it and they must not
+# drift: app.py's expected-value line, and the spread ceiling derived below.
+# An earlier version of app.py used 40%, which is the SHARE backtest's win
+# rate. An option needs a far larger underlying move to gain 100% than a share
+# needs to reach 3xATR, and theta works against you the whole time, so the
+# share number made losing configurations look profitable.
+OPT_WIN_RATE = 0.238
+
+# MAXIMUM BID-ASK SPREAD, as a percentage of the option mid.
+#
+# This is the one signal-side number in this project that is arithmetic rather
+# than a fitted parameter, so it is the one worth setting deliberately.
+#
+# The measured option-level win rate for this signal is OPT_WIN_RATE,
+# 23.8%, defined just above. With the standard rules — take profit +200%, stop -50% — the
+# raw payoff is 4:1, so breakeven is 20% and 23.8% clears it by 3.8 points.
+# The spread eats that from both ends, because you buy above the mid and sell
+# below it:
+#
+#     spread   realised TP   realised SL   breakeven WR   vs 23.8%
+#        0%        +200%         -50%          20.0%      clears
+#        5%        +185%         -52%          22.1%      clears
+#        8%        +177%         -54%          23.3%      clears, barely
+#       10%        +171%         -55%          24.2%      BELOW
+#       15%        +158%         -57%          26.5%      BELOW
+#
+# The gates were set at 15% in scanner.py and option_chain.py, with a mere
+# warning at 10% in app.py. That admitted contracts that cannot win: at 15%
+# the strategy needs a 26.5% win rate and has 23.8%. This is not an edge that
+# was lost to bad luck, it is one given away at the point of entry.
+#
+# 8% is where the arithmetic turns, not a number found by searching. Tightening
+# a COST is the one change that cannot overfit — it does not touch the signal,
+# it stops paying a toll that exceeds the toll road's value. It will show you
+# fewer contracts. That is the intended effect.
+#
+# If OPT_WIN_RATE is ever re-measured, re-derive this rather than keeping 8.
+MAX_OPTION_SPREAD_PCT = 8.0
+
 
 def option_budget(account_size: float | None = None,
                   budget_pct: float | None = None) -> float:
@@ -85,6 +128,22 @@ def option_budget(account_size: float | None = None,
     acct = DEFAULT_ACCOUNT_SIZE if account_size is None else account_size
     pct = DEFAULT_OPTION_BUDGET_PCT if budget_pct is None else budget_pct
     return acct * pct / 100.0
+
+
+def spread_breakeven_wr(spread_pct: float, tp_pct: float = 200.0,
+                        sl_pct: float = 50.0) -> float:
+    """
+    Win rate needed to break even once the bid-ask spread is paid both ways.
+
+    You buy above the mid and sell below it, so a `spread_pct` round trip
+    shrinks the win and deepens the loss. Kept as a function so the threshold
+    above can be re-derived rather than re-typed if the rules change.
+    """
+    h = spread_pct / 2 / 100
+    buy = 1 + h
+    tp = (1 + tp_pct / 100) * (1 - h) / buy - 1
+    sl = (1 - sl_pct / 100) * (1 - h) / buy - 1
+    return -sl / (tp - sl) * 100
 
 
 def check_option_cost(entry_premium: float, contracts: float,
@@ -198,6 +257,30 @@ def selftest() -> int:
     assert check_option_cost(6.25, 1, account_size=100_000)["level"] == "ok", \
         "the verdict must scale with the account, not be a fixed dollar rule"
     print(f"scales with account      : $625 is fine on a $100k account")
+
+    # ── the spread ceiling must sit where the arithmetic turns ──
+    # Read the constant rather than re-typing it. A selftest that carries
+    # its own copy of the number it is checking keeps passing after the
+    # real number moves — which is the failure this repo keeps finding.
+    wr = OPT_WIN_RATE * 100
+    assert spread_breakeven_wr(0) == 20.0, spread_breakeven_wr(0)
+    at_gate = spread_breakeven_wr(MAX_OPTION_SPREAD_PCT)
+    assert at_gate < wr, (
+        f"at a {MAX_OPTION_SPREAD_PCT:g}% spread the breakeven win rate is "
+        f"{at_gate:.1f}%, above the measured {wr:.1f}% — the gate admits "
+        f"contracts that cannot win")
+    just_over = spread_breakeven_wr(MAX_OPTION_SPREAD_PCT + 2)
+    assert just_over > wr, (
+        f"the gate is TIGHTER than the arithmetic requires: even at "
+        f"{MAX_OPTION_SPREAD_PCT + 2:g}% the breakeven is {just_over:.1f}%, "
+        f"still under {wr:.1f}%, so contracts that clear breakeven are being "
+        f"turned away. Set it where the arithmetic turns.")
+    assert spread_breakeven_wr(15) > wr, \
+        "15% — the OLD gate — must be provably negative, or this whole " \
+        "change was unmotivated"
+    print(f"spread ceiling           : {MAX_OPTION_SPREAD_PCT:g}% -> breakeven "
+          f"{at_gate:.1f}% vs measured {wr:.1f}% (old 15% -> "
+          f"{spread_breakeven_wr(15):.1f}%, negative)")
 
     print("streamlit-free            : safe for the unattended workflows")
     print("\nAll self-tests passed.")
