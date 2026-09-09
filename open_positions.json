@@ -20,7 +20,10 @@
     "opened_epoch": 1788373742.7716753,
     "last_check_epoch": 1788977900.0498672,
     "status": "OPEN",
-    "exit_alerted": false
+    "exit_alerted": false,
+    "mode": "paper",
+    "source": "unknown",
+    "traded_at": null
   },
   {
     "id": "OPT_NVDA_1788879668",
@@ -57,6 +60,9 @@
     "opened_epoch": 1788879668.624068,
     "last_check_epoch": 1788977900.0498672,
     "status": "OPEN",
-    "exit_alerted": false
+    "exit_alerted": false,
+    "mode": "live",
+    "source": "unknown",
+    "traded_at": null
   }
 ]
