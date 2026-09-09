@@ -853,6 +853,65 @@ IMPORTABLE_MODULES = [
 ]
 
 
+def check_cost_gates_shared() -> None:
+    """
+    The option bid-ask ceiling had FOUR copies: 15.0 in scanner.py, 0.15 twice
+    in option_chain.py, 15.0 in app.py's contract check, plus a 10% warning in
+    app.py that agreed with none of them. The measured option win rate had two:
+    0.238 in app.py and a re-typed 23.8 in risk_params' own selftest.
+
+    That matters more than the usual duplication, because the ceiling is
+    DERIVED from the win rate. At a 15% spread this signal needs a 26.5% win
+    rate and has 23.8% — the gates were admitting contracts that cannot win.
+    Two numbers that must move together, spread across five files, will not.
+
+    Both now live in risk_params.py. This check keeps them there.
+    """
+    import risk_params
+
+    # The ceiling must still be where the arithmetic puts it, not wherever it
+    # drifted to: at the gate the breakeven win rate must clear the measured
+    # one, and two points looser must not.
+    wr = risk_params.OPT_WIN_RATE * 100
+    cap = risk_params.MAX_OPTION_SPREAD_PCT
+    assert risk_params.spread_breakeven_wr(cap) < wr < \
+        risk_params.spread_breakeven_wr(cap + 2), (
+        f"MAX_OPTION_SPREAD_PCT={cap:g} no longer sits where the arithmetic "
+        f"turns for a {wr:.1f}% win rate. Re-derive it, do not re-type it.")
+
+    # A literal ceiling anywhere else is a copy waiting to drift.
+    stale = re.compile(r"(?<![\w.])(?:15\.0|0\.15)(?![\w])")
+    for path in ("app.py", "scanner.py", "option_chain.py"):
+        txt = Path(path).read_text()
+        assert "risk_params" in txt, (
+            f"{path} no longer reads risk_params.py — the spread ceiling can "
+            f"drift away from the win rate it is derived from.")
+        for i, line in enumerate(txt.splitlines(), 1):
+            code = line.split("#", 1)[0]
+            if "spread" not in code.lower():
+                continue
+            if stale.search(code):
+                raise AssertionError(
+                    f"{path}:{i} carries its own spread ceiling: {line.strip()!r}. "
+                    f"Read risk_params.MAX_OPTION_SPREAD_PCT instead — this is "
+                    f"the fourth copy of that number, and they disagreed.")
+
+    atxt = Path("app.py").read_text()
+    assert "OPT_WIN_RATE = 0.238" not in atxt, (
+        "app.py hardcodes the option win rate again. It is the input to the "
+        "spread ceiling; a second copy lets the gate and the number it is "
+        "derived from move apart silently.")
+    assert "risk_params.OPT_WIN_RATE" in atxt, (
+        "app.py's expected-value line must read risk_params.OPT_WIN_RATE.")
+
+    print(f"  spread ceiling {cap:g}% derived from OPT_WIN_RATE {wr:.1f}%, "
+          f"one copy of each")
+
+
+# ---------------------------------------------------------------------------
+# 17. Every production module must import
+# ---------------------------------------------------------------------------
+
 def check_modules_import() -> None:
     import importlib
     for name in IMPORTABLE_MODULES:
@@ -882,6 +941,7 @@ CHECKS = [
     ("sizing constants live in one place",         check_sizing_constants_shared),
     ("app can reach the price fallback key",       check_app_can_reach_fallback_key),
     ("paper/live split + sizing gates",            check_journal_and_sizing_guards),
+    ("option cost gates share one source",         check_cost_gates_shared),
     ("every production module imports",            check_modules_import),
 ]
 

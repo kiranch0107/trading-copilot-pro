@@ -1075,7 +1075,8 @@ def check_manual_contract(ticker: str, right: str, strike: float,
         add("Bid is live", bid > 0, f"bid ${bid:.2f}")
         add("Volume > 0", vol > 0, f"{vol} contracts today")
         add("Open interest > 0", oi > 0, f"{oi} open")
-        add("Spread <= 15% of mid", spread_pct <= 15.0,
+        _sp_max = risk_params.MAX_OPTION_SPREAD_PCT
+        add(f"Spread <= {_sp_max:g}% of mid", spread_pct <= _sp_max,
             f"${spread:.2f} = {spread_pct:.1f}% of mid")
 
         # Non-blocking, and DIRECTIONAL. An earlier version used abs(slip),
@@ -2286,7 +2287,9 @@ with TAB_POSITIONS:
         # against you the whole time. option_backtest.py measured the actual
         # option-level win rate at 23.8% (TP+100/SL-50, 5y, 7 tickers).
         # Using 40% here made losing configurations look profitable.
-        OPT_WIN_RATE = 0.238
+        # It now lives in risk_params, because the option spread ceiling is
+        # derived from it and the two must not be free to drift apart.
+        OPT_WIN_RATE = risk_params.OPT_WIN_RATE
         ev = OPT_WIN_RATE * (rule_tp / 100) - (1 - OPT_WIN_RATE) * (rule_sl / 100)
         line = (f"Payoff **{payoff:.1f}:1** → breakeven win rate **{breakeven:.0f}%**. "
                 f"Measured option-level win rate for this signal is "
