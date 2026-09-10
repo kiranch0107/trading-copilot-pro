@@ -280,6 +280,41 @@ def selftest() -> int:
         "the floor must not block a well-sampled effect"
     print("floor liveness   : a 400-trade bucket is not blocked by the floor")
 
+    # ── WIRING: main()'s real code path, with backtest.run stubbed ──
+    # Everything above tests judge(). None of it would notice that main() calls
+    # an API that does not exist — which is exactly what happened: the first
+    # draft called bt.run_ticker(), which is ABSENT, and guarded it with
+    # `except TypeError` while the real failure would be AttributeError. The
+    # command would have crashed on the user's machine. This runs main().
+    import contextlib, io, sys as _sys
+    import backtest as _bt
+
+    assert hasattr(_bt, "run"), "backtest.run must exist"
+    assert not hasattr(_bt, "run_ticker"), (
+        "backtest.run_ticker is absent — if it ever returns, revisit main()")
+
+    calls = []
+    def _fake_run(cfg):
+        calls.append(cfg["adx_min"])
+        # fewer trades as the threshold rises, like the real thing
+        n = max(3, int(800 - cfg["adx_min"] * 18))
+        return [{"r": 0.01 * (i % 7 - 3)} for i in range(n)]
+
+    real_run, real_argv = _bt.run, _sys.argv
+    try:
+        _bt.run = _fake_run
+        _sys.argv = ["adx_retest.py", "--levels", "20,25,30", "--tickers", "AAPL"]
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = main()
+    finally:
+        _bt.run, _sys.argv = real_run, real_argv
+
+    assert calls == [20.0, 25.0, 30.0], f"main() must sweep every level: {calls}"
+    assert rc in (0, 1), f"main() must return a verdict code, got {rc}"
+    assert "ADX RE-TEST" in out.getvalue(), "main() must print the report"
+    print(f"main() wiring    : swept {calls}, printed a report, exit {rc}")
+
     print("=" * 68)
     print("All self-tests passed.")
     return 0
@@ -298,24 +333,31 @@ def main() -> int:
     if a.selftest:
         return selftest()
 
+    import contextlib
+    import io
+
     import backtest as bt
+
     levels = [float(x) for x in a.levels.split(",") if x.strip()]
     tickers = [t.strip().upper() for t in a.tickers.split(",") if t.strip()]
 
     means, sds, ns, kept = [], [], [], []
     for lv in levels:
-        rs = []
-        for tk in tickers:
-            try:
-                trades = bt.run_ticker(tk, a.years, adx_min=lv)
-            except TypeError:
-                print("  ! backtest.run_ticker signature differs — run the sweep "
-                      "via backtest.py --adx-min and feed the numbers to judge()",
-                      file=sys.stderr)
-                return 2
-            rs.extend(t.get("r", 0.0) for t in (trades or []))
+        cfg = dict(bt.DEFAULTS, tickers=tickers, years=a.years, adx_min=lv)
+        # run() prints a full report per level; we want the trades, not five
+        # reports. Errors still surface — only stdout is swallowed.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            trades = bt.run(cfg)
+        if trades is None:
+            print("  ! backtest.run() returned None — it is expected to return "
+                  "the trade list. Re-check that change before trusting a sweep.",
+                  file=sys.stderr)
+            return 2
+        rs = [t["r"] for t in trades if t.get("r") is not None]
+        print(f"  ADX {lv:>5.1f}: {len(rs):>5} trades", file=sys.stderr)
         if len(rs) < 2:
-            print(f"  ! ADX {lv}: {len(rs)} trades — skipped", file=sys.stderr)
+            print(f"  ! ADX {lv}: too few trades — skipped", file=sys.stderr)
             continue
         arr = np.array(rs, dtype=float)
         kept.append(lv)
