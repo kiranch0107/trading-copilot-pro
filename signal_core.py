@@ -43,6 +43,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict, replace
 from datetime import datetime, time as dtime
+from zoneinfo import ZoneInfo
 
 try:
     import pandas as pd
@@ -114,14 +115,33 @@ MARKET_HALF_DAYS = frozenset({
 })
 
 
+# The market calendar is expressed in Eastern Time, so the default clock has to
+# be too. This module is the CANONICAL one — app.py, scanner.py and
+# exit_monitor.py all carry their own copy of is_market_open() and all three
+# already default to ET — and it was the only one defaulting to naive local
+# time. On a UTC host (GitHub Actions runners, this project's own containers)
+# that is wrong in BOTH directions: 13:30-16:00 UTC is pre-open in ET but reads
+# as open, and 16:00-20:00 UTC is the ET afternoon session but reads as closed.
+# drop_partial_bar() trusts this answer, so the first case discards the last
+# COMPLETED bar and the second analyses an in-progress one.
+#
+# No caller relies on the naive behaviour today — scanner.py passes
+# datetime.now(ET) explicitly and app.py uses its own copy — so this closes a
+# trap rather than changing a result. A naive datetime passed in is still
+# honoured as-is, because a caller that supplies one has made a choice.
+_ET = ZoneInfo("America/New_York")
+
+
 def is_market_open(now: datetime | None = None) -> bool:
     """
     True during US regular trading hours, accounting for holidays and 1:00pm
-    early closes. Caller supplies an ET-aware datetime; if none is given we
-    use naive local time, which is only correct when the process runs in ET —
-    so callers should pass one explicitly.
+    early closes.
+
+    `now` defaults to the current time IN EASTERN TIME, not the host's local
+    clock, because the calendar above is an ET calendar. Pass an explicit
+    datetime to ask about another moment.
     """
-    now = now or datetime.now()
+    now = now if now is not None else datetime.now(_ET)
     if now.weekday() >= 5:
         return False
     day = now.strftime("%Y-%m-%d")

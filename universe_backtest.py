@@ -149,8 +149,11 @@ def run_arm(name: str, tickers: list[str], years: int, cfg: dict,
         df = bt.compute(raw)
         if len(df) < bt.MIN_BARS_AFTER:
             continue
-        dates = pd.to_datetime(raw.tail(len(df))["Date"]) \
-            if "Date" in raw.columns else pd.to_datetime(df.index)
+        # df carries its own correctly-aligned Date out of bt.compute();
+        # raw.tail(len(df)) silently mis-paired them whenever an interior row
+        # was dropped (see backtest.run()).
+        dates = pd.to_datetime(df["Date"]) \
+            if "Date" in df.columns else pd.to_datetime(df.index)
 
         trades = []
         i, n = 0, len(df)

@@ -869,15 +869,54 @@ def check_cost_gates_shared() -> None:
     """
     import risk_params
 
-    # The ceiling must still be where the arithmetic puts it, not wherever it
-    # drifted to: at the gate the breakeven win rate must clear the measured
-    # one, and two points looser must not.
+    # CORRECTED 2026-09-10. This used to assert
+    #
+    #     spread_breakeven_wr(cap) < wr < spread_breakeven_wr(cap + 2)
+    #
+    # i.e. "the ceiling sits where the arithmetic turns". That passed only
+    # because spread_breakeven_wr defaulted to TP +200% while OPT_WIN_RATE was
+    # measured at TP +100%. The invariant was enforcing the NUMBER while the
+    # BASIS underneath it was wrong — so it went green on an unsound comparison,
+    # the same shape as guarding the market calendar's dates but not its
+    # semantics. What must be pinned is the basis.
     wr = risk_params.OPT_WIN_RATE * 100
     cap = risk_params.MAX_OPTION_SPREAD_PCT
-    assert risk_params.spread_breakeven_wr(cap) < wr < \
-        risk_params.spread_breakeven_wr(cap + 2), (
-        f"MAX_OPTION_SPREAD_PCT={cap:g} no longer sits where the arithmetic "
-        f"turns for a {wr:.1f}% win rate. Re-derive it, do not re-type it.")
+
+    import inspect
+    sig = inspect.signature(risk_params.spread_breakeven_wr).parameters
+    assert sig["tp_pct"].default == risk_params.OPT_WIN_RATE_TP_PCT, (
+        f"spread_breakeven_wr() defaults to TP {sig['tp_pct'].default}% but "
+        f"OPT_WIN_RATE was measured at {risk_params.OPT_WIN_RATE_TP_PCT}%. Every "
+        f"caller using the defaults would compare a win rate from one payoff "
+        f"against the breakeven of another.")
+    assert sig["sl_pct"].default == risk_params.OPT_WIN_RATE_SL_PCT, \
+        "the SL basis drifted from the one OPT_WIN_RATE was measured at"
+
+    # And the honest conclusion must stay stated: at the measured basis the
+    # structure is negative at every spread, so the ceiling is a loss cap. If a
+    # future re-measurement flips this, the comment block in risk_params.py is
+    # stale and the ceiling can finally be derived rather than capped.
+    at_gate = risk_params.spread_breakeven_wr(cap)
+    assert at_gate > wr, (
+        f"breakeven at the {cap:g}% ceiling is now {at_gate:.1f}%, BELOW the "
+        f"measured {wr:.1f}% — the structure clears breakeven for the first "
+        f"time. Re-derive MAX_OPTION_SPREAD_PCT and rewrite the block in "
+        f"risk_params.py that says no spread breaks even.")
+
+    # The docs must not re-acquire the old claim, and must keep stating the
+    # corrected one. Absence alone is too weak (the block could be deleted
+    # wholesale) and presence alone too weak (the false claim could sit beside
+    # it), so both are asserted.
+    rtxt = Path("risk_params.py").read_text()
+    assert "is where the arithmetic turns" not in rtxt, (
+        "risk_params.py asserts the spread ceiling sits where the arithmetic "
+        "turns. No such point exists at the measured basis — breakeven exceeds "
+        "the measured win rate even at ZERO spread, so the ceiling is a loss "
+        "cap. Re-read the corrected block before changing this.")
+    assert "NO SPREAD AT WHICH THIS CONFIGURATION BREAKS EVEN" in rtxt, (
+        "risk_params.py no longer records that the measured option structure is "
+        "negative at every spread. That is the finding the ceiling's purpose "
+        "rests on; if a re-measurement changed it, update this check on purpose.")
 
     # A literal ceiling anywhere else is a copy waiting to drift.
     stale = re.compile(r"(?<![\w.])(?:15\.0|0\.15)(?![\w])")
@@ -925,6 +964,197 @@ def check_modules_import() -> None:
 
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# 18. compute() must carry Open/Date with their own indicator row
+# ---------------------------------------------------------------------------
+
+def check_compute_preserves_alignment() -> None:
+    """
+    Every bar's Open and Date must still belong to the bar whose indicators sit
+    beside them after compute().
+
+    THE BUG THIS PINS. backtest.run(), option_backtest and universe_backtest all
+    re-attached Open/Date with `raw.tail(len(df))`, which assumes compute() drops
+    rows only from the FRONT. It does not: dropna() removes a row wherever any
+    indicator is NaN, and VOL_AVG20 is a 20-bar rolling mean, so ONE missing
+    Volume anywhere deletes 20 INTERIOR rows. Tail-alignment then paired earlier
+    indicator rows with an Open and Date from 20 sessions later.
+
+    That reached the numbers, not just the reporting: simulate_trade() takes the
+    fill from df["Open"], and the SPY-regime join keys on df["Date"]. It was
+    silent, and option_backtest is where OPT_WIN_RATE is measured — the input the
+    option spread ceiling is derived from.
+
+    The fixture injects an interior NaN deliberately, and asserts that the old
+    method would have DISAGREED. Without that second assertion this test passes
+    on a clean frame where both methods happen to agree — a dead fixture of
+    exactly the kind the falsification pass keeps finding here.
+    """
+    import numpy as np
+    import pandas as pd
+    import backtest as bt
+
+    n = 400
+    rng = np.random.default_rng(0)
+    close = pd.Series(100 + np.cumsum(rng.normal(0, 1, n)))
+    raw = pd.DataFrame({
+        "Date": pd.bdate_range("2024-01-02", periods=n),
+        "Open": close.values, "High": close.values + 1,
+        "Low": close.values - 1, "Close": close.values,
+        "Volume": np.full(n, 1_000_000.0),
+    })
+    raw.loc[n // 2, "Volume"] = np.nan      # one bad bar, 20 interior rows lost
+
+    out = bt.compute(raw)
+    assert len(out) > 50, f"fixture degenerate: compute() kept only {len(out)} rows"
+
+    # Ground truth: re-run compute()'s own row filter while KEEPING the index.
+    probe = raw.copy()
+    c, h, l = probe["Close"], probe["High"], probe["Low"]
+    import ta
+    probe["EMA20"] = ta.trend.ema_indicator(c, window=20)
+    probe["EMA50"] = ta.trend.ema_indicator(c, window=50)
+    _m = ta.trend.MACD(c)
+    probe["MACD"], probe["Signal"] = _m.macd(), _m.macd_signal()
+    probe["RSI"] = ta.momentum.rsi(c, window=14)
+    probe["ATR"] = ta.volatility.average_true_range(h, l, c, window=14)
+    probe["ADX"] = ta.trend.adx(h, l, c, window=14)
+    probe["VOL_AVG20"] = probe["Volume"].rolling(20).mean()
+    probe = probe.dropna(subset=["EMA20", "EMA50", "MACD", "Signal", "RSI",
+                                 "ATR", "ADX", "VOL_AVG20"])
+    if len(probe) > bt.WARMUP_BARS + bt.MIN_BARS_AFTER:
+        probe = probe.iloc[bt.WARMUP_BARS:]
+    truth = raw.loc[probe.index, ["Date", "Open"]].reset_index(drop=True)
+
+    assert len(truth) == len(out), (
+        f"compute() kept {len(out)} rows, the reference filter kept {len(truth)} "
+        f"— compute()'s row filter changed; update this check deliberately.")
+
+    bad_dates = int((pd.to_datetime(out["Date"]).values != truth["Date"].values).sum())
+    assert bad_dates == 0, (
+        f"{bad_dates} of {len(out)} rows carry a Date that belongs to a "
+        f"different bar. Open/Date must travel THROUGH compute() with their own "
+        f"row — never be re-attached positionally afterwards.")
+    assert np.allclose(out["Open"].values, truth["Open"].values), (
+        "Open is misaligned with its indicator row — simulate_trade() would "
+        "fill at a price from the wrong bar.")
+
+    # LIVENESS: the discarded method must actually differ on this fixture, or
+    # the two assertions above prove nothing.
+    stale = raw.tail(len(out)).reset_index(drop=True)
+    drift = int((pd.to_datetime(stale["Date"]).values != truth["Date"].values).sum())
+    assert drift > 0, (
+        "fixture is DEAD: raw.tail(len(df)) agrees with the truth here, so this "
+        "check would pass even with the bug restored. The interior NaN is not "
+        "dropping rows — re-derive the fixture.")
+
+    # And no module may reintroduce it.
+    for path in ("backtest.py", "option_backtest.py", "universe_backtest.py"):
+        txt = Path(path).read_text()
+        for i, line in enumerate(txt.splitlines(), 1):
+            code = line.split("#", 1)[0]
+            if ".tail(len(" in code:
+                raise AssertionError(
+                    f"{path}:{i} re-attaches columns by tail position: "
+                    f"{line.strip()!r}. compute() already carries Open/Date on "
+                    f"the correct row; tail-alignment silently corrupts both "
+                    f"whenever an interior row is dropped.")
+    print(f"  compute() keeps Open/Date on their own row "
+          f"({len(out)} rows; tail-alignment would have broken {drift})")
+    print("  no module re-attaches Open/Date by tail position")
+
+
+# ---------------------------------------------------------------------------
+# 19. the four is_market_open() copies must BEHAVE the same, not just share dates
+# ---------------------------------------------------------------------------
+
+def check_market_hours_agree() -> None:
+    """
+    check_calendars_identical() pins the calendar DATA across five files. Nothing
+    pinned the LOGIC that reads it, and four modules implement it:
+    signal_core.py (canonical), app.py, scanner.py and exit_monitor.py.
+
+    They had already drifted in one respect that mattered: signal_core's default
+    clock was naive `datetime.now()` while the other three defaulted to ET. On a
+    UTC host that inverts the answer for most of the session, and
+    drop_partial_bar() trusts it — so the canonical module was the one carrying
+    the trap.
+
+    Guarding dates but not semantics is how the option spread ceiling stayed
+    green on an unsound comparison for a day. Same lesson, different file.
+
+    app.py cannot be imported here (it renders Streamlit and fetches prices on
+    import), so it is checked statically for the two properties that matter.
+    """
+    import importlib
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    ET = ZoneInfo("America/New_York")
+    mods = {name: importlib.import_module(name)
+            for name in ("signal_core", "scanner", "exit_monitor")}
+
+    # Boundaries and the cases the calendar exists for. Each is (dt, why).
+    cases = [
+        (datetime(2026, 9, 9, 10, 0, tzinfo=ET),  "ordinary Wednesday, mid-session"),
+        (datetime(2026, 9, 9, 9, 29, tzinfo=ET),  "one minute before the open"),
+        (datetime(2026, 9, 9, 9, 30, tzinfo=ET),  "the open itself"),
+        (datetime(2026, 9, 9, 16, 1, tzinfo=ET),  "one minute after the close"),
+        (datetime(2026, 9, 12, 11, 0, tzinfo=ET), "Saturday"),
+        (datetime(2026, 11, 26, 11, 0, tzinfo=ET), "Thanksgiving — a full closure"),
+        (datetime(2026, 11, 27, 12, 0, tzinfo=ET), "half-day, before 1:00pm"),
+        (datetime(2026, 11, 27, 14, 0, tzinfo=ET), "half-day, after the 1:00pm close"),
+        (datetime(2026, 7, 3, 11, 0, tzinfo=ET),  "observed Independence Day"),
+    ]
+
+    for dt, why in cases:
+        answers = {n: bool(m.is_market_open(dt)) for n, m in mods.items()}
+        if len(set(answers.values())) != 1:
+            raise AssertionError(
+                f"is_market_open() disagrees on {dt:%Y-%m-%d %H:%M} ({why}): "
+                f"{answers}. Four copies of this function decide whether the "
+                f"last daily bar is complete; they cannot differ.")
+
+    # LIVENESS: the cases must actually exercise both answers, or agreement is
+    # vacuous (four functions returning True always would pass).
+    verdicts = {bool(mods["signal_core"].is_market_open(dt)) for dt, _ in cases}
+    assert verdicts == {True, False}, (
+        f"the sampled timestamps only ever produce {verdicts} — this check "
+        f"would pass on a function that ignores its argument. Re-derive them.")
+
+    # Holidays and half-days must be the REASON for the closures above, not a
+    # coincidence of the clock.
+    assert not mods["signal_core"].is_market_open(
+        datetime(2026, 11, 26, 11, 0, tzinfo=ET)), "Thanksgiving must be closed"
+    assert mods["signal_core"].is_market_open(
+        datetime(2026, 11, 25, 11, 0, tzinfo=ET)), \
+        "the day BEFORE Thanksgiving is a normal session — if this fails the "\
+        "holiday test above proves nothing about holidays"
+
+    # No copy may default to the host's local clock.
+    import inspect
+    for name, m in mods.items():
+        src = inspect.getsource(m.is_market_open)
+        assert "datetime.now()" not in src.replace(" ", ""), (
+            f"{name}.is_market_open() defaults to naive datetime.now(). The "
+            f"calendar is an ET calendar; on a UTC host this is wrong in both "
+            f"directions and drop_partial_bar() trusts the answer.")
+
+    atxt = Path("app.py").read_text()
+    i = atxt.find("def is_market_open(")
+    assert i > 0, "app.py no longer defines is_market_open — update this check"
+    body = atxt[i:i + 900]
+    assert "America/New_York" in body, (
+        "app.py's is_market_open() no longer resolves an Eastern-time clock.")
+    assert "MARKET_HOLIDAYS" in body and "MARKET_HALF_DAYS" in body, (
+        "app.py's is_market_open() stopped consulting the holiday/half-day "
+        "calendar — it would report the market open on Thanksgiving.")
+
+    print(f"  {len(cases)} timestamps, 3 importable copies agree "
+          f"(open and closed both exercised)")
+    print("  no copy defaults to the host's local clock; app.py checked statically")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -942,6 +1172,8 @@ CHECKS = [
     ("app can reach the price fallback key",       check_app_can_reach_fallback_key),
     ("paper/live split + sizing gates",            check_journal_and_sizing_guards),
     ("option cost gates share one source",         check_cost_gates_shared),
+    ("compute() keeps Open/Date on their row",     check_compute_preserves_alignment),
+    ("is_market_open agrees across 4 copies",      check_market_hours_agree),
     ("every production module imports",            check_modules_import),
 ]
 

@@ -2290,20 +2290,54 @@ with TAB_POSITIONS:
         # It now lives in risk_params, because the option spread ceiling is
         # derived from it and the two must not be free to drift apart.
         OPT_WIN_RATE = risk_params.OPT_WIN_RATE
+        # THE WIN RATE ONLY APPLIES AT THE PAYOFF IT WAS MEASURED AT.
+        #
+        # 23.8% is the rate at which a contract reached +100% before -50%
+        # (risk_params.OPT_WIN_RATE_TP_PCT / _SL_PCT). This block used to compare
+        # it against a breakeven computed from whatever TP/SL the sidebar had, so
+        # the default TP+200 showed breakeven 20% against 23.8% and rendered a
+        # GREEN TICK — while the caption underneath said no setting is profitable.
+        # A +200% target is strictly harder to reach than +100%, so the true win
+        # rate there is BELOW 23.8% and the tick pointed the optimistic way on a
+        # comparison that was never valid.
+        #
+        # At the measured basis the same arithmetic gives breakeven 33.3% against
+        # 23.8% — negative, which is what option_backtest.py prints on its own
+        # defaults. So: at the measured basis, say it loses; away from it, refuse
+        # to put a number on it and point at --sweep.
+        on_basis = (abs(rule_tp - risk_params.OPT_WIN_RATE_TP_PCT) < 1e-9 and
+                    abs(rule_sl - risk_params.OPT_WIN_RATE_SL_PCT) < 1e-9)
         ev = OPT_WIN_RATE * (rule_tp / 100) - (1 - OPT_WIN_RATE) * (rule_sl / 100)
-        line = (f"Payoff **{payoff:.1f}:1** → breakeven win rate **{breakeven:.0f}%**. "
-                f"Measured option-level win rate for this signal is "
-                f"**{OPT_WIN_RATE*100:.1f}%**, giving expected value "
-                f"**{ev:+.2f}** per unit risked — before spread and commissions.")
-        if breakeven >= OPT_WIN_RATE * 100:
-            st.error("⚠️ " + line + " These rules lose money at the win rate this "
-                     "signal actually achieves on OPTIONS. Widen take-profit, or "
-                     "accept that this is a data-collection trade rather than a "
-                     "positive-expectancy one.")
-        elif ev < 0.05:
-            st.warning("⚠️ " + line + " Thin — bid-ask spread alone could erase it.")
+        basis = (f"TP+{risk_params.OPT_WIN_RATE_TP_PCT:g}/"
+                 f"SL-{risk_params.OPT_WIN_RATE_SL_PCT:g}")
+        head = f"Payoff **{payoff:.1f}:1** → breakeven win rate **{breakeven:.0f}%**. "
+        if not on_basis:
+            st.warning(
+                "⚠️ " + head +
+                f"The only measured option win rate for this signal is "
+                f"**{OPT_WIN_RATE*100:.1f}%**, measured at **{basis}** — not at the "
+                f"TP+{rule_tp:g}/SL-{rule_sl:g} set here. A wider take-profit is hit "
+                f"*less* often, so applying {OPT_WIN_RATE*100:.1f}% to it overstates "
+                f"the result. **Expected value is unmeasured for these rules.** Run "
+                f"`option_backtest.py --sweep` to measure the win rate at this TP "
+                f"before treating any number here as real."
+            )
         else:
-            st.success("✅ " + line)
+            line = (head +
+                    f"Measured option-level win rate for this signal is "
+                    f"**{OPT_WIN_RATE*100:.1f}%** at this exact basis, giving "
+                    f"expected value **{ev:+.2f}** per unit risked — before "
+                    f"spread and commissions.")
+            if breakeven >= OPT_WIN_RATE * 100:
+                st.error("⚠️ " + line + " These rules lose money at the win "
+                         "rate this signal actually achieves on OPTIONS. Treat it as "
+                         "a data-collection trade, not a positive-expectancy one. "
+                         "Widening take-profit does not fix it — it moves you off "
+                         "the only basis that has been measured.")
+            elif ev < 0.05:
+                st.warning("⚠️ " + line + " Thin — bid-ask spread alone could erase it.")
+            else:
+                st.success("✅ " + line)
         st.caption(
             "Note: even the best configuration measured (TP+300, thesis off) came "
             "out at −0.27% expectancy. No setting here makes this signal "

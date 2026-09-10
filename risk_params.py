@@ -89,35 +89,66 @@ MAX_POSITION_PCT = 25.0
 # share number made losing configurations look profitable.
 OPT_WIN_RATE = 0.238
 
+# THE BASIS THAT 23.8% WAS MEASURED AT. Not decoration — a win rate is
+# meaningless without the payoff rule it was measured under, and this repo
+# already paid for that once: the spread ceiling below was derived by comparing
+# 23.8% against a breakeven computed at a DIFFERENT take-profit.
+#
+# option_backtest.py's defaults are `--tp 100 --sl 50 --dte-exit 7
+# --spread-pct 5`, so 23.8% is the rate at which a contract reached +100%
+# before -50%, with a 5% round-trip spread ALREADY charged inside it.
+#
+# A +200% target is strictly harder to reach than +100%, so the win rate at
+# +200% is necessarily LOWER than 23.8% — it is not measured, and it must not
+# be assumed. option_backtest.py --sweep prints the rate at each TP level;
+# until one is recorded here, nothing may compare 23.8% to a +200% breakeven.
+OPT_WIN_RATE_TP_PCT = 100.0
+OPT_WIN_RATE_SL_PCT = 50.0
+
 # MAXIMUM BID-ASK SPREAD, as a percentage of the option mid.
 #
-# This is the one signal-side number in this project that is arithmetic rather
-# than a fitted parameter, so it is the one worth setting deliberately.
+# CORRECTED 2026-09-10 — THE ORIGINAL DERIVATION COMPARED TWO DIFFERENT RULES
 #
-# The measured option-level win rate for this signal is OPT_WIN_RATE,
-# 23.8%, defined just above. With the standard rules — take profit +200%, stop -50% — the
-# raw payoff is 4:1, so breakeven is 20% and 23.8% clears it by 3.8 points.
-# The spread eats that from both ends, because you buy above the mid and sell
-# below it:
+# This block used to read: "take profit +200%, stop -50%, so the raw payoff is
+# 4:1, breakeven is 20% and 23.8% clears it by 3.8 points", and concluded that
+# the ceiling sat at the point where that arithmetic turned. Both halves
+# were unsound, because 23.8%
+# was never measured at +200% — option_backtest.py's default is `--tp 100`
+# (see OPT_WIN_RATE_TP_PCT above). A win rate from an EASIER target was being
+# used to validate the breakeven of a HARDER one, which flatters the result in
+# exactly the direction that makes trading look justified.
 #
-#     spread   realised TP   realised SL   breakeven WR   vs 23.8%
-#        0%        +200%         -50%          20.0%      clears
-#        5%        +185%         -52%          22.1%      clears
-#        8%        +177%         -54%          23.3%      clears, barely
-#       10%        +171%         -55%          24.2%      BELOW
-#       15%        +158%         -57%          26.5%      BELOW
+# Scored at the basis it was actually measured at, TP +100% / SL -50%:
 #
-# The gates were set at 15% in scanner.py and option_chain.py, with a mere
-# warning at 10% in app.py. That admitted contracts that cannot win: at 15%
-# the strategy needs a 26.5% win rate and has 23.8%. This is not an edge that
-# was lost to bad luck, it is one given away at the point of entry.
+#     spread   breakeven WR   vs measured 23.8%
+#        0%        33.3%            BELOW by 9.5 points
+#        5%        36.8%            BELOW
+#        8%        38.9%            BELOW
+#       10%        40.4%            BELOW
+#       15%        44.1%            BELOW
 #
-# 8% is where the arithmetic turns, not a number found by searching. Tightening
-# a COST is the one change that cannot overfit — it does not touch the signal,
-# it stops paying a toll that exceeds the toll road's value. It will show you
-# fewer contracts. That is the intended effect.
+# THERE IS NO SPREAD AT WHICH THIS CONFIGURATION BREAKS EVEN. It loses before
+# any spread is paid, and the 23.8% already has a 5% round trip inside it. That
+# is also what option_backtest.py prints on its own defaults — "the measured win
+# rate does NOT support this payoff structure" — so the two halves of the repo
+# were stating opposite conclusions from the same number.
 #
-# If OPT_WIN_RATE is ever re-measured, re-derive this rather than keeping 8.
+# WHY 8.0 STAYS ANYWAY, AND WHAT IT IS NOW
+#
+# It is no longer "where the arithmetic turns" — no such point exists here. It
+# is a LOSS-MINIMISING COST CAP: a tighter spread makes each losing trade lose
+# less, and tightening a cost cannot overfit because it does not touch the
+# signal. Lowering it further would mostly empty the tradeable universe; raising
+# it pays a larger toll on a structure that is already negative.
+#
+# The VALUE is left alone deliberately, following this file's own convention for
+# the app/scanner premium-cap divergence below: changing which contracts the
+# system suggests is a decision to take on purpose, not to fold into a
+# correctness fix. What changed here is the claim, which was false.
+#
+# TO ACTUALLY SETTLE IT: run `option_backtest.py --sweep` and record the win
+# rate at the TP you intend to trade, then re-derive against THAT. Comparing
+# across bases is the error this block exists to prevent.
 MAX_OPTION_SPREAD_PCT = 8.0
 
 
@@ -130,14 +161,22 @@ def option_budget(account_size: float | None = None,
     return acct * pct / 100.0
 
 
-def spread_breakeven_wr(spread_pct: float, tp_pct: float = 200.0,
-                        sl_pct: float = 50.0) -> float:
+def spread_breakeven_wr(spread_pct: float,
+                        tp_pct: float = OPT_WIN_RATE_TP_PCT,
+                        sl_pct: float = OPT_WIN_RATE_SL_PCT) -> float:
     """
     Win rate needed to break even once the bid-ask spread is paid both ways.
 
     You buy above the mid and sell below it, so a `spread_pct` round trip
     shrinks the win and deepens the loss. Kept as a function so the threshold
     above can be re-derived rather than re-typed if the rules change.
+
+    THE DEFAULTS ARE THE MEASURED BASIS, not a plausible-looking payoff. They
+    used to be tp_pct=200.0 while OPT_WIN_RATE was measured at +100%, so every
+    caller that relied on the defaults silently compared a win rate from one
+    rule against the breakeven of another. Pass tp_pct/sl_pct explicitly to ask
+    about a different structure — and if you do, remember that OPT_WIN_RATE is
+    NOT the win rate for that structure.
     """
     h = spread_pct / 2 / 100
     buy = 1 + h
@@ -258,29 +297,55 @@ def selftest() -> int:
         "the verdict must scale with the account, not be a fixed dollar rule"
     print(f"scales with account      : $625 is fine on a $100k account")
 
-    # ── the spread ceiling must sit where the arithmetic turns ──
-    # Read the constant rather than re-typing it. A selftest that carries
-    # its own copy of the number it is checking keeps passing after the
-    # real number moves — which is the failure this repo keeps finding.
+    # ── the spread arithmetic must be scored at the MEASURED basis ──
+    # Read the constants rather than re-typing them. A selftest that carries its
+    # own copy of the number it is checking keeps passing after the real number
+    # moves — which is the failure this repo keeps finding.
     wr = OPT_WIN_RATE * 100
-    assert spread_breakeven_wr(0) == 20.0, spread_breakeven_wr(0)
+
+    # The defaults MUST be the basis the win rate was measured at. They were
+    # tp_pct=200 while OPT_WIN_RATE came from --tp 100, which is how a losing
+    # structure came to be documented as clearing breakeven by 3.8 points.
+    import inspect
+    _d = inspect.signature(spread_breakeven_wr).parameters
+    assert _d["tp_pct"].default == OPT_WIN_RATE_TP_PCT, (
+        f"spread_breakeven_wr defaults to TP {_d['tp_pct'].default}% but "
+        f"OPT_WIN_RATE was measured at {OPT_WIN_RATE_TP_PCT}%. Comparing a win "
+        f"rate to the breakeven of a different payoff is the original bug.")
+    assert _d["sl_pct"].default == OPT_WIN_RATE_SL_PCT, "SL basis drifted"
+
+    be0 = spread_breakeven_wr(0)
+    assert abs(be0 - 100 * OPT_WIN_RATE_SL_PCT /
+               (OPT_WIN_RATE_TP_PCT + OPT_WIN_RATE_SL_PCT)) < 1e-9, be0
+
+    # The honest finding: at the measured basis NO spread breaks even, so the
+    # ceiling is a loss cap and must not be described as clearing breakeven.
+    assert be0 > wr, (
+        f"breakeven at zero spread is {be0:.1f}% and the measured win rate is "
+        f"{wr:.1f}% — if this ever flips, the whole comment block above is "
+        f"stale and the ceiling can be re-derived properly.")
     at_gate = spread_breakeven_wr(MAX_OPTION_SPREAD_PCT)
-    assert at_gate < wr, (
-        f"at a {MAX_OPTION_SPREAD_PCT:g}% spread the breakeven win rate is "
-        f"{at_gate:.1f}%, above the measured {wr:.1f}% — the gate admits "
-        f"contracts that cannot win")
-    just_over = spread_breakeven_wr(MAX_OPTION_SPREAD_PCT + 2)
-    assert just_over > wr, (
-        f"the gate is TIGHTER than the arithmetic requires: even at "
-        f"{MAX_OPTION_SPREAD_PCT + 2:g}% the breakeven is {just_over:.1f}%, "
-        f"still under {wr:.1f}%, so contracts that clear breakeven are being "
-        f"turned away. Set it where the arithmetic turns.")
-    assert spread_breakeven_wr(15) > wr, \
-        "15% — the OLD gate — must be provably negative, or this whole " \
-        "change was unmotivated"
+    assert at_gate > wr, (
+        f"at the measured basis a {MAX_OPTION_SPREAD_PCT:g}% spread needs "
+        f"{at_gate:.1f}% and the signal delivers {wr:.1f}%")
+    # Monotone in cost: a wider spread can only need a higher win rate. If this
+    # breaks, the formula is wrong, not the constant.
+    assert spread_breakeven_wr(15) > at_gate > be0, \
+        "breakeven must rise with spread"
+
+    # LIVENESS: the basis has to MATTER, or pinning it proves nothing.
+    be_wrong_basis = spread_breakeven_wr(MAX_OPTION_SPREAD_PCT, tp_pct=200.0)
+    assert be_wrong_basis < wr < at_gate, (
+        f"the two bases no longer disagree (TP+200 -> {be_wrong_basis:.1f}%, "
+        f"TP+{OPT_WIN_RATE_TP_PCT:g} -> {at_gate:.1f}%), so this check would "
+        f"pass even with the basis confusion restored")
+    print(f"spread basis pinned      : TP+{OPT_WIN_RATE_TP_PCT:g}/SL-"
+          f"{OPT_WIN_RATE_SL_PCT:g}, the basis 23.8% was measured at")
     print(f"spread ceiling           : {MAX_OPTION_SPREAD_PCT:g}% -> breakeven "
-          f"{at_gate:.1f}% vs measured {wr:.1f}% (old 15% -> "
-          f"{spread_breakeven_wr(15):.1f}%, negative)")
+          f"{at_gate:.1f}% vs measured {wr:.1f}% — NEGATIVE at every spread "
+          f"(zero-spread breakeven {be0:.1f}%); it is a loss cap, not an edge")
+    print(f"  (the old TP+200 basis made the same gate look like {be_wrong_basis:.1f}% "
+          f"— 'clears by {wr - be_wrong_basis:.1f} points'. That was the bug.)")
 
     print("streamlit-free            : safe for the unattended workflows")
     print("\nAll self-tests passed.")
