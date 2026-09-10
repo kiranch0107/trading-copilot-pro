@@ -18,7 +18,7 @@
     "notes": "Paper trade on 9/1",
     "opened": "2026-09-02 14:29 ET",
     "opened_epoch": 1788373742.7716753,
-    "last_check_epoch": 1788977900.0498672,
+    "last_check_epoch": 1789048576.8329656,
     "status": "OPEN",
     "exit_alerted": false,
     "mode": "paper",
@@ -58,11 +58,16 @@
     "notes": "Actual trade on 9/8",
     "opened": "2026-09-08 11:01 ET",
     "opened_epoch": 1788879668.624068,
-    "last_check_epoch": 1788977900.0498672,
-    "status": "OPEN",
-    "exit_alerted": false,
+    "last_check_epoch": 1789048576.8329656,
+    "status": "EXIT_SIGNALLED",
+    "exit_alerted": true,
     "mode": "live",
     "source": "unknown",
-    "traded_at": null
+    "traded_at": null,
+    "exit_reason": "STOP",
+    "exit_detail": "Premium -68.1% (limit \u221250%)",
+    "exit_premium": 0.73,
+    "exit_pnl_pct": -68.1,
+    "exit_detected": "2026-09-10 09:56 ET"
   }
 ]
