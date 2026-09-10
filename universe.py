@@ -43,6 +43,7 @@ import math
 import os
 import sys
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 try:
     import pandas as pd
@@ -130,9 +131,15 @@ SECTORS = {
 # hand-picking: large-cap US listings with liquid options, selected to refill
 # the sectors Tranche A emptied, and deliberately including well-known recent
 # LAGGARDS (T, VZ, CMCSA, MO, BMY, CVS, ON) so the additions are not a
-# momentum-winner list. None appear in any reservation tranche — asserted by
-# consistency_check.py, which fails CI if a reserved-but-unspent ticker ever
-# reappears here.
+# momentum-winner list.
+#
+# None appear in an UNSPENT reservation tranche — asserted by
+# consistency_check.check_universe_not_spending_reserved(), which fails CI if a
+# reserved-but-unspent ticker ever reappears here. This said "any reservation
+# tranche", which is not true and not what is enforced: all 32 names of tranche
+# B are in this pool. That is deliberate and recorded — tranche B was spent
+# precisely BECAUSE the live ranker kept selecting them (see the 2026-09-02
+# ledger entry) — but only tranche A is protected, and the claim should say so.
 CANDIDATE_POOL = [
     # Tech
     "AAPL", "MSFT", "GOOGL", "META", "ORCL", "CRM", "ADBE", "NOW",
@@ -163,6 +170,26 @@ CANDIDATE_POOL = [
 # ---------------------------------------------------------------------------
 # Data
 # ---------------------------------------------------------------------------
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _today_et() -> date:
+    """Today in Eastern Time — the market's own calendar, not the host's."""
+    return datetime.now(_ET).date()
+
+
+def drop_unsettled(df: "pd.DataFrame", today: date | None = None) -> "pd.DataFrame":
+    """
+    Remove any bar dated today (ET). Kept as a named function so it can be
+    tested without a network fetch — the guard it replaces was scheduling
+    discipline, which no test can assert.
+    """
+    if df is None or df.empty:
+        return df
+    cutoff = pd.Timestamp(today or _today_et())
+    return df[df.index < cutoff]
+
 
 def sessions_to_calendar_days(sessions: int) -> int:
     """
@@ -234,6 +261,26 @@ def fetch_history(tickers: list[str], as_of: date,
                 continue
             df.index = pd.to_datetime(df.index).tz_localize(None).normalize()
             df = df[df.index <= pd.Timestamp(as_of)]
+            # NEVER RANK ON A BAR THAT HAS NOT SETTLED.
+            #
+            # The <= as_of slice above stops future bars; it does not stop
+            # TODAY'S bar, whose Close is the live price and whose Volume is only
+            # what has traded so far. Every gate here reads both: price vs
+            # MIN_PRICE, the 20-day dollar-volume mean vs MIN_DOLLAR_VOLUME, the
+            # RS return, and the 200-SMA. A mid-session run therefore ranks partly
+            # on the clock — the same defect signal_core.drop_partial_bar() and
+            # backtest._drop_todays_bar() exist to prevent, in four other modules.
+            #
+            # It was guarded only by SCHEDULING: universe-snapshot.yml runs
+            # 12:30 UTC pre-market and its own comment says a mid-session run
+            # "would rank partly on a live, still-forming bar". But that workflow
+            # also offers workflow_dispatch, and this module's docstring invites
+            # `python universe.py` directly — neither of which is pre-market.
+            #
+            # Dropping it unconditionally (as _drop_todays_bar does) costs one
+            # settled session after the close and buys the property that matters:
+            # the snapshot no longer depends on what time of day it was produced.
+            df = drop_unsettled(df)
             if len(df) < need_sessions:
                 stats["short"].append((t, len(df)))
                 continue
@@ -290,6 +337,13 @@ def score_ticker(df: pd.DataFrame, bench: pd.DataFrame,
         "dollar_vol_m": round(dollar_vol / 1e6, 1),
         "return": round(t_ret * 100, 2),
         "bench_return": round(b_ret * 100, 2),
+        # `rs` is ROUNDED for the table. select_universe() used to sort on it,
+        # which quietly made every pair within 0.01 percentage points a tie —
+        # and Python's sort is stable, so ties resolved by CANDIDATE_POOL order,
+        # whose first two blocks are Tech and Semis. Ranking is now done on
+        # rs_exact with an alphabetical tiebreak, so it is reproducible and
+        # carries no preference for where a name sits in the pool.
+        "rs_exact": rs * 100,
         "rs": round(rs * 100, 2),
         "sma200": round(sma200, 2),
         "above_200sma": above_200,
@@ -333,7 +387,7 @@ def select_universe(as_of: date | None = None, top_n: int = TOP_N,
             continue
         rows.append({"ticker": t, **sc})
 
-    rows.sort(key=lambda r: r["rs"], reverse=True)
+    rows.sort(key=lambda r: (-r["rs_exact"], r["ticker"]))
     picked = apply_sector_cap(rows, top_n, max_per_sector)
     if verbose:
         _print_table(rows, as_of, top_n, picked)
@@ -637,6 +691,43 @@ def selftest() -> int:
     assert dynamic_enabled() is DEFAULT_DYNAMIC
     print(f"env toggle     : 1/true/ON -> on, 0/false/OFF -> off, "
           f"unset -> {DEFAULT_DYNAMIC}")
+
+    # ── an unsettled bar must never reach the ranker ──
+    _idx = pd.bdate_range(end=pd.Timestamp(date(2026, 9, 10)), periods=5)
+    _d = pd.DataFrame({"Close": range(len(_idx)), "Volume": [1e6] * len(_idx)},
+                      index=_idx)
+    assert pd.Timestamp(date(2026, 9, 10)) in _d.index, \
+        "fixture must contain a today-dated bar, or this asserts nothing"
+    _kept = drop_unsettled(_d, today=date(2026, 9, 10))
+    assert len(_kept) == len(_d) - 1, \
+        f"today's bar must be dropped, kept {len(_kept)} of {len(_d)}"
+    assert _kept.index.max() < pd.Timestamp(date(2026, 9, 10))
+    # and a past as_of must lose nothing
+    _past = drop_unsettled(_d, today=date(2026, 9, 30))
+    assert len(_past) == len(_d), \
+        "a historical window must keep every settled bar it fetched"
+    print("unsettled bar  : today's bar dropped, settled history untouched")
+
+    # ── ranking must not depend on pool order ──
+    # Two names with RS equal to 2dp but not exactly: the rounded value ties,
+    # the exact one does not. Sorting on the rounded value let CANDIDATE_POOL
+    # order decide, which favours whichever sector block comes first.
+    _tied = [
+        {"ticker": "ZZZZ", "rs_exact": 5.0049, "rs": 5.00},
+        {"ticker": "AAAA", "rs_exact": 5.0041, "rs": 5.00},
+    ]
+    assert _tied[0]["rs"] == _tied[1]["rs"], "fixture must tie at 2dp"
+    assert _tied[0]["rs_exact"] != _tied[1]["rs_exact"], "and differ exactly"
+    _ordered = sorted(_tied, key=lambda r: (-r["rs_exact"], r["ticker"]))
+    assert [r["ticker"] for r in _ordered] == ["ZZZZ", "AAAA"], \
+        "the genuinely stronger name must rank first even when the rounded " \
+        "values tie"
+    _exact_tie = sorted(
+        [{"ticker": "ZZZZ", "rs_exact": 5.0}, {"ticker": "AAAA", "rs_exact": 5.0}],
+        key=lambda r: (-r["rs_exact"], r["ticker"]))
+    assert [r["ticker"] for r in _exact_tie] == ["AAAA", "ZZZZ"], \
+        "an exact tie must break alphabetically, not by input order"
+    print("rank order     : exact RS decides; exact ties break alphabetically")
 
     print("\nAll self-tests passed.")
     return 0

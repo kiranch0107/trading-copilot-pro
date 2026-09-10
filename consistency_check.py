@@ -1155,6 +1155,91 @@ def check_market_hours_agree() -> None:
     print("  no copy defaults to the host's local clock; app.py checked statically")
 
 
+# ---------------------------------------------------------------------------
+# 20. the reservation lock must agree with itself
+# ---------------------------------------------------------------------------
+
+def check_reservation_self_consistent() -> None:
+    """
+    data_reservation.py is the only thing standing between this project and
+    re-testing data it has already seen. Two holes made it advisory rather than
+    binding, and both are the same shape as the option-gate basis bug: the guard
+    enforced a value while the meaning underneath went unchecked.
+
+    1. reservation_hash() covers the tranche DEFINITIONS in the module, and
+       RESERVED has no `spent` key. So editing "spent": true -> false directly in
+       the lock JSON left the stored hash matching the code hash exactly, and
+       status() then printed "Clean shots remaining: 2 (A, B)" four lines above
+       its own ledger entry recording that B had been spent by live trading.
+       lock_state_hash() now covers the mutable half.
+
+    2. spend() is append-only with no un-spend path, so a ledger entry for a
+       tranche whose flag reads False cannot have come from the tool. The lock
+       carried exactly that for tranche A. reconcile() reports it, and an
+       annulment is how the legitimate case gets DECLARED instead of effected by
+       editing a flag.
+
+    This check fails CI if either ever regresses, so "Tranche A is unspent" is a
+    statement the repo can defend rather than one it merely repeats.
+    """
+    import data_reservation as dr
+
+    lock = dr.load_lock()
+    if lock is None:
+        raise AssertionError(
+            "no data_reservation.lock.json — the reservation is unenforced. "
+            "Run: python data_reservation.py --init")
+
+    problems = dr.reconcile(lock)
+    assert not problems, (
+        "the reservation lock disagrees with its own ledger:\n    "
+        + "\n    ".join(problems))
+
+    stored = lock.get("state_hash")
+    assert stored is not None, (
+        "the lock has no state_hash, so edits to the spend flags or the ledger "
+        "are undetectable. Any write through save_lock() adds it.")
+    assert stored == dr.lock_state_hash(lock), (
+        f"the spend state has been edited outside the tool: stored "
+        f"{stored}, recomputed {dr.lock_state_hash(lock)}. spend() never "
+        f"un-spends, so treat every 'available' tranche as unverified.")
+
+    # A spent tranche must block a NEW hypothesis, and allow only the run it was
+    # claimed for. Spending used to make a tranche clean again.
+    spent = [(n, tr) for n, tr in lock["reserved"].items() if tr.get("spent")]
+    for name, tr in spent:
+        sample = tr["tickers"][:3]
+        r = dr.check_clean(sample, purpose="an unrelated new hypothesis")
+        assert r["clean"] is False and name in r["spent"], (
+            f"tranche {name} is SPENT but check_clean() reports {sample} as "
+            f"clean for a new hypothesis. One clean shot has to mean one.")
+        claimed = (tr.get("spent_on") or "").strip()
+        if claimed:
+            ok = dr.check_clean(sample, purpose=claimed)
+            assert ok["clean"] is True, (
+                f"tranche {name} no longer validates for the purpose it was "
+                f"actually claimed for ({claimed!r}) — the gate is now too "
+                f"tight to run the test the tranche was spent on.")
+
+    # An unspent tranche must still block outright.
+    unspent = [(n, tr) for n, tr in lock["reserved"].items()
+               if not tr.get("spent")]
+    for name, tr in unspent:
+        r = dr.check_clean(tr["tickers"][:3], purpose="anything")
+        assert r["clean"] is False and name in r["reserved"], (
+            f"tranche {name} is UNSPENT and must block any test until it is "
+            f"claimed deliberately")
+
+    avail = [n for n, tr in lock["reserved"].items()
+             if not tr.get("spent")
+             and not any(e.get("tranche") == n for e in lock.get("ledger", []))
+             or (not tr.get("spent") and tr.get("annulled"))]
+    print(f"  lock agrees with its ledger; state_hash {stored} verified")
+    print(f"  {len(spent)} spent tranche(s) block new hypotheses, "
+          f"{len(unspent)} unspent block outright")
+    print(f"  clean shots defensible: {', '.join(sorted(avail)) or 'none'}")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -1174,6 +1259,7 @@ CHECKS = [
     ("option cost gates share one source",         check_cost_gates_shared),
     ("compute() keeps Open/Date on their row",     check_compute_preserves_alignment),
     ("is_market_open agrees across 4 copies",      check_market_hours_agree),
+    ("reservation lock agrees with itself",        check_reservation_self_consistent),
     ("every production module imports",            check_modules_import),
 ]
 

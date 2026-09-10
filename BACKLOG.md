@@ -184,6 +184,46 @@ the ceiling is a loss cap, not a profitability threshold.
 
 ---
 
+## 8. Survivorship in the candidate pool — recorded, not fixable here
+
+`universe_backtest.py` avoids the severe form of survivorship bias (it calls
+`select_universe(as_of=d)` so membership on a past date uses only what was
+knowable then). The **cross-sectional** axis is still biased:
+`universe.CANDIDATE_POOL` is 90 names all listed *today*, so a company that was
+a liquid large cap in 2016 and has since been acquired, delisted or shrunk out
+cannot be selected on any `as_of` date.
+
+- It flatters the **absolute** numbers of all three arms.
+- The **comparison** is only partly protected: `dynamic` picks from the whole
+  survivor pool each rebalance, so it harvests pool-level survivorship more
+  thoroughly than a fixed 3-name list can. A dynamic-beats-static edge of a few
+  basis points sits inside that gap.
+
+Fixing it needs point-in-time index membership including delisted names. yfinance
+will not provide it and this project has no such source, so it is recorded rather
+than carried silently. Treat any dynamic-beats-static result as a hypothesis
+needing survivorship-free data, not a measurement.
+
+## 9. The universe snapshot now ignores what time it ran
+
+Fixed 2026-09-10, noted because it changes snapshots. `universe.fetch_history()`
+kept today's bar, whose Close is the live price and whose Volume is partial — and
+every gate reads both (`MIN_PRICE`, the 20-day dollar-volume mean, the RS return,
+the 200-SMA). A mid-session run therefore ranked partly on the clock.
+
+It had been guarded only by scheduling: `universe-snapshot.yml` runs 12:30 UTC
+pre-market. But that workflow also exposes `workflow_dispatch`, and the module's
+own docstring invites `python universe.py` directly. `drop_unsettled()` now drops
+a today-dated bar unconditionally, matching `backtest._drop_todays_bar()`. Cost:
+one settled session after the close. Benefit: the snapshot is the same whenever
+it is produced.
+
+If you compare a new snapshot against the three already in `universe_history/`,
+expect small membership differences for this reason — the old ones may have been
+ranked partly on unsettled bars.
+
+---
+
 ## Working conventions
 
 - `signal_core.py` is canonical. `consistency_check.py` enforces 17 cross-module

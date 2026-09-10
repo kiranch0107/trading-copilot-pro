@@ -22,7 +22,33 @@ What this file does instead: at every rebalance date it calls
 select_universe(as_of=that_date), which fetches only bars up to that date and
 ranks using only what was knowable then. The universe on 2019-03-04 is
 whatever the rule would have chosen on 2019-03-04, knowing nothing after it.
-That is the only version that measures the rule rather than hindsight.
+
+THE HALF THAT IS STILL NOT FIXED, and the sentence that used to overstate it
+-----------------------------------------------------------------------------
+That paragraph used to end "That is the only version that measures the rule
+rather than hindsight." The TIME axis is hindsight-free. The CROSS-SECTIONAL
+axis is not, and saying otherwise claimed more than the code delivers.
+
+select_universe() ranks universe.CANDIDATE_POOL, which is 90 names that are all
+listed TODAY. A company that was a liquid large cap in 2016 and has since been
+acquired, delisted or shrunk out of the pool cannot be selected on any as_of
+date, because it is not in the list. So every historical universe here is drawn
+from a set pre-filtered for surviving to 2026.
+
+Direction and size of the effect:
+  - It flatters the ABSOLUTE numbers of all three arms, because all three draw
+    from survivors. Do not read any arm's level as achievable.
+  - The COMPARISON is partially protected, since the bias is common to the
+    arms — but not fully: dynamic picks from the whole survivor pool each
+    rebalance, so it harvests pool-level survivorship more thoroughly than a
+    fixed 3-name list can. A dynamic edge of a few basis points over static is
+    inside that gap and should not be believed.
+
+Fixing it properly needs point-in-time index membership (what was actually in
+the S&P 500 on 2019-03-04, delisted names included). This project does not have
+that data and yfinance will not provide it, so the limitation is recorded rather
+than silently carried. Treat a dynamic-beats-static result as a hypothesis that
+needs survivorship-free data, not as a measurement.
 
 WHAT IT COMPARES
 -----------------

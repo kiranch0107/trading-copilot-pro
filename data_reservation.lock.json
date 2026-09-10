@@ -43,7 +43,12 @@
         "MCD",
         "COST"
       ],
-      "spent": false
+      "spent": false,
+      "annulled": {
+        "reason": "Ledger entry 2026-08-24 'tool manual test' was written while checking that --spend worked, in the same second the lock was created (created=2026-08-24T22:50:05Z, entry at=22:50:05Z). No backtest ran on these 16 names and no result was observed, so the tranche is still out-of-sample. Corroborated by the tranche B entry of 2026-09-02, which records that A was deliberately EXCLUDED from universe.CANDIDATE_POOL so it would stay unspent \u2014 consistency_check.check_universe_not_spending_reserved() enforces that. Annulled rather than left as a reset flag, which is how a real spend would come to look pristine.",
+        "at": "2026-09-10T03:33:10+00:00",
+        "annulled_entries": 1
+      }
     },
     "B": {
       "note": "Second held-out set. Do not touch until A is spent and the result written down.",
@@ -149,5 +154,6 @@
         "SLB"
       ]
     }
-  ]
+  ],
+  "state_hash": "5098d8761149c10d"
 }

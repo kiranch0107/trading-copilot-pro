@@ -77,23 +77,40 @@ def save_snapshot(snap: dict) -> str:
 
 def turnover(prev: list[str], cur: list[str]) -> dict:
     """
-    Jaccard-style turnover between two universes.
+    Turnover between two universes.
 
-    Denominator is the size of the CURRENT list, so "3 of 8 changed" reads as
-    37.5% regardless of how the previous list was sized. Both lists are treated
-    as sets — rank changes within the same membership are not turnover, because
-    they do not cost you anything to trade.
+    "3 of 8 changed" reads as 37.5%. Both lists are treated as sets — rank
+    changes within the same membership are not turnover, because they do not
+    cost you anything to trade.
+
+    CORRECTED 2026-09-10. This was `len(added) / len(cur)`, which counts only
+    arrivals and ignores departures entirely, so a SHRINKING universe scored
+    zero turnover:
+
+        prev 8 -> cur 4   (4 dropped, 0 added)   reported  0.0%
+        prev 8 -> cur 1   (7 dropped, 0 added)   reported  0.0%
+
+    Losing half the universe is maximal churn, not none. It also mattered in the
+    one regime where it is most expensive: select_universe(require_uptrend=True)
+    drops names below their own 200-SMA, so the universe shrinks in a falling
+    market — exactly when rotation costs bite — and verdict() was averaging those
+    zeros into "very stable ... effectively a fixed watchlist".
+
+    Now max(added, dropped) over the larger of the two memberships. That keeps
+    the documented reading (3 of 8 swapped = 37.5%) and is correct when the sizes
+    differ: 4 dropped from 8 is 50%, 7 of 8 is 87.5%, a full replacement is 100%.
     """
     p, c = set(prev), set(cur)
     added = sorted(c - p)
     dropped = sorted(p - c)
     held = sorted(c & p)
-    denom = max(len(c), 1)
+    denom = max(len(c), len(p), 1)
+    churned = max(len(added), len(dropped))
     return {
         "added": added,
         "dropped": dropped,
         "held": held,
-        "turnover_pct": round(len(added) / denom * 100, 1),
+        "turnover_pct": round(churned / denom * 100, 1),
         "n_added": len(added),
         "n_dropped": len(dropped),
         "n_held": len(held),
@@ -224,8 +241,44 @@ def selftest() -> int:
 
     to_empty = turnover(["A", "B"], [])
     print(f"to empty        : {to_empty['turnover_pct']:.0f}%  "
-          f"(expect 0 added, 2 dropped)")
+          f"(expect 100 — everything left)")
     assert to_empty["n_dropped"] == 2 and to_empty["n_added"] == 0
+    # This case asserted only the COUNTS before, never the percentage — which
+    # is how 0% for a fully-emptied universe survived. Assert the number.
+    assert to_empty["turnover_pct"] == 100.0, to_empty
+
+    # ── a SHRINKING universe is churn, not stability ──
+    # select_universe(require_uptrend=True) drops names below their 200-SMA, so
+    # this is the bear-market case: departures with no arrivals. Dividing
+    # arrivals by the current size reported 0% for every one of these.
+    shrink = turnover(["A", "B", "C", "D", "E", "F", "G", "H"],
+                      ["A", "B", "C", "D"])
+    assert shrink["n_added"] == 0 and shrink["n_dropped"] == 4, shrink
+    assert shrink["turnover_pct"] == 50.0, \
+        f"losing 4 of 8 names is 50% turnover, got {shrink['turnover_pct']}"
+    gutted = turnover(["A", "B", "C", "D", "E", "F", "G", "H"], ["A"])
+    assert gutted["turnover_pct"] == 87.5, gutted
+    print(f"shrinking       : 8->4 = {shrink['turnover_pct']:.0f}%, "
+          f"8->1 = {gutted['turnover_pct']:.0f}%  (was 0% for both)")
+
+    # Growth is symmetric, and a same-size swap still reads the documented way.
+    grew = turnover(["A", "B"], ["A", "B", "C", "D"])
+    assert grew["turnover_pct"] == 50.0, grew
+    swap = turnover(["A", "B", "C", "D", "E", "F", "G", "H"],
+                    ["A", "B", "C", "D", "E", "X", "Y", "Z"])
+    assert swap["turnover_pct"] == 37.5, \
+        f"'3 of 8 changed' must still read 37.5%, got {swap['turnover_pct']}"
+    print(f"swap / growth   : 3-of-8 swap = {swap['turnover_pct']}%, "
+          f"2->4 growth = {grew['turnover_pct']:.0f}%")
+
+    # The verdict must now SEE the bear case instead of calling it stable.
+    assert "stable" in verdict([0, 0, 0, 0]), "sanity: genuine zeros are stable"
+    bear = [turnover(["A","B","C","D","E","F","G","H"], ["A","B","C","D"])["turnover_pct"]
+            for _ in range(4)]
+    assert "stable" not in verdict(bear), \
+        "a universe losing half its names every interval must not be reported " \
+        "as a stable watchlist"
+    print(f"verdict, bear   : {verdict(bear)[:44]}...")
 
     print(f"\nverdict, high   : {verdict([70, 65, 75, 60])[:46]}...")
     assert "high" in verdict([70, 65, 75, 60])
