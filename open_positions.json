@@ -24,50 +24,5 @@
     "mode": "paper",
     "source": "unknown",
     "traded_at": null
-  },
-  {
-    "id": "OPT_NVDA_1788879668",
-    "ticker": "NVDA",
-    "right": "CALL",
-    "strike": 240.0,
-    "expiry": "2026-09-25",
-    "contracts": 1.0,
-    "entry_premium": 2.29,
-    "rules": {
-      "tp_pct": 200,
-      "sl_pct": 50,
-      "dte_exit": 7,
-      "max_hold_bars": 30,
-      "invalidate_ema": false
-    },
-    "entry_features": {
-      "adx": 17.5788,
-      "rsi": 60.393,
-      "atr": 7.3806,
-      "close": 230.36,
-      "ema20": 219.2994,
-      "ema50": 213.8113,
-      "volume": 134946800.0,
-      "vol_avg20": 128899820.0,
-      "rvol": 1.047,
-      "ext_atr": 1.499,
-      "rs_20d": 0.0354,
-      "regime": "Bull",
-      "captured": "2026-09-08 11:01 ET"
-    },
-    "notes": "Actual trade on 9/8",
-    "opened": "2026-09-08 11:01 ET",
-    "opened_epoch": 1788879668.624068,
-    "last_check_epoch": 1789048576.8329656,
-    "status": "EXIT_SIGNALLED",
-    "exit_alerted": true,
-    "mode": "live",
-    "source": "unknown",
-    "traded_at": null,
-    "exit_reason": "STOP",
-    "exit_detail": "Premium -68.1% (limit \u221250%)",
-    "exit_premium": 0.73,
-    "exit_pnl_pct": -68.1,
-    "exit_detected": "2026-09-10 09:56 ET"
   }
 ]
