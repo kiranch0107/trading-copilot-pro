@@ -341,10 +341,24 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
             if lo <= target:
                 exit_px, outcome, exit_i = target, "win", j; break
 
+    # RIGHT-CENSORING. A trade whose max_hold window extends past the last bar
+    # cannot time out on its own terms — it is marked to market at whatever the
+    # final close happens to be, and then counted as a "timeout" exactly like a
+    # trade that genuinely ran its course. The sample end is not a neutral exit:
+    # it books the unfinished trades at the prevailing trend, which is the same
+    # family of error as scoring two halves of a sample on different bases.
+    #
+    # They are kept (dropping them would be its own selection) and FLAGGED, so a
+    # run can say how much of its record is unfinished rather than implying all
+    # of it is settled.
+    censored = (entry_i + cfg["max_hold"]) > n
     if exit_i is None:                           # timeout — mark to market
         exit_i = min(entry_i + cfg["max_hold"] - 1, n - 1)
         exit_px = float(df["Close"].iloc[exit_i])
         outcome = "timeout"
+        if censored and tally is not None:
+            tally["unfinished at sample end (marked to last close)"] = \
+                tally.get("unfinished at sample end (marked to last close)", 0) + 1
 
     # Exit slippage (opposite direction)
     exit_slip = exit_px * cfg["slippage_bps"] / 10_000.0
@@ -360,6 +374,7 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
 
     return {
         "filled": True, "trend": trend, "outcome": outcome,
+        "censored": bool(censored and outcome == "timeout"),
         "r": r_multiple, "rr_planned": trade["rr"],
         "hold": exit_i - entry_i,
         "entry_date": df["Date"].iloc[entry_i] if "Date" in df.columns else entry_i,
@@ -794,9 +809,10 @@ def run(cfg: dict) -> None:
     if cfg["use_regime"]:
         spy_raw = download("SPY", cfg["years"])
         if spy_raw is not None:
-            spy_c = compute(spy_raw)
-            spy_c = spy_c.merge(spy_raw[["Date"]], left_index=True,
-                                right_index=True, how="left")
+            # build_regime_series() reads Close straight off the raw frame, so
+            # the compute() call that used to sit here was dead: its result was
+            # merged onto itself and then never read. Removed rather than left
+            # to imply the regime uses indicators it does not.
             reg = build_regime_series(spy_raw)
             regime_by_date = dict(zip(spy_raw["Date"], reg))
 
@@ -816,18 +832,43 @@ def run(cfg: dict) -> None:
             print(f"\n{tk}: no data — skipped")
             continue
         df = compute(raw)
-        # attach dates back for reporting/regime mapping
+        # Open and Date are ALREADY correct here — compute() carries every
+        # column of `raw` through its dropna and head-slice, so each row's
+        # Open/Date still belong to the bar whose indicators sit beside them.
+        #
+        # This used to re-attach them with `raw.tail(len(df))`, which is only
+        # correct when compute() drops rows exclusively from the FRONT. It does
+        # not: dropna() removes a row wherever ANY indicator is NaN, and
+        # VOL_AVG20 is a 20-bar rolling mean, so ONE missing Volume anywhere in
+        # the series deletes 20 interior rows. Tail-alignment then paired every
+        # earlier indicator row with an Open and Date from 20 sessions LATER —
+        # overwriting two correct columns with wrong ones, silently.
+        #
+        # Measured on a 400-bar frame with a single NaN Volume at row 250: 51 of
+        # 181 surviving rows (28%) got the wrong Date, the first by 28 calendar
+        # days, with an entry-price error of 2% of price. simulate_trade() reads
+        # df["Open"] for the fill and the regime join reads df["Date"], so the
+        # corruption reached both the entry price and which regime applied.
+        #
+        # consistency_check.check_compute_preserves_alignment() now pins this.
         df = df.copy()
-        # re-attach Open + Date aligned by tail length
-        tail = raw.tail(len(df)).reset_index(drop=True)
-        for col in ["Open", "Date"]:
-            if col in tail.columns:
-                df[col] = tail[col].values
 
         # per-bar regime lookup
         reg_series = None
         if regime_by_date is not None and "Date" in df.columns:
-            reg_series = df["Date"].map(regime_by_date).fillna("Neutral").reset_index(drop=True)
+            mapped = df["Date"].map(regime_by_date)
+            # A date this ticker has and SPY does not becomes "Neutral", and
+            # signal_core reads Neutral as "no view" — so an ALIGNMENT FAILURE
+            # silently turns the regime filter OFF for that bar instead of
+            # failing. That is the shape of bug this repo keeps paying for (the
+            # weekly gate that "ran" without being wired in), so the unmatched
+            # bars are counted and printed rather than absorbed.
+            unmatched = int(mapped.isna().sum())
+            if unmatched:
+                tally["regime date unmatched against SPY (gate inert on those bars)"] = (
+                    tally.get("regime date unmatched against SPY (gate inert on those bars)", 0)
+                    + unmatched)
+            reg_series = mapped.fillna("Neutral").reset_index(drop=True)
 
         # per-bar weekly trend, as of the last CLOSED weekly bar (no lookahead)
         wk_series = None
@@ -980,6 +1021,21 @@ def run(cfg: dict) -> None:
                   f"  ({_gap_stop} past the stop, {_gap_tgt} past the target)")
             print("     (the next open was already beyond the level, so the setup")
             print("      did not exist at the fill price — no trade)")
+
+        _cens = tally.get("unfinished at sample end (marked to last close)", 0)
+        if _cens:
+            _tot = agg.get("trades", 0) or 0
+            _pct = (100.0 * _cens / _tot) if _tot else 0.0
+            print(f"  unfinished at sample end  : {_cens:>6}  ({_pct:.1f}% of trades)")
+            print("     (their hold window ran past the last bar, so they are marked")
+            print("      to the final close — not settled on their own terms)")
+
+        _unm = tally.get("regime date unmatched against SPY "
+                         "(gate inert on those bars)", 0)
+        if _unm:
+            print(f"  !! {_unm} bar(s) had no matching SPY date, so the regime gate was")
+            print("     INERT on them — Neutral reads as 'no view'. An alignment")
+            print("     failure here looks exactly like a filter with nothing to say.")
 
         # A gate that is ON and rejects nothing is a wiring failure, not a
         # finding about the market. Say so in the output rather than leaving
@@ -1338,6 +1394,41 @@ def selftest() -> int:
         "with no same-session exits the profile must say so, not print 0%"
     print("hold profile render     : states the case, and the no-cases case")
 
+    # ── an unfinished trade at the sample end must say so ──
+    # Both directions are asserted. A test that only checks the censored case
+    # passes just as well with the flag hardwired to True, which is the dead
+    # fixture this repo keeps finding.
+    _ccfg = dict(cfg, slippage_bps=0.0, commission=0.0, max_hold=10)
+
+    def _flat(n_bars):
+        _c = np.full(n_bars, 100.0)
+        return pd.DataFrame({
+            "Date": pd.bdate_range("2024-01-01", periods=n_bars),
+            "Open": _c, "High": _c + 0.1, "Low": _c - 0.1, "Close": _c})
+
+    _sig = {"trend": "Bullish", "entry": 100.0, "stop": 95.0,
+            "target": 115.0, "rr": 3.0}
+
+    # 4 bars, hold window 10 -> cannot finish: censored.
+    _ct: dict = {}
+    _short = simulate_trade(_flat(4), 0, _sig, _ccfg, tally=_ct)
+    assert _short["filled"] and _short["outcome"] == "timeout", _short
+    assert _short["censored"] is True, (
+        "a trade whose hold window runs past the last bar is NOT settled on its "
+        "own terms and must be flagged as unfinished")
+    assert _ct.get("unfinished at sample end (marked to last close)") == 1, _ct
+
+    # 40 bars, same window -> finishes: must NOT be flagged.
+    _lt: dict = {}
+    _long = simulate_trade(_flat(40), 0, _sig, _ccfg, tally=_lt)
+    assert _long["filled"] and _long["outcome"] == "timeout", _long
+    assert _long["censored"] is False, (
+        "a trade that ran its full hold window inside the sample is settled — "
+        "flagging it as unfinished would overstate how much of the record is "
+        "provisional")
+    assert "unfinished at sample end (marked to last close)" not in _lt, _lt
+    print("right-censoring         : unfinished trades flagged, settled ones not")
+
     # ── a fill that gapped past its own levels must not become a trade ──
     # Before this check both cases scored with the WRONG SIGN, so the test
     # asserts the sign explicitly rather than only that a trade was dropped.
@@ -1524,10 +1615,7 @@ def selftest() -> int:
         "Date": idx, "Open": close, "High": high, "Low": low,
         "Close": close, "Volume": np.full(n, 2_000_000.0),
     })
-    full = compute(raw)
-    tail = raw.tail(len(full)).reset_index(drop=True)
-    for col in ("Open", "Date"):
-        full[col] = tail[col].values
+    full = compute(raw)   # Open/Date already aligned; see run() for why
     cfg_e2e = dict(cfg, adx_min=10.0)
     params_e2e = build_signal_params(cfg_e2e)
     trades = backtest_ticker(full, cfg_e2e, params_e2e)

@@ -77,6 +77,24 @@ jobs:
       # NO coverage at all, which is how universe_backtest.py and
       # option_backtest.py sat broken (AttributeError on every run) after
       # backtest.evaluate_signal()'s signature changed under them.
+      #
+      # STILL TRUE FOR THREE OF THEM, 2026-09-10. The list above reads as a
+      # problem already solved. It is not: only scanner.py, journal_store.py and
+      # gh_sync.py gained tests. exit_monitor.py, option_chain.py and
+      # option_backtest.py have no selftest() at all, so nothing below runs them
+      # and this comment was describing an intention as an accomplishment.
+      #
+      # That is not cosmetic. exit_monitor.py decides when to close a LIVE
+      # position and runs unattended on a schedule; option_chain.py picks which
+      # contract to buy; option_backtest.py produces OPT_WIN_RATE, the input the
+      # live option spread gate in risk_params.py is derived from. All three are
+      # covered only by consistency_check.py's import check — which proves they
+      # parse, not that they are right.
+      #
+      # Tracked as item 5 in BACKLOG.md. Writing those tests is real work and is
+      # deliberately not stubbed here: a shallow test on live-money code that
+      # passes regardless is worse than a visible gap, and this repo has already
+      # found seven fixtures that did exactly that.
 
       - name: risk_params.py — account/risk constants
         run: python risk_params.py

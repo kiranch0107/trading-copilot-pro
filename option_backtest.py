@@ -191,10 +191,11 @@ def run_ticker(tk: str, cfg: dict, sig_cfg: dict) -> list[dict]:
     df = bt.compute(raw)
     if len(df) < bt.MIN_BARS_AFTER:
         return []
-    tail = raw.tail(len(df)).reset_index(drop=True)
-    for col in ("Open", "Date"):
-        if col in tail.columns:
-            df[col] = tail[col].values
+    # Open/Date arrive correct from bt.compute(); re-attaching them by tail
+    # position corrupted both whenever a NaN dropped an interior row. See
+    # backtest.run() for the measurement. This matters here more than anywhere
+    # else: OPT_WIN_RATE in risk_params.py is measured by THIS function, and the
+    # option spread ceiling is derived from that number.
 
     trades, i, n = [], 0, len(df)
     while i < n - 1:

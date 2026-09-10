@@ -117,6 +117,73 @@ pre-registered test, not an adjustment. Write the rule down before running it.
 
 ---
 
+## 5. Three money-affecting modules have no tests
+
+Found 2026-09-10 while auditing coverage. `tests.yml` carried a comment naming
+`scanner.py`, `exit_monitor.py`, `option_chain.py`, `journal_store.py` and
+`gh_sync.py` as "the half CI used to miss" — phrased as solved. Only three of
+the five were ever given tests.
+
+| module | what it decides | selftest | run by CI |
+|---|---|---|---|
+| `exit_monitor.py` | when to close a **live** position; runs unattended on a schedule | none | no |
+| `option_chain.py` | which contract to actually buy | none | no |
+| `option_backtest.py` | `OPT_WIN_RATE`, the input the live spread gate is derived from | none | no |
+| `liquidity_check.py` | — | none | no |
+| `universe_backtest.py` | — | none | no |
+| `rate_limit.py` | — | none | no |
+
+All are covered only by `consistency_check.py`'s import check, which proves they
+parse, not that they are right.
+
+Deliberately **not** stubbed: a shallow test on live-money code that passes
+regardless is worse than a visible gap, and the falsification pass has already
+found seven fixtures in this repo that did exactly that. `exit_monitor.py` is the
+one to do first — its date math (`trading_sessions_between`, the DTE countdown)
+is pure and testable offline, and it is the module that can close a real
+position.
+
+## 6. Re-run the three backtest cuts on the fixed alignment
+
+`results/longshort_split.md` carries every figure from runs made **before** the
+`Open`/`Date` alignment fix of 2026-09-10. The fix is a deletion and is a no-op
+on data with no interior NaN, but whether those three series had one is not
+knowable now — the bar cache is local and gitignored, and the provider is
+unreachable from the session that found it.
+
+By the file's own rule, the code moved while the fingerprints did not, so the
+numbers are provisional. The re-run is a cache replay, not a refetch:
+
+```bash
+python backtest.py                                   # 7 tickers, 5y
+python backtest.py --tickers GOOGL,AVGO,AMD,NFLX,CRM,ADBE,QCOM,MU,ORCL,NOW,PANW,LRCX
+python backtest.py --years 10 --tickers GOOGL,AVGO,AMD,NFLX,CRM,ADBE,QCOM,MU,ORCL,NOW,PANW,LRCX
+```
+
+Compare fingerprints first. If they match and the numbers do not, the alignment
+bug was live in those runs; if both match, it was latent and the record stands.
+
+## 7. Measure the option win rate at the TP actually traded
+
+`OPT_WIN_RATE = 0.238` was measured at **TP +100% / SL −50%**
+(`OPT_WIN_RATE_TP_PCT`). The live default is TP +200%, and the win rate there is
+unmeasured — necessarily lower, since a wider target is hit less often.
+
+Until it is measured, `app.py` refuses to state an expected value away from the
+measured basis rather than extrapolating (it used to show a green tick for
+TP +200 by comparing 23.8% against that structure's 20% breakeven). To close it:
+
+```bash
+python option_backtest.py --sweep      # win rate at TP 50/75/100/150/200/300
+```
+
+Record the rate at the TP you intend to trade, then re-derive
+`MAX_OPTION_SPREAD_PCT` against **that** basis. At the currently measured basis
+breakeven is 33.3% against 23.8% — negative at every spread, including zero — so
+the ceiling is a loss cap, not a profitability threshold.
+
+---
+
 ## Working conventions
 
 - `signal_core.py` is canonical. `consistency_check.py` enforces 17 cross-module

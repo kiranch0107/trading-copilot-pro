@@ -2,6 +2,43 @@
 
 **Date:** 2026-09-09
 **Status:** hypothesis tested and not supported. Tranche A NOT spent.
+**Re-run required before these numbers are quoted again — see the banner below.**
+
+> ### ⚠️ EVERY FIGURE BELOW PREDATES AN ALIGNMENT FIX, 2026-09-10
+>
+> `backtest.run()` re-attached each bar's `Open` and `Date` with
+> `raw.tail(len(df))`, which is correct only if `compute()` drops rows
+> exclusively from the front. It does not: `dropna()` removes a row wherever any
+> indicator is NaN, and `VOL_AVG20` is a 20-bar rolling mean, so **one missing
+> Volume anywhere in a series deletes 20 interior rows** and every earlier
+> indicator row is then paired with an `Open` and `Date` from 20 sessions later.
+>
+> Measured on a 400-bar frame with a single NaN Volume: **51 of 181 surviving
+> rows (28%) carried the wrong date**, the first off by 28 calendar days, with an
+> entry-price error of 2% of price. `simulate_trade()` takes the fill from
+> `df["Open"]` and the SPY-regime join keys on `df["Date"]`, so both the entry
+> price and which regime applied were affected. It was silent.
+>
+> **What this does and does not mean.** `compute()` was already carrying correct
+> `Open`/`Date` columns; the re-attachment overwrote them. The fix is a deletion,
+> so on data with no interior NaN the numbers are unchanged. Whether the three
+> cuts here contained such a gap is **not currently knowable** — the bar cache is
+> local and was not retained, and the data provider is unreachable from the
+> environment where this was found.
+>
+> By this file's own rule — *"a moved number under an unchanged fingerprint is
+> the code"* — the code has moved while the fingerprints
+> (`24b0f52e1203ecd5`, `6b5c07fe41849b1c`, `e09e31d6eaf30233`) have not. So these
+> figures are **provisional until re-run**, and the re-run is cheap: the cache
+> makes it a replay, not a refetch.
+>
+> **The conclusions are unlikely to move, and that is not the same as verified.**
+> The direction is supported by a separate 591-trade OOS failure, and a
+> mis-paired Open is noise rather than a directional bias. But "probably fine"
+> is the argument this file exists to refuse. Treat −0.048 R as unconfirmed until
+> `python backtest.py --years 10 --tickers …` has been re-run on the fixed code.
+>
+> Pinned by `consistency_check.check_compute_preserves_alignment()`.
 
 > ### All three runs are post-fix as of 2026-09-10
 >
