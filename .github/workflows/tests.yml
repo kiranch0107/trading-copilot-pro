@@ -130,6 +130,9 @@ jobs:
       - name: adx_retest.py — Holm correction, dose-response, sample floor
         run: python adx_retest.py --selftest
 
+      - name: pead_study.py — entry timing, SUE lookahead, cohort clustering
+        run: python pead_study.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 
