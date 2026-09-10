@@ -695,10 +695,24 @@ def selftest() -> int:
           f"to the non-flattering value")
 
     # Sizing gate, exercised through the same path the UI uses.
-    import risk_params
-    assert risk_params.check_option_cost(6.25, 1)["level"] == "block"
-    assert risk_params.check_option_cost(0.48, 1)["level"] == "ok"
-    print(f"sizing gate reachable   : $625 blocks, $48 passes")
+    #
+    # Derived from the constants, not written as dollars. This used to assert
+    # that a $625 contract BLOCKS — true at a $1,500 account (42%), false at
+    # $5,000 (12.5%, warns). The gate is a PERCENTAGE rule, so the test has to be
+    # one too, or it breaks on every account change and says nothing about the
+    # rule it is guarding.
+    import risk_params as _rp
+    _ceiling = _rp.DEFAULT_ACCOUNT_SIZE * _rp.MAX_POSITION_PCT / 100
+    _budget = _rp.option_budget()
+    _blocks = (_ceiling * 1.2) / 100          # 20% over the hard ceiling
+    _warns = (_budget * 2.0) / 100            # over budget, under the ceiling
+    _ok = (_budget * 0.5) / 100               # comfortably inside
+    assert _rp.check_option_cost(_blocks, 1)["level"] == "block", _blocks
+    assert _rp.check_option_cost(_warns, 1)["level"] == "warn", _warns
+    assert _rp.check_option_cost(_ok, 1)["level"] == "ok", _ok
+    print(f"sizing gate reachable   : ${_blocks*100:,.0f} blocks, "
+          f"${_warns*100:,.0f} warns, ${_ok*100:,.0f} ok "
+          f"(account ${_rp.DEFAULT_ACCOUNT_SIZE:,})")
 
     print("\nAll self-tests passed.")
     return 0

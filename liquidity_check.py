@@ -127,7 +127,10 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--tickers", default=",".join(DEFAULT_CANDIDATES))
     p.add_argument("--min-dte", type=int, default=9)
-    p.add_argument("--account", type=float, default=1500)
+    p.add_argument("--account", type=float,
+                   default=risk_params.DEFAULT_ACCOUNT_SIZE,
+                   help="reference account size; derives from risk_params "
+                        "so it cannot drift the way the spread ceiling did")
     p.add_argument("--risk", type=float, default=5.0,
                    help="Risk %% of account per trade")
     a = p.parse_args()

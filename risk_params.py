@@ -49,7 +49,21 @@ from __future__ import annotations
 # Actions, where Streamlit is not installed (see consistency_check.py's
 # unattended-import check).
 
-DEFAULT_ACCOUNT_SIZE = 1500
+# Raised 1500 -> 5000 on 2026-09-10. This is a REFERENCE size for sizing
+# verdicts and display; it does not gate alerts. scanner.py states that
+# explicitly ("NOT used to filter during the test phase — you asked to see every
+# suggestion and judge affordability yourself"), and that separation is
+# deliberate: the signal decides whether a setup exists, the human decides
+# whether the contract is affordable.
+#
+# WHAT IT DOES CHANGE, and one of them is a loosening worth knowing about:
+#   option_budget()   5% -> $250/contract (was $75)
+#   MAX_POSITION_PCT  25% -> $1,250 ceiling (was $375)
+#   the $625 trade that motivated MAX_POSITION_PCT was 42% of $1,500 and was
+#   BLOCKED. At $5,000 it is 12.5% and only WARNS. The percentage rule scaling
+#   is the intent, but the specific trade the backstop was written for now
+#   passes it.
+DEFAULT_ACCOUNT_SIZE = 5000
 
 # Position sizing: percentage of the account risked between entry and stop.
 # app.py exposes this as a sidebar input; this is the default it starts at.
@@ -362,9 +376,16 @@ def selftest() -> int:
         "premium budget outside 0-25% is almost certainly a typo"
     assert DEFAULT_RISK_PCT != DEFAULT_OPTION_BUDGET_PCT or True  # may coincide
 
-    assert option_budget() == 75.0, option_budget()
-    assert option_budget(3000) == 150.0
+    # The default-args case pins the FORMULA, not a dollar figure. It used to
+    # assert == 75.0, which was DEFAULT_ACCOUNT_SIZE-derived and broke the moment
+    # the account moved 1500 -> 5000. A test that hardcodes a value computed from
+    # a config constant fails on every legitimate config change and, worse, would
+    # pass silently if both drifted together.
+    assert option_budget() == DEFAULT_ACCOUNT_SIZE * DEFAULT_OPTION_BUDGET_PCT / 100
+    # Explicit-arg cases pin the arithmetic independently of the constants.
+    assert option_budget(3000) == 3000 * DEFAULT_OPTION_BUDGET_PCT / 100
     assert option_budget(1500, 1.0) == 15.0
+    assert option_budget(5000, 5.0) == 250.0
     print(f"account ${DEFAULT_ACCOUNT_SIZE:,} · position risk "
           f"{DEFAULT_RISK_PCT:g}% · premium budget "
           f"{DEFAULT_OPTION_BUDGET_PCT:g}% (${option_budget():,.0f}/contract)")
@@ -375,23 +396,49 @@ def selftest() -> int:
     assert "streamlit" not in sys.modules or __name__ != "__main__", \
         "risk_params must be importable without Streamlit"
     # ── position-size verdicts ──
-    # Anchored on the real trades in trade_journal.json so the thresholds are
-    # checked against what actually gets logged, not invented examples.
-    ok = check_option_cost(0.48, 1)          # $48  — a real trade
+    # DERIVED FROM THE CONSTANTS, not written as dollars. These were anchored on
+    # the real trades in trade_journal.json ($48 ok, $225 warn, $625 BLOCK at 42%)
+    # — a good instinct, and it coupled the test to DEFAULT_ACCOUNT_SIZE. Raising
+    # the account 1500 -> 5000 turned $225 into 4.5% (ok) and $625 into 12.5%
+    # (warn), so four assertions broke at once on a legitimate config change.
+    # The gate is a PERCENTAGE rule; its test has to be one too.
+    _ceiling = DEFAULT_ACCOUNT_SIZE * MAX_POSITION_PCT / 100
+    _budget = option_budget()
+    ok = check_option_cost(_budget * 0.5 / 100, 1)
     assert ok["level"] == "ok", ok
-    warn = check_option_cost(2.25, 1)        # $225 — a real trade, 15%
+    warn = check_option_cost(_budget * 2.0 / 100, 1)
     assert warn["level"] == "warn", warn
-    block = check_option_cost(6.25, 1)       # $625 — the paper trade, 42%
+    block = check_option_cost(_ceiling * 1.2 / 100, 1)
     assert block["level"] == "block", block
-    assert "42%" in block["message"]
-    print(f"size verdicts             : $48 ok · $225 warn · $625 BLOCK")
+    assert f"{_ceiling * 1.2 / DEFAULT_ACCOUNT_SIZE * 100:.0f}%" in block["message"], \
+        block["message"]
+    print(f"size verdicts             : ${_budget*0.5:,.0f} ok · "
+          f"${_budget*2:,.0f} warn · ${_ceiling*1.2:,.0f} BLOCK "
+          f"(budget ${_budget:,.0f}, ceiling ${_ceiling:,.0f})")
 
-    # Contracts multiply. Two cheap contracts can breach a ceiling one cannot.
-    assert check_option_cost(2.00, 1)["level"] == "warn"
-    assert check_option_cost(2.00, 2)["level"] == "block", \
-        "the check must multiply by contracts — sizing up is how a $200 " \
-        "position becomes a $400 one"
-    print(f"contracts counted        : 1x$200 warn, 2x$200 BLOCK")
+    # THE TRADES ACTUALLY LOGGED, classified at the CURRENT account size. Kept
+    # because checking the gate against real data was the point of the original
+    # test; reported rather than asserted at a fixed level, since the level a
+    # given dollar amount earns depends on the account it sits in.
+    for _prem, _label in ((0.48, "$48"), (2.25, "$225"), (6.25, "$625")):
+        _v = check_option_cost(_prem, 1)
+        _expect = ("invalid" if _prem <= 0 else
+                   "block" if _v["pct"] > MAX_POSITION_PCT else
+                   "warn" if _v["pct"] > DEFAULT_OPTION_BUDGET_PCT else "ok")
+        assert _v["level"] == _expect, (_label, _v)
+    print(f"real logged trades       : $48/$225/$625 -> "
+          f"{'/'.join(check_option_cost(p, 1)['level'] for p in (0.48, 2.25, 6.25))} "
+          f"on a ${DEFAULT_ACCOUNT_SIZE:,} account")
+
+    # Contracts multiply. Two can breach a ceiling one cannot — at any account
+    # size, so the premium is derived to sit between the two boundaries.
+    _mult = _ceiling * 0.7 / 100
+    assert check_option_cost(_mult, 1)["level"] == "warn", _mult
+    assert check_option_cost(_mult, 2)["level"] == "block", \
+        "the check must multiply by contracts — sizing up is how one position " \
+        "inside the ceiling becomes two that are not"
+    print(f"contracts counted        : 1x${_mult*100:,.0f} warn, "
+          f"2x${_mult*100:,.0f} BLOCK")
 
     for bad in ((0.0, 1), (2.25, 0), (-1.0, 1)):
         v = check_option_cost(*bad)
