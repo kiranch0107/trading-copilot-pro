@@ -812,11 +812,18 @@ def drop_partial_bar(df: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
     settled daily bar). Every indicator, level and volume comparison is then
     computed on complete data. Returns (df, dropped_flag).
     """
+    # ROUTED THROUGH signal_core.drop_unsettled() — the one place that decides
+    # whether a bar has settled. This was the second of six local copies of that
+    # decision, and the copies had drifted: this one dropped iloc[-1] while
+    # is_market_open(), which leaves TODAY'S bar in place before the open,
+    # because Yahoo emits that row well ahead of 09:30. signal_core now drops by
+    # DATE and asks whether today's session has CLOSED, which covers pre-open,
+    # intraday, and correctly keeps the settled bar after the close.
     if df is None or len(df) < 2:
         return df, False
-    if not is_market_open():
-        return df, False          # market closed → final bar is complete
-    return df.iloc[:-1], True     # market open → drop the in-progress bar
+    out, n = signal_core.drop_unsettled(
+        df, policy=signal_core.DROP_UNTIL_CLOSE)
+    return out, bool(n)
 
 
 # ─────────────────────────────────────────────

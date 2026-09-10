@@ -713,14 +713,18 @@ def _drop_todays_bar(ticker: str, df: "pd.DataFrame | None") -> "pd.DataFrame | 
     n-1 and fills at the NEXT bar's open, so the final row can never be
     entered. It is pure instability with no analytical value.
     """
+    # ROUTED THROUGH signal_core.drop_unsettled(), the one place that decides
+    # whether a bar has settled. DROP_ALWAYS, not DROP_UNTIL_CLOSE: this path
+    # needs reproducibility, not freshness, and the reasoning above is why —
+    # a frame whose last row was written today cannot be cached or fingerprinted
+    # even once it settles. The live paths take the other policy.
     if df is None or "Date" not in df.columns or df.empty:
         return df
     today_et = datetime.now(_ET).date()
-    dates = pd.to_datetime(df["Date"]).dt.date
-    keep_mask = dates < today_et
-    n_dropped = int((~keep_mask).sum())
+    df, n_dropped = sc.drop_unsettled(df, policy=sc.DROP_ALWAYS,
+                                      date_col="Date")
     if n_dropped:
-        df = df[keep_mask].reset_index(drop=True)
+        df = df.reset_index(drop=True)
         print(f"  · {ticker}: dropped {n_dropped} bar(s) dated {today_et} or "
               f"later — still forming, and unusable by a next-bar-open fill")
     return df
