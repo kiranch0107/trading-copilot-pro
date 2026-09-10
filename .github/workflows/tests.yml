@@ -118,6 +118,9 @@ jobs:
       - name: option_backtest.py — coverage guard (produces OPT_WIN_RATE)
         run: python option_backtest.py --selftest
 
+      - name: vrp_check.py — implied-vs-realised measurement + pre-registered bar
+        run: python vrp_check.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 

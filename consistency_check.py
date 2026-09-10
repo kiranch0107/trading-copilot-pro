@@ -849,7 +849,7 @@ IMPORTABLE_MODULES = [
     "journal_store", "bar_cache", "risk_params", "notify",
     "option_chain", "universe", "scanner", "exit_monitor", "backtest",
     "oos_validate", "data_reservation", "excursion_analysis", "churn_tracker",
-    "universe_backtest", "option_backtest", "liquidity_check",
+    "universe_backtest", "option_backtest", "liquidity_check", "vrp_check",
 ]
 
 
