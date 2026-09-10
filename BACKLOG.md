@@ -161,26 +161,66 @@ inputs identical by construction, which isolates the code change cleanly.
 `results/longshort_split.md` is no longer provisional. The bug was still real;
 it would have fired on any series with an interior NaN.
 
-## 7. Measure the option win rate at the TP actually traded
+## 7. Option win rate at every TP — MEASURED 2026-09-10, pending one re-run
 
-`OPT_WIN_RATE = 0.238` was measured at **TP +100% / SL −50%**
-(`OPT_WIN_RATE_TP_PCT`). The live default is TP +200%, and the win rate there is
-unmeasured — necessarily lower, since a wider target is hit less often.
+`python option_backtest.py --sweep`, 7 tickers, 5y, DTE 30, IV 1.15x, 5% spread,
+398 trades per row:
 
-Until it is measured, `app.py` refuses to state an expected value away from the
-measured basis rather than extrapolating (it used to show a green tick for
-TP +200 by comparing 23.8% against that structure's 20% breakeven). To close it:
+| TP / SL | win% | avg win | avg loss | realised payoff | realised breakeven | expectancy | PF |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| +50 / −50 | 32.7% | +74.4% | −46.7% | 1.59:1 | 38.6% | −7.11% | 0.77 |
+| +75 / −50 | 26.9% | +103.8% | −45.7% | 2.27:1 | 30.6% | −5.54% | 0.83 |
+| +100 / −50 | 24.9% | +120.0% | −45.1% | 2.66:1 | 27.3% | −4.07% | 0.88 |
+| +150 / −50 | 22.1% | +135.4% | −44.6% | 3.04:1 | 24.8% | −4.80% | 0.86 |
+| **+200 / −50** | **21.9%** | **+143.0%** | **−44.6%** | **3.21:1** | **23.8%** | **−3.58%** | **0.90** |
+| +300 / −50 | 21.9% | +144.7% | −44.6% | 3.24:1 | 23.6% | −3.21% | 0.91 |
+
+**No structure clears.** PF 0.77–0.91, never 1.0. Every row falls short of its own
+realised breakeven by 1.7–5.9 points. The gap narrows as TP widens then flattens:
++200 and +300 share the same 21.9% win rate, so there is nothing further out to
+reach for. TP+200 is the payoff both open positions use.
+
+### The finding that changes how breakeven must be computed
+
+Checked against NOMINAL breakeven, TP+200 looks fine: 50/(200+50) = 20.0%, and
+21.9% clears it. It does not, because **trades do not reach their nominal
+levels** — at TP+200 the realised average win is +143.0%, not +200%, and the
+average loss −44.6%, not −50%, because the DTE-7 floor and max-hold exit them
+early. Realised payoff 3.21:1, realised breakeven 23.8%.
+
+`risk_params.spread_breakeven_wr()` models the SPREAD but not the early exits, so
+it understates breakeven by roughly 1.7 points across the sweep. It happens to
+reach the right verdict at the 8% ceiling, but by margin, not by modelling. Use
+the realised avg win / avg loss from this table, not nominal TP/SL.
+
+(Coincidence worth naming: the realised breakeven at TP+200 is 23.8%, the same
+number as the recorded `OPT_WIN_RATE`. Unrelated.)
+
+### TWO THINGS TO RESOLVE BEFORE `OPT_WIN_RATE` IS TOUCHED
+
+1. **23.8% did not reproduce.** Today's measurement at that exact basis
+   (TP+100/SL−50, 5y, 7 tickers) is **24.9%**. Two candidate causes, not
+   distinguished: the 5-year window is relative to today and has moved; and the
+   default universe includes **ROKU**, which is not in the 12-ticker set that
+   reproduced exactly — if ROKU carries an interior NaN, the alignment fix of
+   #27 would have moved this file's result. The share backtest reproducing
+   proves nothing about this one.
+
+2. **Coverage was not confirmed.** That run predated the #32 coverage guard, so
+   it printed no `DATA COVERAGE` line. 398 trades across all six rows is a good
+   sign (the comparable share run had 418) but is not confirmation.
+
+**NEXT ACTION — one command, in Codespaces:**
 
 ```bash
-python option_backtest.py --sweep      # win rate at TP 50/75/100/150/200/300
+git pull && python option_backtest.py --sweep
 ```
 
-Record the rate at the TP you intend to trade, then re-derive
-`MAX_OPTION_SPREAD_PCT` against **that** basis. At the currently measured basis
-breakeven is 33.3% against 23.8% — negative at every spread, including zero — so
-the ceiling is a loss cap, not a profitability threshold.
-
----
+Check the `DATA COVERAGE` line first. If it says `7 of 7`, the table above stands
+and `OPT_WIN_RATE` can be re-derived against it, recording the realised payoff
+alongside. If it says fewer, the run is over a partial universe and the numbers
+change. `OPT_WIN_RATE` is deliberately NOT updated until this is settled — it
+feeds the live spread gate.
 
 ## 8. Survivorship in the candidate pool — recorded, not fixable here
 
