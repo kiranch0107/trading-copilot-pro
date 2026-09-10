@@ -3,6 +3,23 @@
 **Date:** 2026-09-09
 **Status:** hypothesis tested and not supported. Tranche A NOT spent.
 
+> ### ⚠️ Numbers below predate a scoring fix — re-run before citing them
+>
+> **2026-09-10.** `simulate_trade()` had a sign inversion on fills that gapped
+> past their own levels. A setup whose next open was already beyond the stop
+> was booked as `outcome="loss"` with **r = +1.000**; one past the target was
+> booked as `outcome="win"` with **r = −0.200**, because `r = pnl / |entry −
+> stop|` is computed against a distance that has inverted. The worst fills in
+> each sample were scoring as full winners.
+>
+> Those fills are now rejected — the setup does not exist at that price — and
+> the count is reported per run.
+>
+> Every figure in this file was produced before that fix. The direction of the
+> error is known (it inflated results), so the corrected numbers can only be
+> the same or worse, and the conclusions below are unaffected or strengthened.
+> The magnitudes are stale until the three runs at the bottom are repeated.
+
 This file exists so the +0.245 R figure below cannot be rediscovered in six
 months and mistaken for a finding. It was the first of three measurements, and
 it was the largest one. Everything after it was smaller.

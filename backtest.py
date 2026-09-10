@@ -275,7 +275,7 @@ def evaluate_signal(df: pd.DataFrame, i: int, params: sc.SignalParams,
 # TRADE SIMULATION — enter next open, stop-first fills, timeout m2m
 # ══════════════════════════════════════════════════════════════════════
 def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
-                   cfg: dict) -> dict:
+                   cfg: dict, tally: dict | None = None) -> dict:
     """
     Enter at the OPEN of bar signal_i+1 (no same-bar fill). Walk forward until
     stop or target is hit (stop checked first on ambiguous bars = conservative),
@@ -298,6 +298,34 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
     risk = abs(entry - stop)
     if risk <= 0:
         return {"filled": False}
+
+    # GAPPED PAST ITS OWN LEVELS — no trade.
+    #
+    # The signal is generated on bar N's close; the fill is bar N+1's open. If
+    # that open gaps beyond the stop or the target, the setup being signalled
+    # no longer exists at the price you would pay for it: a long whose stop is
+    # ABOVE its entry is not a long with a stop, it is a different trade.
+    #
+    # This is not a nicety. Before the check, both cases scored with the WRONG
+    # SIGN, because r = pnl / |entry - stop| is computed against a distance
+    # that has inverted:
+    #
+    #   bullish, open gaps below the stop    -> outcome "loss",  r = +1.000
+    #   bullish, open gaps above the target  -> outcome "win",   r = -0.200
+    #
+    # so the worst fills in the sample were being booked as full winners. The
+    # count is reported at the end of the run rather than left silent, because
+    # a filter that quietly drops trades is how a backtest starts describing a
+    # strategy nobody ran.
+    if trend == "Bullish":
+        gapped = "stop" if entry <= stop else ("target" if entry >= target else None)
+    else:
+        gapped = "stop" if entry >= stop else ("target" if entry <= target else None)
+    if gapped:
+        if tally is not None:
+            key = f"gapped past {gapped} before fill"
+            tally[key] = tally.get(key, 0) + 1
+        return {"filled": False, "gapped": gapped}
 
     exit_i = None; exit_px = None; outcome = None
     for j in range(entry_i, min(entry_i + cfg["max_hold"], n)):
@@ -358,7 +386,7 @@ def backtest_ticker(df: pd.DataFrame, cfg: dict, params: sc.SignalParams,
         sig = evaluate_signal(df, i, params, regime=regime, weekly=weekly,
                               tally=tally)
         if sig:
-            res = simulate_trade(df, i, sig, cfg)
+            res = simulate_trade(df, i, sig, cfg, tally=tally)
             if res.get("filled"):
                 trades.append(res)
                 i += cfg["cooldown_bars"] + 1     # cooldown after a trade
@@ -941,6 +969,18 @@ def run(cfg: dict) -> None:
         print("      filter uniquely costs you)")
         print(f"  survived every gate       : {tally.get('passed', 0)}")
 
+        # Setups that passed every gate and then could not be filled, because
+        # the next open had already gapped beyond the stop or the target.
+        # Reported so the difference between "survived every gate" and the
+        # trade count is accounted for rather than left as a silent gap.
+        _gap_stop = tally.get("gapped past stop before fill", 0)
+        _gap_tgt = tally.get("gapped past target before fill", 0)
+        if _gap_stop or _gap_tgt:
+            print(f"  gapped past its levels    : {_gap_stop + _gap_tgt:>6}"
+                  f"  ({_gap_stop} past the stop, {_gap_tgt} past the target)")
+            print("     (the next open was already beyond the level, so the setup")
+            print("      did not exist at the fill price — no trade)")
+
         # A gate that is ON and rejects nothing is a wiring failure, not a
         # finding about the market. Say so in the output rather than leaving
         # it to be read as "the filter does not matter".
@@ -1297,6 +1337,53 @@ def selftest() -> int:
     assert "none: every trade lived past its entry bar" in _b3.getvalue(), \
         "with no same-session exits the profile must say so, not print 0%"
     print("hold profile render     : states the case, and the no-cases case")
+
+    # ── a fill that gapped past its own levels must not become a trade ──
+    # Before this check both cases scored with the WRONG SIGN, so the test
+    # asserts the sign explicitly rather than only that a trade was dropped.
+    _gcfg = dict(cfg, slippage_bps=0.0, commission=0.0)
+
+    def _gap(open_px, low, high, trend, stop, target, tally=None):
+        _df = pd.DataFrame({
+            "Date": pd.bdate_range("2024-01-01", periods=3),
+            "Open": [100.0, open_px, open_px], "High": [100.0, high, high],
+            "Low": [100.0, low, low], "Close": [100.0, open_px, open_px]})
+        return simulate_trade(_df, 0, {"trend": trend, "entry": 100.0,
+                                       "stop": stop, "target": target,
+                                       "rr": 3.0}, _gcfg, tally=tally)
+
+    # The normal path still fills and still loses 1R — the guard must not be
+    # so wide that it swallows ordinary stop-outs.
+    for _side, _a in (("bullish", (99.0, 97.0, 99.5, "Bullish", 98.0, 106.0)),
+                      ("bearish", (101.0, 100.5, 103.0, "Bearish", 102.0, 94.0))):
+        _o = _gap(*_a)
+        assert _o.get("filled"), (
+            f"an ORDINARY {_side} stop-out was rejected as a gapped fill "
+            f"({_o}). The guard is too wide — it must reject only fills on "
+            f"the wrong side of their own levels, not every losing trade.")
+        assert abs(_o["r"] + 1.0) < 1e-9, (
+            f"ordinary {_side} stop-out scored {_o['r']:+.3f}, expected "
+            f"-1.000")
+
+    _gt: dict = {}
+    for _lbl, _args, _want in (
+            ("bullish gapped below its stop",
+             (96.0, 95.0, 96.5, "Bullish", 98.0, 106.0), "stop"),
+            ("bullish gapped above its target",
+             (108.0, 107.5, 109.0, "Bullish", 98.0, 106.0), "target"),
+            ("bearish gapped above its stop",
+             (104.0, 103.5, 105.0, "Bearish", 102.0, 94.0), "stop"),
+            ("bearish gapped below its target",
+             (92.0, 91.0, 92.5, "Bearish", 102.0, 94.0), "target")):
+        _r = _gap(*_args, tally=_gt)
+        assert not _r.get("filled"), (
+            f"{_lbl}: filled with r={_r.get('r'):+.3f}. A fill on the wrong "
+            f"side of its own {_want} inverts r = pnl / |entry - stop| and "
+            f"books the worst fills in the sample as winners.")
+        assert _r["gapped"] == _want, (_lbl, _r)
+    assert sum(_gt.values()) == 4 and len(_gt) == 2, _gt
+    print(f"gapped fills            : 4 rejected (2 past stop, 2 past target), "
+          f"counted not silent; ordinary stop-outs still fill at -1.00 R")
 
     # ── the on-disk bar cache actually caches ──
     # A harness that refetches on every run cannot measure anything smaller
