@@ -141,3 +141,11 @@ pre-registered test, not an adjustment. Write the rule down before running it.
   under an unchanged fingerprint is a code change; a moved fingerprint is a data
   change. Check it before comparing anything else.
 - No `gh` CLI in the web sessions — GitHub MCP tools only.
+- Web sessions install their own dependencies via
+  `.claude/hooks/session-start.sh` (SessionStart hook). It upgrades setuptools
+  from PyPI **before** `pip install -r requirements.txt`, because `ta==0.11.0`
+  is sdist-only and the container's Debian-patched setuptools 68.1.2 fails its
+  build with `AttributeError: install_layout` — which aborts the whole install
+  and takes streamlit, pytz and altair down with it. CI is unaffected
+  (`actions/setup-python` ships an unpatched setuptools), which is why the
+  workaround lives in the hook and not in `requirements.txt`.
