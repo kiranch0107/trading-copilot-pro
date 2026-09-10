@@ -39,7 +39,18 @@ THREE THINGS THIS GETS RIGHT ON PURPOSE
    against a partial window is how a backtest starts describing something nobody
    ran.
 
-3. IT LOOKS FORWARD DELIBERATELY, WHICH IS NOT LOOKAHEAD. Every other measure in
+3. THE DIVIDEND DROP IS IN THERE, AND IT BIASES AGAINST A PASS. backtest.py
+   fetches with AUTO_ADJUST = False — deliberately, because auto_adjust=True
+   rewrote 15 years of history between two fetches twelve minutes apart — so
+   SPY's four ex-dividend drops a year show up as ~0.4% one-day returns that are
+   not really moves. That inflates realised vol, which SHRINKS the measured
+   premium. Quantified rather than waved at: a lone 0.4% jump inside a 21-session
+   window adds about 0.6% to that window's variance against SPY's ~1.1% daily
+   vol, i.e. roughly 0.05 vol points on a ~16 reading, and only about one window
+   in three contains an ex-div date at all. Against a 2.0-point bar that is
+   noise, and it runs the conservative way, so it is recorded and not corrected.
+
+4. IT LOOKS FORWARD DELIBERATELY, WHICH IS NOT LOOKAHEAD. Every other measure in
    this repo must use only what was knowable at the time. This one compares a
    price formed at t against what happened after t — that IS the question. It is
    a measurement, not a signal, and nothing here may be used to trade.
