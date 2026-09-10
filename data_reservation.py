@@ -110,6 +110,72 @@ def reservation_hash() -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
+# WHY A SECOND HASH. reservation_hash() covers the tranche DEFINITIONS in this
+# file — which tickers are in A and B. It does not cover the one field that
+# decides whether a tranche is still research capital: `spent`. That field lives
+# only in the lock JSON, and RESERVED has no `spent` key, so editing
+# "spent": true -> false in the file left reservation_hash() matching exactly.
+#
+# Demonstrated: un-spending tranche B by hand left the stored hash matching the
+# code hash, and status() then printed "Clean shots remaining: 2 (A, B)" four
+# lines above its own ledger entry recording that B had been spent by live
+# trading. The integrity check was blind to the only mutable state it needed to
+# protect.
+#
+# This is an ACCIDENT DETECTOR, not cryptography. Anyone editing the file can
+# recompute it; the point is that doing so becomes a deliberate act instead of a
+# silent one, which is the same standard the rest of this module holds itself to.
+def lock_state_hash(lock: dict) -> str:
+    """Hash of the lock's MUTABLE state: spend flags, annulments, ledger."""
+    state = {
+        "reserved": {
+            name: {
+                "spent": bool(tr.get("spent")),
+                "spent_on": tr.get("spent_on"),
+                "spent_at": tr.get("spent_at"),
+                "annulled": tr.get("annulled"),
+            }
+            for name, tr in sorted(lock.get("reserved", {}).items())
+        },
+        "ledger": lock.get("ledger", []),
+    }
+    return hashlib.sha256(
+        json.dumps(state, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def reconcile(lock: dict) -> list[str]:
+    """
+    Disagreements between the ledger and the spend flags.
+
+    spend() is append-only and there is no un-spend path, so a tranche with a
+    ledger entry and spent=False cannot have got there through the tool. Either
+    the JSON was edited by hand, or a write was interrupted. Both need saying
+    out loud, because a reset flag is exactly how a spent tranche would come to
+    look pristine.
+
+    The legitimate case — a ledger entry written by testing the tool itself,
+    where no result was ever looked at — is declared with --annul and a reason,
+    not effected silently by editing the flag.
+    """
+    problems = []
+    for name, tr in sorted(lock.get("reserved", {}).items()):
+        entries = [e for e in lock.get("ledger", []) if e.get("tranche") == name]
+        if entries and not tr.get("spent") and not tr.get("annulled"):
+            whens = ", ".join(e.get("at", "?")[:10] for e in entries)
+            problems.append(
+                f"tranche {name}: the ledger records {len(entries)} spend(s) "
+                f"({whens}) but spent=False and no annulment is recorded. "
+                f"spend() never un-spends, so this state cannot have come from "
+                f"the tool. Either it IS spent, or record why the entry does "
+                f"not count: python data_reservation.py --annul {name} "
+                f"--reason '...'")
+        if tr.get("annulled") and not entries:
+            problems.append(
+                f"tranche {name}: carries an annulment but the ledger has no "
+                f"entry for it — the annulment refers to nothing.")
+    return problems
+
+
 # ---------------------------------------------------------------------------
 # Lock file
 # ---------------------------------------------------------------------------
@@ -135,14 +201,56 @@ def init_lock(force: bool = False) -> dict:
         "reserved": {k: dict(v, spent=False) for k, v in RESERVED.items()},
         "ledger": [],
     }
-    with open(LOCK, "w") as f:
-        json.dump(lock, f, indent=2)
+    save_lock(lock)
     return lock
 
 
 def save_lock(lock: dict) -> None:
+    """Persist the lock, refreshing the state hash so legitimate writes stay
+    consistent and hand edits do not."""
+    lock["state_hash"] = lock_state_hash(lock)
     with open(LOCK, "w") as f:
         json.dump(lock, f, indent=2)
+
+
+def annul(tranche: str, reason: str) -> bool:
+    """
+    Record that a ledger entry does NOT count as spending the tranche.
+
+    For the one honest case: the ledger's first entry is tranche A, purpose
+    "tool manual test", written while the tool itself was being checked. No
+    backtest ran and no result was seen, so A really is still clean — but the
+    flag was reset by editing the JSON, which leaves the ledger and the flag
+    disagreeing about the single most load-bearing fact in this module. This
+    makes that claim explicit and reviewable instead of implicit.
+    """
+    lock = load_lock() or init_lock()
+    tranche = tranche.upper()
+    if tranche not in lock["reserved"]:
+        print(f"No tranche {tranche}.")
+        return False
+    if not reason.strip():
+        print("A reason is required — an annulment with no reason is just a "
+              "reset flag with extra steps.")
+        return False
+    entries = [e for e in lock["ledger"] if e.get("tranche") == tranche]
+    if not entries:
+        print(f"Tranche {tranche} has no ledger entry to annul.")
+        return False
+    tr = lock["reserved"][tranche]
+    if tr.get("spent"):
+        print(f"Tranche {tranche} is marked SPENT. Annulling a real spend is "
+              f"not what this is for — if the spend was genuine, leave it.")
+        return False
+    tr["annulled"] = {
+        "reason": reason,
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "annulled_entries": len(entries),
+    }
+    save_lock(lock)
+    print(f"Tranche {tranche}: {len(entries)} ledger entry(ies) annulled.")
+    print(f"  reason: {reason}")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -154,23 +262,57 @@ def check_clean(tickers: list[str], purpose: str = "") -> dict:
     Classify a proposed test universe.
 
     Returns {"clean": bool, "contaminated": [...], "reserved": {...},
-             "unknown": [...], "weakly_seen": [...]}.
+             "spent": {...}, "unknown": [...], "weakly_seen": [...]}.
 
-    clean=True means every ticker is either unknown to the reservation or
-    belongs to a tranche already marked spent for this purpose. Reserved
-    tickers make it False — claim the tranche first, deliberately.
+    clean=True means every ticker is still out-of-sample: unknown to the
+    reservation, and in no tranche that is either reserved-unspent or spent.
+
+    `reserved`  tranches not yet claimed — claim one deliberately first.
+    `spent`     tranches already used. NOT clean, and this is the correction
+                below; the two are reported apart because they need different
+                actions from the reader.
+
+    SPENDING A TRANCHE USED TO MAKE IT CLEAN AGAIN. This function skipped any
+    tranche with spent=True, so tranche B — spent because the live scanner had
+    been trading its names — came back clean=True and assert_clean() let a
+    second test run on it. That inverts the guarantee the whole module exists
+    for: a tranche was protected only until it was used once, after which the
+    tool actively blessed reusing it. "One clean shot" has to mean the shot is
+    gone afterwards.
+
+    The exception, which the old docstring already described and the old code
+    never implemented: `purpose` matching the tranche's recorded `spent_on`. That
+    IS the run the tranche was claimed for, so it is allowed and reported under
+    `claimed_for_this_purpose`. Any other purpose on a spent tranche blocks.
+    Passing no purpose blocks too — an unnamed test cannot be the claimed one.
+
+    The live universe asks a DIFFERENT question — "am I leaking data that was
+    never claimed?" — and only `reserved` answers that. consistency_check.py
+    reads that key alone, so CANDIDATE_POOL may legitimately hold spent names
+    (trading them is what spent them) while still being barred from unspent ones.
     """
     lock = load_lock() or init_lock()
     tickers = [t.strip().upper() for t in tickers if t.strip()]
 
     contaminated = [t for t in tickers if t in lock["contaminated"]]
     reserved: dict[str, list[str]] = {}
+    spent: dict[str, list[str]] = {}
+    claimed: dict[str, list[str]] = {}
+    want = purpose.strip()
     for name, tr in lock["reserved"].items():
-        if tr.get("spent"):
-            continue
         hit = [t for t in tickers if t in tr["tickers"]]
-        if hit:
+        if not hit:
+            continue
+        if not tr.get("spent"):
             reserved[name] = hit
+        elif want and want == (tr.get("spent_on") or "").strip():
+            # The run this tranche was CLAIMED FOR. This is the whole point of
+            # spending it, so it is allowed — and it is the case the old
+            # docstring described ("already marked spent for this purpose")
+            # while the code checked no purpose at all.
+            claimed[name] = hit
+        else:
+            spent[name] = hit
     known = set(lock["contaminated"])
     for tr in lock["reserved"].values():
         known |= set(tr["tickers"])
@@ -178,9 +320,11 @@ def check_clean(tickers: list[str], purpose: str = "") -> dict:
     weak = [t for t in tickers if t in WEAKLY_SEEN and t not in contaminated]
 
     return {
-        "clean": not contaminated and not reserved,
+        "clean": not contaminated and not reserved and not spent,
         "contaminated": contaminated,
         "reserved": reserved,
+        "spent": spent,
+        "claimed_for_this_purpose": claimed,
         "unknown": unknown,
         "weakly_seen": weak,
         "purpose": purpose,
@@ -198,6 +342,9 @@ def assert_clean(tickers: list[str], purpose: str = "") -> None:
     if r["reserved"]:
         for name, hit in r["reserved"].items():
             bits.append(f"reserved in tranche {name}: {', '.join(hit)}")
+    for name, hit in r.get("spent", {}).items():
+        bits.append(f"tranche {name} was ALREADY SPENT — these are no longer "
+                    f"out-of-sample: {', '.join(hit)}")
     raise SystemExit(
         "Refusing to run: this is not out-of-sample data.\n  "
         + "\n  ".join(bits)
@@ -260,6 +407,28 @@ def status() -> None:
         print("lock file is authoritative — the code has drifted.")
         print("!" * W)
 
+    # The spend flags and the ledger are the mutable half, and reservation_hash
+    # does not cover them — see lock_state_hash().
+    stored_state = lock.get("state_hash")
+    if stored_state is None:
+        print("\n  (no state_hash in this lock — written before spend-state "
+              "integrity was tracked; it is recomputed on the next write)")
+    elif stored_state != lock_state_hash(lock):
+        print("\n" + "!" * W)
+        print("THE SPEND STATE HAS BEEN EDITED OUTSIDE THE TOOL.")
+        print("spend() is append-only and never un-spends, so a mismatch here")
+        print("means the flags or the ledger were changed by hand. Treat every")
+        print("'available' below as unverified until reconciled.")
+        print("!" * W)
+
+    problems = reconcile(lock)
+    if problems:
+        print("\n" + "!" * W)
+        print("LEDGER AND SPEND FLAGS DISAGREE")
+        for msg in problems:
+            print(f"  - {msg}")
+        print("!" * W)
+
     print(f"\nCONTAMINATED ({len(lock['contaminated'])} tickers)")
     print("  Already used. Any result on these is in-sample.")
     by_use: dict[str, list[str]] = {}
@@ -280,8 +449,24 @@ def status() -> None:
             print(f"    {tr['note']}")
         print(f"    {', '.join(tr['tickers'])}")
 
-    avail = [n for n, tr in lock["reserved"].items() if not tr.get("spent")]
+    # "Clean shots remaining" is the line a person acts on, so it must agree
+    # with the ledger rather than with the flag alone. Before this, un-spending
+    # tranche B by hand made it read "Clean shots remaining: 2 (A, B)" directly
+    # above the ledger entry saying B had been spent by live trading.
+    disputed = {n for n, tr in lock["reserved"].items()
+                if not tr.get("spent") and not tr.get("annulled")
+                and any(e.get("tranche") == n for e in lock.get("ledger", []))}
+    avail = [n for n, tr in lock["reserved"].items()
+             if not tr.get("spent") and n not in disputed]
     print("\n" + "-" * W)
+    if disputed:
+        print(f"NOT counted as clean (ledger disagrees): "
+              f"{', '.join(sorted(disputed))}")
+    for n, tr in sorted(lock["reserved"].items()):
+        ann = tr.get("annulled")
+        if ann:
+            print(f"Tranche {n} counts as UNSPENT by a recorded annulment "
+                  f"({ann.get('at','?')[:10]}): {ann.get('reason')}")
     if avail:
         print(f"Clean shots remaining: {len(avail)} ({', '.join(sorted(avail))})")
     else:
@@ -371,9 +556,29 @@ def selftest() -> int:
         print("double-spend     : refused")
         assert spend("A", "") is False or True   # purpose required path
 
-        r = check_clean(["TXN", "INTC"])
-        print(f"after spending A : clean={r['clean']} (expect True — claimed)")
-        assert r["clean"]
+        # The run the tranche was CLAIMED FOR is allowed...
+        r = check_clean(["TXN", "INTC"], purpose="test purpose")
+        print(f"claimed purpose  : clean={r['clean']} (expect True — this is "
+              f"the run A was spent on)")
+        assert r["clean"], r
+        assert "A" in r["claimed_for_this_purpose"], r
+
+        # ...but a DIFFERENT hypothesis on the same spent tranche is not.
+        # This assertion used to read `assert r["clean"]` with no purpose at
+        # all, which made spending a tranche the act that unlocked it for
+        # unlimited reuse.
+        r2 = check_clean(["TXN", "INTC"], purpose="a different hypothesis")
+        assert r2["clean"] is False, (
+            "a second, different hypothesis on a spent tranche is not "
+            "out-of-sample")
+        assert "A" in r2["spent"], r2
+        print("different purpose: blocked — one clean shot means one")
+
+        r3 = check_clean(["TXN", "INTC"])
+        assert r3["clean"] is False, \
+            "an unnamed test cannot claim to be the purpose the tranche was " \
+            "spent on"
+        print("no purpose given : blocked")
 
         r = check_clean(["TGT", "WMT"])
         assert not r["clean"] and "B" in r["reserved"]
@@ -382,6 +587,49 @@ def selftest() -> int:
         lock = load_lock()
         assert len(lock["ledger"]) == 1
         print(f"ledger           : {len(lock['ledger'])} entry recorded")
+
+        # ── the ledger and the spend flags must never disagree silently ──
+        _probe = {
+            "reserved": {"X": {"tickers": ["AAA"], "spent": False}},
+            "ledger": [{"tranche": "X", "purpose": "p",
+                        "at": "2026-01-01T00:00:00+00:00"}],
+        }
+        assert reconcile(_probe), \
+            "a ledger entry with spent=False and no annulment must be reported"
+        _probe["reserved"]["X"]["annulled"] = {"reason": "declared", "at": "x"}
+        assert not reconcile(_probe), \
+            "a recorded annulment resolves the disagreement"
+        _normal = {"reserved": {"X": {"tickers": ["AAA"], "spent": True}},
+                   "ledger": [{"tranche": "X", "at": "2026-01-01T00:00:00+00:00"}]}
+        assert not reconcile(_normal), "a normal spend must not be flagged"
+        _orphan_ann = {"reserved": {"X": {"tickers": ["AAA"], "spent": False,
+                                          "annulled": {"reason": "r", "at": "x"}}},
+                       "ledger": []}
+        assert reconcile(_orphan_ann), \
+            "an annulment with no ledger entry refers to nothing"
+        print("ledger reconcile : orphans, annulments and normal spends "
+              "classified")
+
+        # ── the state hash must move when the spend state does ──
+        # reservation_hash() covers the tranche DEFINITIONS only, so editing
+        # "spent": true -> false in the JSON left it matching exactly and
+        # status() then offered a spent tranche as a clean shot.
+        _h_spent = lock_state_hash(_normal)
+        _h_unspent = lock_state_hash(
+            {"reserved": {"X": {"tickers": ["AAA"], "spent": False}},
+             "ledger": [{"tranche": "X", "at": "2026-01-01T00:00:00+00:00"}]})
+        assert _h_spent != _h_unspent, \
+            "flipping a spend flag must change the state hash"
+        assert reservation_hash() == reservation_hash(), "definition hash stable"
+        print("state hash       : moves when a spend flag is flipped")
+
+        # ── annul() must refuse the cases that would launder a real spend ──
+        assert annul("A", "") is False, "an annulment needs a reason"
+        assert annul("A", "tried to annul a genuine spend") is False, \
+            "annul() must refuse a tranche that is marked SPENT"
+        assert annul("ZZ", "no such tranche") is False
+        print("annul guards     : reason required, spent tranche refused")
+
         print("\nAll self-tests passed.")
         return 0
     finally:
@@ -402,6 +650,10 @@ def main() -> int:
     ap.add_argument("--check", default=None, help="comma-separated tickers")
     ap.add_argument("--spend", default=None, help="tranche name, e.g. A")
     ap.add_argument("--purpose", default="", help="what hypothesis this tests")
+    ap.add_argument("--annul", default=None,
+                    help="tranche whose ledger entry does NOT count as a spend")
+    ap.add_argument("--reason", default="",
+                    help="with --annul, why the entry does not count")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
 
@@ -421,6 +673,8 @@ def main() -> int:
         return 0
     if args.spend:
         return 0 if spend(args.spend, args.purpose) else 1
+    if args.annul:
+        return 0 if annul(args.annul, args.reason) else 1
 
     status()
     return 0
