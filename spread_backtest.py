@@ -62,6 +62,18 @@ deciding the bar afterwards (the ADX-35 sweep, the discovery-set long side).
          range, not merely at the skew that happens to flatter it.
       4. the single worst cycle loses <= MAX_POSITION_PCT of the account —
          i.e. the position sizing actually holds under a Feb 2020 repeat.
+      5. ADDED 2026-09-10 AFTER THE FIRST RUN, and it is a TIGHTENING, declared
+         as an addition rather than folded in silently: the arm must beat
+         holding the same dollars in the underlying over the same cycles.
+
+         The first run passed no arm, so nothing was rescued by adding this and
+         nothing already-passing was re-judged. It exists because the first run
+         showed put spreads positive and iron condors ruinous — and the thing
+         that separates them is not volatility, it is DELTA. A short put spread
+         is net long delta in a decade when the index tripled. A positive mean
+         is what long delta produces whether or not any premium was harvested.
+         Without this clause the bar could be cleared by a leveraged long
+         wearing the language of a volatility strategy.
 
     FAIL otherwise. A structure that clears 1 and 2 but fails 3 has no edge; it
     has an unmodelled cost. A structure that clears 1-3 but fails 4 is not a bad
@@ -217,6 +229,40 @@ def run(ticker: str, *, structure: str, width: float, otm_pct: float,
                      structure=structure, width=width)
 
 
+def benchmark(cycles: list[dict], *, account: float) -> dict:
+    """
+    The comparison the strategy has to beat: the SAME dollars, in the index.
+
+    A short put spread is net LONG delta. Over a decade in which the index
+    roughly tripled, a positive mean is exactly what a long-delta position
+    produces whether or not any volatility premium was harvested. So the
+    strategy's own numbers cannot tell you which one you were paid for — this
+    can. It holds the capital the spread ties up (its max loss) in the
+    underlying, entering and exiting on the same dates, and reports what that
+    would have done.
+
+    If the spread does not beat this, the premium was not what paid you.
+    """
+    pnl = []
+    for c in cycles:
+        dollars = c["max_loss"]
+        shares = dollars / c["spot"]
+        pnl.append(shares * (c["exit_spot"] - c["spot"]))
+    pnl = np.array(pnl, dtype=float)
+    equity = account + np.cumsum(pnl)
+    peak = np.maximum.accumulate(np.concatenate([[account], equity]))
+    dd = (peak - np.concatenate([[account], equity])) / peak
+    ret = pnl / account * 100.0
+    n = len(ret)
+    sd = float(ret.std(ddof=1)) if n > 1 else float("nan")
+    mean = float(ret.mean())
+    half = 1.96 * sd / math.sqrt(n) if n > 1 else float("nan")
+    return {"mean_pct": mean, "ci": (mean - half, mean + half),
+            "total_pct": float(equity[-1] - account) / account * 100.0,
+            "max_dd_pct": float(dd.max() * 100.0),
+            "win_rate": float((pnl > 0).mean() * 100.0)}
+
+
 def summarise(cycles: list[dict], *, account: float, ticker: str,
               structure: str, width: float) -> dict:
     pnl = np.array([c["pnl"] for c in cycles], dtype=float)
@@ -241,6 +287,7 @@ def summarise(cycles: list[dict], *, account: float, ticker: str,
         "worst_when": cycles[worst_i]["entry"].date(),
         "max_loss_pct": float(max(c["max_loss"] for c in cycles) / account * 100.0),
         "avg_credit": float(np.mean([c["credit"] for c in cycles])),
+        "benchmark": benchmark(cycles, account=account),
         "rows": cycles,
     }
 
@@ -254,6 +301,12 @@ def verdict(r: dict, account: float) -> tuple[bool, list[str]]:
     if r["max_dd_pct"] > MAX_DRAWDOWN_PCT:
         reasons.append(f"max drawdown {r['max_dd_pct']:.1f}% exceeds "
                        f"the {MAX_DRAWDOWN_PCT:.0f}% bar")
+    b = r.get("benchmark")
+    if b is not None and r["mean_pct"] <= b["mean_pct"]:
+        reasons.append(f"mean {r['mean_pct']:+.2f}%/cycle does not beat simply "
+                       f"holding the same dollars in {r['ticker']} "
+                       f"({b['mean_pct']:+.2f}%) — whatever paid, it was not "
+                       f"the volatility premium")
     if abs(r["worst_pct"]) > rp.MAX_POSITION_PCT:
         reasons.append(f"worst cycle {r['worst_pct']:+.1f}% breaches "
                        f"MAX_POSITION_PCT ({rp.MAX_POSITION_PCT:.0f}%) — "
@@ -349,6 +402,49 @@ def selftest() -> int:
         "an all-bad result must trip every clause, or one of them is inert"
     print("pre-registered bar: passes clean, fails CI / drawdown / size, all three")
 
+    # ── clause 5: the benchmark's ARITHMETIC, on a path with a known answer ──
+    # A first draft asserted the index must beat the spread on a rising ramp.
+    # It does not, and the model said so: only the at-risk dollars are deployed,
+    # so a fat credit can out-earn them. Testing the economics of a synthetic
+    # path was the wrong test. Test what the clause actually depends on — that
+    # the benchmark computes the right number, and that the verdict reads it.
+    known = [{"spot": 100.0, "exit_spot": 110.0, "max_loss": 1000.0},
+             {"spot": 110.0, "exit_spot": 99.0, "max_loss": 1000.0}]
+    b = benchmark(known, account=5000.0)
+    # +10% then -10% on $1,000 deployed = +$100 then -$100, on a $5,000 account.
+    assert abs(b["mean_pct"] - 0.0) < 1e-9, f"mean should be 0.0%, got {b['mean_pct']}"
+    assert abs(b["win_rate"] - 50.0) < 1e-9, b["win_rate"]
+    up = benchmark([{"spot": 100.0, "exit_spot": 120.0, "max_loss": 1000.0}],
+                   account=5000.0)
+    assert abs(up["mean_pct"] - 4.0) < 1e-9, (
+        f"+20% on $1,000 of a $5,000 account is +4.0%, got {up['mean_pct']}")
+    print(f"benchmark maths  : +20% on the at-risk dollars -> "
+          f"{up['mean_pct']:+.1f}% of account")
+
+    # The clause fires on a strategy that loses to the index, and only then.
+    beaten = {"ci": (0.4, 1.2), "max_dd_pct": 12.0, "worst_pct": -18.0,
+              "mean_pct": 0.50, "ticker": "SPY",
+              "benchmark": {"mean_pct": 0.90}}
+    ok, why = verdict(beaten, acct)
+    assert not ok and any("volatility premium" in w for w in why), why
+    winning = dict(beaten, benchmark={"mean_pct": 0.10})
+    ok, why = verdict(winning, acct)
+    assert ok, f"an arm that beats the index must not be sunk by clause 5: {why}"
+    print("clause 5         : sinks an arm the index beats, spares one it does not")
+
+    # WIRING: run() must actually attach a benchmark, or the clause is inert.
+    _idx = pd.bdate_range("2020-01-02", periods=300)
+    _flat = pd.DataFrame({"Date": _idx, "Close": np.full(len(_idx), 400.0)})
+    _vols = pd.Series(np.full(len(_idx), 20.0), index=_idx)
+    wired = run("SPY", structure=PUT_SPREAD, width=10, otm_pct=5.0, dte=30,
+                skew=0.0, years=1, cost_frac=0.0, account=5000.0,
+                vol_series=_vols, bars=_flat)
+    assert "benchmark" in wired and "mean_pct" in wired["benchmark"], \
+        "run() dropped the benchmark — clause 5 would never fire on real data"
+    assert abs(wired["benchmark"]["mean_pct"]) < 1e-9, \
+        "a perfectly flat path must give the index-holder exactly zero"
+    print("clause 5 wiring  : run() attaches it; flat path gives the holder 0.00%")
+
     # ── clause 3: one bad skew must sink the arm, however good the others ──
     passing = {"ci": (0.4, 1.2), "max_dd_pct": 12.0, "worst_pct": -18.0}
     failing = {"ci": (0.4, 1.2), "max_dd_pct": 44.0, "worst_pct": -18.0}
@@ -419,7 +515,7 @@ def report(by_arm: dict, account: float, skews: list[float]) -> int:
     for skew in skews:
         print(f"\n  SKEW {skew:.0f}")
         hdr = (f"  {'arm':<24} {'cyc':>4} {'mean%':>7} {'95% CI':>16} {'tot%':>8} "
-               f"{'win%':>6} {'maxDD%':>7} {'worst%':>7}")
+               f"{'win%':>6} {'maxDD%':>7} {'worst%':>7} {'hold%':>8}")
         print(hdr)
         print("  " + "-" * (len(hdr) - 2))
         for arm in sorted(by_arm):
@@ -429,12 +525,17 @@ def report(by_arm: dict, account: float, skews: list[float]) -> int:
             print(f"  {arm:<24} {r['cycles']:>4} {r['mean_pct']:>+7.2f} "
                   f"[{r['ci'][0]:>+6.2f},{r['ci'][1]:>+6.2f}] "
                   f"{r['total_pct']:>+8.1f} {r['win_rate']:>6.1f} "
-                  f"{r['max_dd_pct']:>7.1f} {r['worst_pct']:>+7.1f}")
+                  f"{r['max_dd_pct']:>7.1f} {r['worst_pct']:>+7.1f} "
+                  f"{r['benchmark']['mean_pct']:>+8.2f}")
 
     print()
     print("=" * 78)
     print("PRE-REGISTERED VERDICT")
     print("=" * 78)
+    print("  hold% = mean cycle return from putting the SAME dollars the spread")
+    print("          ties up into the underlying instead. Clause 5: the arm must")
+    print("          beat it, or the volatility premium is not what paid.")
+    print()
     print(f"  bar: CI clears zero AND maxDD <= {MAX_DRAWDOWN_PCT:.0f}% AND worst")
     print(f"       cycle <= {rp.MAX_POSITION_PCT:.0f}% of account — at EVERY skew tested,")
     print(f"       because skew's sign depends on moneyness and cannot be")
