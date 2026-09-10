@@ -121,6 +121,9 @@ jobs:
       - name: vrp_check.py — implied-vs-realised measurement + pre-registered bar
         run: python vrp_check.py --selftest
 
+      - name: spread_backtest.py — defined-risk spread engine + pre-registered bar
+        run: python spread_backtest.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 
