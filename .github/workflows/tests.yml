@@ -115,6 +115,9 @@ jobs:
       - name: exit_monitor.py — exit rules, offline (closes LIVE positions)
         run: python exit_monitor.py --selftest
 
+      - name: option_backtest.py — coverage guard (produces OPT_WIN_RATE)
+        run: python option_backtest.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 
