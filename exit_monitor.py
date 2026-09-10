@@ -72,6 +72,7 @@ if importlib.util.find_spec("requests") is None:
     raise SystemExit("Missing requests. Run: pip install requests")
 
 import data_source
+import signal_core as sc
 import notify
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -116,16 +117,20 @@ def drop_unsettled_bars(df: "pd.DataFrame",
     network fetch — the THESIS rule had no test at all, and the bug it carried
     was invisible precisely because nothing could assert on it.
     """
+    # ROUTED THROUGH signal_core.drop_unsettled(). DROP_UNTIL_CLOSE is the live
+    # policy: today's bar is unusable before the open (a stub) and during the
+    # session (in progress), and is the freshest real data once the close has
+    # passed — which matters here, because the 20:00/21:00 UTC runs are the ones
+    # that should see the session that just ended.
+    #
+    # The local version asked `not is_market_open(now)` and returned early, so it
+    # kept the stub bar BEFORE the open. signal_core asks whether today has
+    # CLOSED instead, which is the question that distinguishes the two.
     if df is None or len(df) == 0:
         return df
-    now = now or datetime.now(ET)
-    if not is_market_open(now):
-        return df
-    try:
-        idx = pd.to_datetime(df.index).tz_localize(None).normalize()
-    except TypeError:
-        idx = pd.to_datetime(df.index).tz_convert(None).normalize()
-    return df[idx < pd.Timestamp(now.date())]
+    out, _n = sc.drop_unsettled(df, policy=sc.DROP_UNTIL_CLOSE,
+                               now=now or datetime.now(ET))
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════

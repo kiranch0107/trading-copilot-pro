@@ -151,6 +151,111 @@ def is_market_open(now: datetime | None = None) -> bool:
     return dtime(9, 30) <= now.time() <= close
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# THE ONE PLACE THAT DECIDES WHETHER A BAR HAS SETTLED
+# ───────────────────────────────────────────────────────────────────────────
+# This defect was found and fixed SIX separate times, in six modules, under four
+# different function names — signal_core.drop_partial_bar, app.py's own copy,
+# backtest._drop_todays_bar, universe.drop_unsettled,
+# exit_monitor.drop_unsettled_bars — and each fix was local. There was no single
+# answer to "is this frame safe to read?", so every new data path either
+# re-invented the guard or forgot it. Forgetting it cost, in order: alerts that
+# appeared and vanished with the clock, an unreproducible backtest cache, a
+# universe snapshot that depended on the time of day, and live option positions
+# closed on an intraday dip that recovered.
+#
+# TWO POLICIES, because the difference between the call sites is real:
+#
+#   DROP_UNTIL_CLOSE  live paths (app, scanner, exit_monitor). Today's bar is
+#                     unusable until today's session has ENDED — before the open
+#                     it is a stub, during the session it is in progress — and is
+#                     the freshest real data once the close has passed.
+#
+#   DROP_ALWAYS       reproducible paths (backtest, universe). Never read a bar
+#                     dated today, settled or not, because a frame whose last row
+#                     was written today cannot be cached or fingerprinted: two
+#                     fetches four minutes apart returned identical row counts
+#                     and different content for all 13 series.
+#
+# IDENTIFICATION IS ALWAYS BY DATE, never "the last row". The old
+# drop_partial_bar() dropped iloc[-1] while the market was open, which left
+# today's bar in place BEFORE the open — Yahoo emits that row well ahead of
+# 09:30. backtest._drop_todays_bar()'s docstring had named that exact gap
+# ("every live path leaves it in place") and only fixed it for the backtest.
+DROP_UNTIL_CLOSE = "until_close"
+DROP_ALWAYS = "always"
+
+
+def session_closed(now: datetime | None = None) -> bool:
+    """
+    True when today's regular session is over — or when today is not a trading
+    day at all, since then nothing is forming.
+
+    This is the question drop_unsettled(DROP_UNTIL_CLOSE) needs, and it is NOT
+    `not is_market_open()`: that is also true before the open, which is when the
+    stub bar problem lives.
+    """
+    now = now if now is not None else datetime.now(_ET)
+    if now.weekday() >= 5:
+        return True
+    day = now.strftime("%Y-%m-%d")
+    if day in MARKET_HOLIDAYS:
+        return True
+    close = dtime(13, 0) if day in MARKET_HALF_DAYS else dtime(16, 0)
+    return now.time() > close
+
+
+def _bar_dates(df: pd.DataFrame, date_col: str | None):
+    """Normalised bar dates, from `date_col` if given else the index."""
+    src = df[date_col] if date_col and date_col in df.columns else df.index
+    idx = pd.to_datetime(src, errors="coerce")
+    try:
+        idx = idx.tz_localize(None)
+    except (TypeError, AttributeError):
+        try:
+            idx = idx.tz_convert(None)
+        except (TypeError, AttributeError):
+            pass
+    return pd.DatetimeIndex(idx).normalize()
+
+
+def drop_unsettled(df: pd.DataFrame,
+                   *,
+                   policy: str = DROP_UNTIL_CLOSE,
+                   now: datetime | None = None,
+                   date_col: str | None = None) -> tuple[pd.DataFrame, int]:
+    """
+    Remove bars dated today (ET) or later, per `policy`. Returns (df, n_dropped).
+
+    `date_col` names a date COLUMN (backtest frames carry "Date"); omit it for a
+    DatetimeIndex. A frame with neither is returned untouched rather than
+    guessed at — silently trimming the wrong row is the failure this exists to
+    stop.
+    """
+    if policy not in (DROP_UNTIL_CLOSE, DROP_ALWAYS):
+        raise ValueError(f"unknown policy {policy!r}; use DROP_UNTIL_CLOSE or "
+                         f"DROP_ALWAYS")
+    if df is None or len(df) == 0:
+        return df, 0
+    now = now if now is not None else datetime.now(_ET)
+    if policy == DROP_UNTIL_CLOSE and session_closed(now):
+        return df, 0            # today's bar is settled; it is the best data there is
+
+    has_col = bool(date_col) and date_col in getattr(df, "columns", ())
+    if not has_col and not isinstance(getattr(df, "index", None), pd.DatetimeIndex):
+        try:
+            pd.to_datetime(df.index, errors="raise")
+        except Exception:
+            return df, 0        # undated frame — do not guess which row is today
+
+    dates = _bar_dates(df, date_col if has_col else None)
+    keep = dates < pd.Timestamp(now.date())
+    dropped = int((~keep).sum())
+    if not dropped:
+        return df, 0
+    return df[keep], dropped
+
+
 def drop_partial_bar(df: pd.DataFrame,
                      now: datetime | None = None) -> tuple[pd.DataFrame, bool]:
     """
@@ -167,11 +272,16 @@ def drop_partial_bar(df: pd.DataFrame,
 
     Returns (df, dropped_flag).
     """
+    #
+    # KEPT for its callers' (df, bool) contract; the decision now lives in
+    # drop_unsettled(). Its old body was `df.iloc[:-1] if is_market_open(now)`,
+    # which identified the wrong row (the last one, not the one dated today) and
+    # asked the wrong question (open now, rather than has today closed), so it
+    # left the stub bar in place before the open.
     if df is None or len(df) < 2:
         return df, False
-    if not is_market_open(now):
-        return df, False
-    return df.iloc[:-1], True
+    out, n = drop_unsettled(df, policy=DROP_UNTIL_CLOSE, now=now)
+    return out, bool(n)
 
 
 # ---------------------------------------------------------------------------
@@ -463,20 +573,72 @@ def _frame(n=60, price=100.0, up=True, vol=2_000_000, vol_avg=1_000_000,
 def selftest() -> int:
     from datetime import datetime as _dt
 
-    # partial bar
-    df = _frame()
-    open_dt = _dt(2026, 8, 25, 12, 30)      # Tuesday midday
-    closed_dt = _dt(2026, 8, 25, 17, 0)     # after the close
-    d1, dropped1 = drop_partial_bar(df, now=open_dt)
-    d2, dropped2 = drop_partial_bar(df, now=closed_dt)
-    print(f"partial bar, market open  : dropped={dropped1}, {len(d1)} bars "
+    # ── unsettled bars: one decision, two policies ──
+    # The fixture must END on the reference day, or the test asserts nothing: the
+    # old version dropped iloc[-1] regardless of dates, so it passed on ANY frame
+    # and could not tell a today-dated bar from a month-old one.
+    _ref = _dt(2026, 8, 25)                  # a Tuesday
+    _n = 60
+    _idx = pd.bdate_range(end=pd.Timestamp(_ref.date()), periods=_n)
+    df = _frame(n=_n).set_axis(_idx)
+    assert _bar_dates(df, None).max() == pd.Timestamp(_ref.date()), \
+        "fixture must carry a bar dated on the reference day"
+
+    pre_open = _dt(2026, 8, 25, 7, 0)        # Yahoo already emits today's row
+    mid = _dt(2026, 8, 25, 12, 30)
+    after = _dt(2026, 8, 25, 17, 0)
+
+    d0, dropped0 = drop_partial_bar(df, now=pre_open)
+    d1, dropped1 = drop_partial_bar(df, now=mid)
+    d2, dropped2 = drop_partial_bar(df, now=after)
+    print(f"unsettled, pre-open       : dropped={dropped0}, {len(d0)} bars")
+    print(f"unsettled, market open    : dropped={dropped1}, {len(d1)} bars "
           f"(was {len(df)})")
-    print(f"partial bar, after close  : dropped={dropped2}, {len(d2)} bars")
+    print(f"unsettled, after close    : dropped={dropped2}, {len(d2)} bars")
+    # THE REGRESSION THIS PINS. The old rule asked `is_market_open()`, which is
+    # False before the open, so today's stub bar was used for every pre-market
+    # scan. backtest._drop_todays_bar() had documented that gap and fixed it for
+    # itself only.
+    assert dropped0 and len(d0) == len(df) - 1, \
+        "today's bar must be dropped BEFORE the open too — it is a stub there, " \
+        "not settled data"
     assert dropped1 and len(d1) == len(df) - 1
-    assert not dropped2 and len(d2) == len(df)
+    assert not dropped2 and len(d2) == len(df), \
+        "after the close today's bar is settled and is the freshest real data"
+
     sat = _dt(2026, 8, 22, 12, 0)
-    assert not drop_partial_bar(df, now=sat)[1]
-    print("partial bar, weekend      : not dropped")
+    assert not drop_partial_bar(df, now=sat)[1], \
+        "a Saturday reference day has no session in progress"
+
+    # DROP_ALWAYS is the reproducible policy: the close does not rescue the bar.
+    _a1, _n1 = drop_unsettled(df, policy=DROP_ALWAYS, now=after)
+    assert _n1 == 1 and len(_a1) == len(df) - 1, \
+        "DROP_ALWAYS must drop a today-dated bar even after it settles — that " \
+        "is the whole difference from the live policy"
+    _u1, _n2 = drop_unsettled(df, policy=DROP_UNTIL_CLOSE, now=after)
+    assert _n2 == 0, "and DROP_UNTIL_CLOSE must not, or the two are one policy"
+    print("policies differ           : after the close ALWAYS drops, "
+          "UNTIL_CLOSE keeps")
+
+    # A date COLUMN works the same as a DatetimeIndex (backtest frames use one).
+    _col = df.reset_index().rename(columns={"index": "Date"})
+    _c1, _cn = drop_unsettled(_col, policy=DROP_ALWAYS, now=after,
+                              date_col="Date")
+    assert _cn == 1 and len(_c1) == len(_col) - 1, \
+        "a date column must be honoured, or backtest frames silently keep the bar"
+    # An undated frame must be left alone rather than guessed at.
+    _bad = df.reset_index(drop=True)
+    assert drop_unsettled(_bad, policy=DROP_ALWAYS, now=after)[1] == 0, \
+        "an undated frame must be returned untouched, not trimmed by position"
+    print("frame shapes              : index or Date column; undated untouched")
+
+    # session_closed() is the question, and it is NOT `not is_market_open()`.
+    assert not session_closed(pre_open) and not session_closed(mid)
+    assert session_closed(after) and session_closed(sat)
+    assert not is_market_open(pre_open), \
+        "pre-open is 'market closed' but NOT 'session closed' — conflating the " \
+        "two is what kept the stub bar"
+    print("session_closed            : pre-open is not 'closed', post-close is")
 
     # clean bullish signal
     r = evaluate(_frame(), "TEST", spy_regime={"regime": "Bullish"},

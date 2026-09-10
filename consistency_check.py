@@ -1298,6 +1298,125 @@ def check_weekly_rule_parity() -> None:
         "  then update this check deliberately.")
 
 
+# ---------------------------------------------------------------------------
+# 22. one decision about whether a bar has settled
+# ---------------------------------------------------------------------------
+
+def check_unsettled_bar_single_source() -> None:
+    """
+    Every module that reads a price frame must route "has this bar settled?"
+    through signal_core.drop_unsettled().
+
+    This defect was found and fixed SIX times — signal_core, app.py,
+    backtest (_drop_todays_bar), universe (drop_unsettled),
+    exit_monitor (drop_unsettled_bars), and scanner via signal_core — under four
+    names, each fix local. The cost of forgetting it, in order: alerts that
+    appeared and vanished with the clock, an uncacheable backtest, a universe
+    snapshot that depended on the time of day, and live option positions closed
+    on an intraday dip that recovered.
+
+    The copies had also DRIFTED, which is the part a per-module fix cannot catch:
+    the live ones asked `is_market_open()` and dropped iloc[-1], so they kept
+    today's bar BEFORE the open (Yahoo emits it well ahead of 09:30) and
+    identified the wrong row. backtest._drop_todays_bar()'s docstring named that
+    exact gap — "every live path leaves it in place" — and fixed it only for
+    itself.
+
+    So this does not check that each module drops a bar. It checks there is ONE
+    implementation and five delegations, and that the two policies stay distinct.
+    """
+    import signal_core as sc
+
+    # The two policies must actually differ, or routing everything through one
+    # function has quietly collapsed them.
+    import pandas as pd
+    from datetime import datetime
+    ref = datetime(2026, 8, 25, 17, 0, tzinfo=sc._ET)      # after the close
+    idx = pd.bdate_range(end=pd.Timestamp("2026-08-25"), periods=5)
+    probe = pd.DataFrame({"Close": [1, 2, 3, 4, 5.0]}, index=idx)
+    _, n_always = sc.drop_unsettled(probe, policy=sc.DROP_ALWAYS, now=ref)
+    _, n_live = sc.drop_unsettled(probe, policy=sc.DROP_UNTIL_CLOSE, now=ref)
+    assert n_always == 1 and n_live == 0, (
+        f"the two policies no longer differ after the close "
+        f"(ALWAYS dropped {n_always}, UNTIL_CLOSE dropped {n_live}). "
+        f"Reproducible paths need the bar gone even once it settles; live paths "
+        f"need it kept. Collapsing them silently changes one of the two.")
+
+    # And the pre-open case, which is the regression the consolidation fixed.
+    pre = datetime(2026, 8, 25, 7, 0, tzinfo=sc._ET)
+    _, n_pre = sc.drop_unsettled(probe, policy=sc.DROP_UNTIL_CLOSE, now=pre)
+    assert n_pre == 1, (
+        "DROP_UNTIL_CLOSE must drop today's bar BEFORE the open. It is a stub "
+        "there, not settled data, and `not is_market_open()` is true then — "
+        "which is exactly how the old live rule kept it.")
+
+    # Five delegating call sites, one implementation.
+    delegators = {
+        "app.py": "drop_partial_bar",
+        "backtest.py": "_drop_todays_bar",
+        "universe.py": "drop_unsettled",
+        "exit_monitor.py": "drop_unsettled_bars",
+    }
+    for path, fname in delegators.items():
+        txt = Path(path).read_text()
+        i = txt.find(f"def {fname}(")
+        assert i > 0, f"{path} no longer defines {fname}() — update this check"
+        body = txt[i:i + 3000]
+        end = body.find("\ndef ", 1)
+        if end > 0:
+            body = body[:end]
+        # Skip the `def` line itself. universe.py's delegator is also CALLED
+        # drop_unsettled, so a bare-name search was satisfied by its own
+        # signature and the check passed with the delegation removed. Found by
+        # falsification; the fix is to require a QUALIFIED call below.
+        body = body.split("\n", 1)[1] if "\n" in body else ""
+        # COMMENT-STRIPPED, and this mattered: the first version of this check
+        # searched the raw body, which every delegator satisfied with the comment
+        # "ROUTED THROUGH signal_core.drop_unsettled()". The guard passed on
+        # prose while the code underneath had been replaced by a hand-rolled date
+        # compare. Found by falsification, which is the only reason it is not
+        # still passing.
+        code = "\n".join(l.split("#", 1)[0] for l in body.splitlines())
+        qualified = ("sc.drop_unsettled(" in code
+                     or "signal_core.drop_unsettled(" in code)
+        assert qualified, (
+            f"{path}:{fname}() no longer delegates to "
+            f"signal_core.drop_unsettled(). That is the sixth copy of this "
+            f"decision starting over; the last five drifted. The call must be "
+            f"QUALIFIED (sc.drop_unsettled / signal_core.drop_unsettled) — a "
+            f"bare name matched universe.py's own identically-named wrapper.")
+        assert "iloc[:-1]" not in code.replace(" ", ""), (
+            f"{path}:{fname}() identifies the unsettled bar by POSITION again. "
+            f"It must be identified by DATE — iloc[-1] is the wrong row before "
+            f"the open, when today's stub is present but is not the only bar.")
+
+    # scanner reaches it through signal_core rather than its own copy.
+    stxt = Path("scanner.py").read_text()
+    assert "def drop_partial_bar" not in stxt and "def drop_unsettled" not in stxt, (
+        "scanner.py has grown its own unsettled-bar function. It calls "
+        "signal_core's; a local copy is how the other five drifted.")
+
+    # signal_core is the only implementation: nothing else may compare bar dates
+    # against today by hand.
+    for path in ("app.py", "scanner.py", "universe.py", "exit_monitor.py"):
+        txt = Path(path).read_text()
+        for i, line in enumerate(txt.splitlines(), 1):
+            code = line.split("#", 1)[0].replace(" ", "")
+            # Any "<pd.Timestamp(...date())" shape, whatever the variable is
+            # called. The first version pinned the variable name `df.index` and a
+            # rename walked straight past it.
+            if "<pd.Timestamp" in code and (".date()" in code or "today" in code):
+                raise AssertionError(
+                    f"{path}:{i} compares bar dates against today directly: "
+                    f"{line.strip()!r}. Call signal_core.drop_unsettled() — "
+                    f"this is how six copies of one decision happened.")
+
+    print(f"  one implementation in signal_core, {len(delegators)} delegations "
+          f"+ scanner via signal_core")
+    print("  policies distinct (ALWAYS drops a settled today-bar, UNTIL_CLOSE "
+          "keeps it) and pre-open covered")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -1319,6 +1438,7 @@ CHECKS = [
     ("is_market_open agrees across 4 copies",      check_market_hours_agree),
     ("reservation lock agrees with itself",        check_reservation_self_consistent),
     ("weekly filter off while rules diverge",      check_weekly_rule_parity),
+    ("unsettled-bar decision has one source",      check_unsettled_bar_single_source),
     ("every production module imports",            check_modules_import),
 ]
 

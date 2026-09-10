@@ -42,8 +42,10 @@ import json
 import math
 import os
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 from zoneinfo import ZoneInfo
+
+import signal_core as sc
 
 try:
     import pandas as pd
@@ -185,10 +187,17 @@ def drop_unsettled(df: "pd.DataFrame", today: date | None = None) -> "pd.DataFra
     tested without a network fetch — the guard it replaces was scheduling
     discipline, which no test can assert.
     """
+    # ROUTED THROUGH signal_core.drop_unsettled(). DROP_ALWAYS, because the
+    # property this buys is that a snapshot does not depend on the time of day it
+    # was produced — the same reason the backtest uses it, and the opposite
+    # trade-off from the live scan, which wants today's bar once it settles.
     if df is None or df.empty:
         return df
-    cutoff = pd.Timestamp(today or _today_et())
-    return df[df.index < cutoff]
+    ref = today or _today_et()
+    out, _n = sc.drop_unsettled(
+        df, policy=sc.DROP_ALWAYS,
+        now=datetime.combine(ref, dtime(12, 0), tzinfo=_ET))
+    return out
 
 
 def sessions_to_calendar_days(sessions: int) -> int:
