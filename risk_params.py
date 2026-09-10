@@ -79,7 +79,41 @@ MAX_POSITION_PCT = 25.0
 
 # MEASURED OPTION-LEVEL WIN RATE for this signal.
 #
-# 23.8% — option_backtest.py, TP +100% / SL -50%, 5 years, 7 tickers.
+# 24.9% — option_backtest.py --sweep, TP +100% / SL -50%, 5 years, 7 tickers,
+# 398 trades, DATA COVERAGE 7 of 7 confirmed (2026-09-10).
+#
+# WAS 0.238, AND 23.8% NO LONGER REPRODUCES. Re-measured at the same recorded
+# basis it comes back 24.9%. Two undistinguished causes: the 5-year window is
+# relative to the run date and has moved since the original measurement, and the
+# default universe includes ROKU, which is not in the 12-ticker set that
+# reproduced byte-exactly in the alignment re-run — if ROKU carries an interior
+# NaN then #27's fix moved this file's result, and the share backtest
+# reproducing says nothing about that. The number was only updated once coverage
+# was CONFIRMED 7 of 7; the first run of the sweep printed no coverage line at
+# all, and a win rate quietly taken over a partial universe would flow straight
+# into the ceiling below.
+#
+# The change does not move any gate: 24.9% and 23.8% are both far under every
+# breakeven in the table below.
+#
+# THE FULL SWEEP, and it is the reason the ceiling is a loss cap:
+#
+#     TP     win%   avg win   avg loss   realised   realised BE   expectancy   PF
+#     +50   32.7%    +74.4%    -46.7%     1.59:1        38.6%       -7.11%   0.77
+#     +75   26.9%   +103.8%    -45.7%     2.27:1        30.6%       -5.54%   0.83
+#    +100   24.9%   +120.0%    -45.1%     2.66:1        27.3%       -4.07%   0.88
+#    +150   22.1%   +135.4%    -44.6%     3.04:1        24.8%       -4.80%   0.86
+#    +200   21.9%   +143.0%    -44.6%     3.21:1        23.8%       -3.58%   0.90
+#    +300   21.9%   +144.7%    -44.6%     3.24:1        23.6%       -3.21%   0.91
+#
+# NO structure clears. Every row falls short of its own REALISED breakeven, and
+# the realised payoff is well below the nominal one because the DTE-7 floor and
+# max-hold close trades before they reach their target. TP+200 is what the live
+# rules use, and it measures 21.9% against a realised breakeven of 23.8%.
+#
+# (Coincidence worth naming so it does not confuse a later reader: the realised
+# breakeven at TP+200 is 23.8%, which is the value OPT_WIN_RATE used to hold.
+# They are unrelated numbers that happen to collide.)
 #
 # It lives here because two separate places reason about it and they must not
 # drift: app.py's expected-value line, and the spread ceiling derived below.
@@ -87,23 +121,78 @@ MAX_POSITION_PCT = 25.0
 # rate. An option needs a far larger underlying move to gain 100% than a share
 # needs to reach 3xATR, and theta works against you the whole time, so the
 # share number made losing configurations look profitable.
-OPT_WIN_RATE = 0.238
+OPT_WIN_RATE = 0.249
 
-# THE BASIS THAT 23.8% WAS MEASURED AT. Not decoration — a win rate is
+# THE BASIS OPT_WIN_RATE WAS MEASURED AT. Not decoration — a win rate is
 # meaningless without the payoff rule it was measured under, and this repo
 # already paid for that once: the spread ceiling below was derived by comparing
-# 23.8% against a breakeven computed at a DIFFERENT take-profit.
+# it against a breakeven computed at a DIFFERENT take-profit.
 #
 # option_backtest.py's defaults are `--tp 100 --sl 50 --dte-exit 7
-# --spread-pct 5`, so 23.8% is the rate at which a contract reached +100%
+# --spread-pct 5`, so 24.9% is the rate at which a contract reached +100%
 # before -50%, with a 5% round-trip spread ALREADY charged inside it.
-#
-# A +200% target is strictly harder to reach than +100%, so the win rate at
-# +200% is necessarily LOWER than 23.8% — it is not measured, and it must not
-# be assumed. option_backtest.py --sweep prints the rate at each TP level;
-# until one is recorded here, nothing may compare 23.8% to a +200% breakeven.
 OPT_WIN_RATE_TP_PCT = 100.0
 OPT_WIN_RATE_SL_PCT = 50.0
+
+# EVERY TP LEVEL, MEASURED. This used to say the +200% rate "is not measured,
+# and it must not be assumed" — a correct rule while it was true. It is measured
+# now (option_backtest.py --sweep, 7 of 7 tickers, 398 trades per row,
+# 2026-09-10), so the honest move is to record it rather than keep refusing.
+#
+# Each entry is (win_rate_pct, realised_avg_win_pct, realised_avg_loss_pct).
+# The realised figures are what trades ACTUALLY returned, not the nominal TP/SL:
+# the DTE-7 floor and max-hold close positions before they reach target, so at
+# +200% the average win is +143.0%, not +200%. Breakeven must be computed from
+# these, which is what realised_breakeven_wr() below does.
+#
+# The prediction held, for the record: a wider target is hit strictly less often,
+# and 21.9% at +200% is indeed below 24.9% at +100%.
+OPT_SWEEP_BY_TP = {
+    50.0:  (32.7, 74.4, 46.7),
+    75.0:  (26.9, 103.8, 45.7),
+    100.0: (24.9, 120.0, 45.1),
+    150.0: (22.1, 135.4, 44.6),
+    200.0: (21.9, 143.0, 44.6),
+    300.0: (21.9, 144.7, 44.6),
+}
+
+
+def realised_breakeven_wr(tp_pct: float) -> float | None:
+    """
+    Win rate needed to break even on the payoff a TP level ACTUALLY realised.
+
+    Returns None for a TP that was never measured — an unmeasured structure gets
+    no number, which is the rule that stopped 24.9% being applied to +200% in the
+    first place.
+
+    Prefer this to spread_breakeven_wr() for a real decision. That function
+    charges the spread but assumes trades reach their nominal levels, which they
+    do not, so it understates breakeven by roughly 1.7 points across the sweep.
+    """
+    row = OPT_SWEEP_BY_TP.get(float(tp_pct))
+    if row is None:
+        return None
+    _wr, avg_win, avg_loss = row
+    return avg_loss / (avg_win + avg_loss) * 100.0
+
+
+def measured_option_edge(tp_pct: float) -> dict | None:
+    """
+    What the sweep measured at `tp_pct`: win rate, realised breakeven, margin and
+    expectancy. None if that TP was never measured.
+
+    `margin` is percentage POINTS of win rate above (positive) or below
+    (negative) the realised breakeven. Every measured level is negative.
+    """
+    row = OPT_SWEEP_BY_TP.get(float(tp_pct))
+    if row is None:
+        return None
+    wr, avg_win, avg_loss = row
+    be = realised_breakeven_wr(tp_pct)
+    ev = wr / 100.0 * avg_win - (1 - wr / 100.0) * avg_loss
+    return {"tp_pct": float(tp_pct), "win_rate": wr, "avg_win": avg_win,
+            "avg_loss": avg_loss, "realised_payoff": avg_win / avg_loss,
+            "breakeven": be, "margin": wr - be, "expectancy_pct": ev}
 
 # MAXIMUM BID-ASK SPREAD, as a percentage of the option mid.
 #
@@ -120,7 +209,7 @@ OPT_WIN_RATE_SL_PCT = 50.0
 #
 # Scored at the basis it was actually measured at, TP +100% / SL -50%:
 #
-#     spread   breakeven WR   vs measured 23.8%
+#     spread   breakeven WR   vs measured 24.9%
 #        0%        33.3%            BELOW by 9.5 points
 #        5%        36.8%            BELOW
 #        8%        38.9%            BELOW
@@ -362,6 +451,75 @@ def selftest() -> int:
           f"(zero-spread breakeven {be0:.1f}%); it is a loss cap, not an edge")
     print(f"  (the old TP+200 basis made the same gate look like {be_wrong_basis:.1f}% "
           f"— 'clears by {wr - be_wrong_basis:.1f} points'. That was the bug.)")
+
+    # ── the measured sweep, and why nominal breakeven misleads ──
+    assert measured_option_edge(175.0) is None, \
+        "an unmeasured TP must get NO number — extrapolating a win rate across " \
+        "payoff structures is the original bug"
+    assert realised_breakeven_wr(175.0) is None
+
+    for tp in OPT_SWEEP_BY_TP:
+        e = measured_option_edge(tp)
+        assert e["margin"] < 0, (
+            f"TP+{tp:g} now clears its realised breakeven "
+            f"({e['win_rate']:.1f}% vs {e['breakeven']:.1f}%). If a re-measurement "
+            f"did that, the ceiling above can finally be derived rather than "
+            f"capped — update this on purpose.")
+        assert e["expectancy_pct"] < 0, f"TP+{tp:g} expectancy turned positive"
+        # NOT "realised is always worse than nominal" — that assertion was
+        # written first and the data refuted it. At a NEAR target winners
+        # overshoot it (TP+50 realises 1.59:1 against a nominal 1.00:1) while
+        # losers still exit early on the clock at -46.7% rather than the full
+        # -50%. The relationship inverts only once the target is far enough away
+        # that trades stop reaching it.
+        assert 0.9 < e["realised_payoff"] < 4.0, (
+            f"TP+{tp:g} realises {e['realised_payoff']:.2f}:1, outside the range "
+            f"every measured level sits in — check the table for a typo")
+    print(f"sweep, all {len(OPT_SWEEP_BY_TP)} levels : negative on realised payoff")
+
+    # THE PAYOFF PLATEAUS, which is the finding that makes "widen the target"
+    # useless here. Average win goes +74.4 -> +103.8 -> +120.0 -> +135.4 ->
+    # +143.0 -> +144.7 as TP goes 50 -> 300: it saturates near 3.2:1 because
+    # trades exit on the DTE floor and max-hold, not at the target. Doubling the
+    # target from 150 to 300 buys 9 points of average win and costs 0.2 points
+    # of win rate.
+    _p200 = measured_option_edge(200.0)["realised_payoff"]
+    _p300 = measured_option_edge(300.0)["realised_payoff"]
+    assert abs(_p300 - _p200) < 0.25, (
+        f"the realised payoff no longer plateaus (TP+200 {_p200:.2f}:1 vs TP+300 "
+        f"{_p300:.2f}:1). If a wider target now actually gets reached, the "
+        f"'widening does not help' conclusion needs re-deriving.")
+    assert measured_option_edge(50.0)["realised_payoff"] > 1.0, (
+        "at a near target winners OVERSHOOT it — if that stopped being true the "
+        "early-exit explanation above is wrong")
+    print(f"payoff plateau           : TP+200 {_p200:.2f}:1 vs TP+300 "
+          f"{_p300:.2f}:1 — a wider target is not reached")
+
+    # THE CASE THAT CAUSED THE CONFUSION. At TP+200 the NOMINAL breakeven says
+    # the structure clears; the REALISED one says it is short. Both computed
+    # here so the difference cannot quietly disappear.
+    _tp = 200.0
+    _e = measured_option_edge(_tp)
+    _nominal_be = OPT_WIN_RATE_SL_PCT / (_tp + OPT_WIN_RATE_SL_PCT) * 100
+    assert _e["win_rate"] > _nominal_be, (
+        "the nominal breakeven no longer flatters TP+200, so the warning this "
+        "pins is stale")
+    assert _e["win_rate"] < _e["breakeven"], (
+        "the realised breakeven no longer contradicts the nominal one — that "
+        "contradiction is the finding")
+    print(f"TP+200 nominal vs real   : {_e['win_rate']:.1f}% clears nominal "
+          f"{_nominal_be:.1f}% but is {abs(_e['margin']):.1f} pts under realised "
+          f"{_e['breakeven']:.1f}%")
+
+    # spread_breakeven_wr understates, because it charges the spread but assumes
+    # trades reach their nominal levels.
+    _spread_be = spread_breakeven_wr(5.0, tp_pct=_tp, sl_pct=OPT_WIN_RATE_SL_PCT)
+    assert _spread_be < _e["breakeven"], (
+        f"spread_breakeven_wr({_tp:g}) returns {_spread_be:.1f}% and the realised "
+        f"breakeven is {_e['breakeven']:.1f}% — if it no longer understates, its "
+        f"docstring caveat is stale")
+    print(f"spread fn understates    : {_spread_be:.1f}% vs realised "
+          f"{_e['breakeven']:.1f}% ({_e['breakeven'] - _spread_be:.1f} pts)")
 
     print("streamlit-free            : safe for the unattended workflows")
     print("\nAll self-tests passed.")

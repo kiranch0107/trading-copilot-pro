@@ -920,8 +920,25 @@ def check_cost_gates_shared() -> None:
         "rests on; if a re-measurement changed it, update this check on purpose.")
 
     # A literal ceiling anywhere else is a copy waiting to drift.
-    stale = re.compile(r"(?<![\w.])(?:15\.0|0\.15)(?![\w])")
-    for path in ("app.py", "scanner.py", "option_chain.py"):
+    #
+    # WIDENED 2026-09-10, after a live QQQI check reported "every spread exceeded
+    # 15% of mid — tightest was 13.3%". Both halves cannot be true. The gate was
+    # 8% and rejected it correctly; the MESSAGE carried a hardcoded 15. This
+    # check was scanning three files for the literals 15.0 / 0.15 and so missed
+    # FOUR live copies:
+    #
+    #   option_chain.py  the rejection message itself — "15%" in an f-string,
+    #                    which is not "15.0", so the pattern skipped it
+    #   liquidity_check.py  its own MAX_SPREAD_PCT = 15.0 — file not scanned
+    #   exit_monitor.py     a bare `> 15` — file not scanned, and not "15.0"
+    #   app.py           a caption reading "≤ 15% of mid" — text, not a literal
+    #
+    # So the invariant guarding against copies of this number had four copies it
+    # could not see. It now scans every module and matches a bare 15 near the
+    # word spread, prose included.
+    stale = re.compile(r"(?<![\w.])(?:15(?:\.0)?|0\.15)\s*%?(?![\w.])")
+    for path in ("app.py", "scanner.py", "option_chain.py",
+                 "liquidity_check.py", "exit_monitor.py"):
         txt = Path(path).read_text()
         assert "risk_params" in txt, (
             f"{path} no longer reads risk_params.py — the spread ceiling can "
