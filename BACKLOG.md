@@ -283,10 +283,44 @@ existing measurement.
 
 ---
 
-## 12. The VRP is measured but the measurement has not been RUN
+## 12. ~~The VRP is measured but the measurement has not been RUN~~ — PASS 2026-09-10
 
-**This is the gate on the whole short-premium direction. Nothing below it
-matters until the number exists.**
+**RESOLVED. The gate opened.** `results/vrp_measurement.md` is the record.
+
+    mean +3.63 vol points, 95% HAC CI [+2.40, +4.85], 83.7% of days positive,
+    positive in all 11 years, 2,491 days (~119 independent windows).
+
+All three pre-registered clauses cleared at the CONSERVATIVE end — the HAC lower
+bound of +2.40 clears the 2.0 thickness bar on its own, not just the point
+estimate. The bar was not toothless: 2018 (+0.56) and 2022 (+1.68) would each
+have failed the thickness clause standing alone.
+
+**Three things the pass does NOT license, carried forward as the next items:**
+
+1. **The tail rests on n ~= 1.** All five worst stretches are within twelve days
+   of each other (Feb 2020). Ten years contains roughly one true vol
+   catastrophe. The HAC correction fixes overlap in the MEAN; nothing fixes a
+   left tail estimated from one event. The bar tested existence, breadth and
+   thickness — never survivability. Defined risk is therefore non-negotiable,
+   and **position sizing is now the binding constraint**, unmeasured.
+
+2. **The edge is in the SIDE, not the TIMING.** A premium positive on 83.7% of
+   *all* days and in every year argues for being systematically short index vol.
+   It identifies no better or worse day to sell. This repo is a signal scanner
+   whose signal has no demonstrated edge (-0.048 R, 1,386 trades). Continuing to
+   gate premium selling behind that scanner captures an unmeasured subset of a
+   measured quantity. That is a redirection of the architecture and should be a
+   decision, not a drift.
+
+3. **The dollar table in the record is indicative, not measured** — flat
+   Black-Scholes with no skew. It shows the edge survives two legs of the 8%
+   bid-ask ceiling with room (618/608 nets +0.40, 618/598 nets +0.74), which is
+   the question that killed the long side. It is not a sizing input.
+
+**Do not treat this as permission to sell premium on single names.** VIX is SPX
+implied vol and says nothing about MPC, CRM or CRWD.
+
+The original instructions, kept for reproduction:
 
 `option_backtest.py` prices every contract at `iv_mult = 1.15` — it assumes
 implied vol runs 15% above realised. That constant is the short-premium thesis.
