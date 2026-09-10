@@ -148,5 +148,41 @@
     "mode": "paper",
     "source": "unknown",
     "traded_at": null
+  },
+  {
+    "id": "OPT_NVDA_1788879668",
+    "date": "2026-09-08 11:01 ET",
+    "closed": "2026-09-10 09:57 ET",
+    "mode": "live",
+    "source": "unknown",
+    "traded_at": null,
+    "closed_at": "2026-09-10 09:57 ET",
+    "ticker": "NVDA 2026-09-25 240C",
+    "trend": "Bullish",
+    "entry": 2.29,
+    "stop": 0,
+    "target": 0,
+    "planned_rr": 0,
+    "exit_price": 0.62,
+    "outcome": "LOSS",
+    "actual_rr": -0.73,
+    "contracts": 1.0,
+    "pnl_usd": -167.0,
+    "entry_features": {
+      "adx": 17.5788,
+      "rsi": 60.393,
+      "atr": 7.3806,
+      "close": 230.36,
+      "ema20": 219.2994,
+      "ema50": 213.8113,
+      "volume": 134946800.0,
+      "vol_avg20": 128899820.0,
+      "rvol": 1.047,
+      "ext_atr": 1.499,
+      "rs_20d": 0.0354,
+      "regime": "Bull",
+      "captured": "2026-09-08 11:01 ET"
+    },
+    "notes": "exit trigger on 9/10"
   }
 ]
