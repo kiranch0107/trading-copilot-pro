@@ -110,12 +110,55 @@ older-half effect  =  (n10 x avg10  -  n5 x avg5) / (n10 - n5)
 
 Both halves are now scored by the same code, so this subtraction is valid.
 
-**The short result is the robust finding here, and it destroys its own excuse.**
-2016–2021 contains the COVID crash and the 2022 bear — the window in which a
-bearish signal should earn its keep. Shorts lost *more* there (−0.319 R) than in
-the bull years (−0.190 R). So shorts are not regime-handicapped. The rule is bad.
+> ### Correction, 2026-09-10 — this paragraph was wrong twice
+>
+> It previously read: *"2016–2021 contains the COVID crash and the 2022 bear —
+> the window in which a bearish signal should earn its keep. Shorts lost more
+> there (−0.319 R) than in the bull years (−0.190 R)."* Both halves of that
+> were wrong.
+>
+> 1. **The 2022 bear is not in the older half.** `backtest.py` passes
+>    `period=f"{years}y"` to yfinance, so as of 2026-09-10 the 10-year window is
+>    2016-09 → 2026-09 and the 5-year is 2021-09 → 2026-09. The older half is
+>    therefore 2016-09 → 2021-09. It contains the COVID crash. The 2022 bear
+>    (Jan–Oct 2022) sits in the **recent** half.
+> 2. **−0.319 and −0.190 were pre-fix numbers** carried over from the commit
+>    that predated the gapped-fill correction, inside a file whose header claims
+>    every figure is post-fix. The post-fix values are −0.368 (older half) and
+>    −0.210 (recent 5 years) — both already in the tables above.
+>
+> Corrected below. The verdict on the short side does not change; the argument
+> for it does.
 
-Shorts are negative in all three cuts, and the 10-year CI clears zero.
+**The short side is the robust finding here. The regime defence is weakened, not
+destroyed — and what remains is still damning.**
+
+Scored on one basis, the two halves are:
+
+| half | window | SHORT avg R | n |
+|---|---|---:|---:|
+| older | 2016-09 → 2021-09 — contains the COVID crash | −0.368 | 242 |
+| recent | 2021-09 → 2026-09 — contains the 2022 bear | −0.210 | 255 |
+
+Shorts lost **less** in the half containing the 2022 bear than in the half
+without it. Read plainly, that is the direction a regime defence predicts: a
+bearish rule should do relatively better when the market falls, and it did.
+
+So the honest statement is narrower than the one this file used to make, and it
+is the magnitude that condemns the rule rather than the ordering:
+
+- Even in the window containing a ~25% index drawdown, the short rule **lost
+  money** — −0.210 R per trade, PF 0.72. A bearish signal that cannot profit
+  during the best bearish conditions in the sample has nothing to wait for.
+- The older half contains the COVID crash, the fastest 30% drawdown on record,
+  and shorts returned −0.368 R there. So the losses are not confined to a
+  placid stretch either.
+- Shorts are negative in **all three cuts**, and the 10-year CI
+  [−0.432, −0.141] clears zero — the only interval in this entire file that
+  clears zero in any direction.
+
+That last point is what makes this the robust finding: it is the one result here
+with a confidence interval that excludes zero, and it points at a loss.
 
 ---
 
@@ -262,7 +305,10 @@ and pays less. Correctly modelled, and easy to miss.
    the third is the discovery set at +0.012 R. This is the largest sample and the widest regime coverage the
    project has produced, and it agrees with the earlier 591-trade OOS failure.
    The two five-year windows read flat because five recent years were kind.
-2. **The short side is reliably negative**, including through a bear market.
+2. **The short side is reliably negative** — in all three cuts, in the half
+   containing the COVID crash (−0.368 R) and in the half containing the 2022
+   bear (−0.210 R). The 10-year CI [−0.432, −0.141] is the only interval in this
+   file that clears zero.
 3. **The long side is not established.** Weakly positive in every cut, never
    clearing zero outside the discovery sample, and decaying with sample size.
 4. **Long-only is not a rescue.** +0.085 R on shares over ten years, CI
