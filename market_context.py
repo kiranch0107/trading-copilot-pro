@@ -108,6 +108,32 @@ def weekly_trend_from_bars(df: pd.DataFrame,
     None matters: signal_core treats an unavailable weekly trend as BLOCKING
     when weekly_confirm is on, which is deliberate (see its docstring) — an
     unknown must not silently loosen the filter.
+
+    THIS READS THE CURRENT, UNFINISHED WEEK — AND THE BACKTEST DOES NOT
+    ---------------------------------------------------------------------
+    `close.iloc[-1]` is the latest weekly bar, which does not CLOSE until
+    Friday. On a Wednesday this verdict is formed from two days of a five-day
+    bar and can flip before the week ends.
+
+    backtest.build_weekly_trend_map() deliberately does the opposite: each
+    week's verdict is shifted so it only becomes usable from the START OF THE
+    FOLLOWING WEEK, because using it mid-week would leak Thursday and Friday
+    into a Wednesday decision. Its docstring calls that "the whole difficulty
+    here", and backtest's selftest asserts the lag at a week where the verdict
+    flips.
+
+    So the live rule and the measured rule are NOT the same rule. Anything the
+    backtest concluded about the weekly filter does not transfer to this
+    function as written.
+
+    Why it is not fixed here: signal_core.DEFAULTS.weekly_confirm is False and
+    pinned False by an assertion (it rejected 5 bars in 13,748), so this verdict
+    currently gates nothing live. Changing the live rule while it is inert would
+    be an unmeasured change to a disabled filter.
+
+    consistency_check.check_weekly_rule_parity() fails CI if weekly_confirm is
+    ever turned on while this divergence stands, so the trap cannot be walked
+    into silently — which is the part that was missing.
     """
     if df is None or getattr(df, "empty", True):
         return None

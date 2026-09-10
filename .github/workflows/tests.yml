@@ -78,11 +78,12 @@ jobs:
       # option_backtest.py sat broken (AttributeError on every run) after
       # backtest.evaluate_signal()'s signature changed under them.
       #
-      # STILL TRUE FOR THREE OF THEM, 2026-09-10. The list above reads as a
-      # problem already solved. It is not: only scanner.py, journal_store.py and
-      # gh_sync.py gained tests. exit_monitor.py, option_chain.py and
-      # option_backtest.py have no selftest() at all, so nothing below runs them
-      # and this comment was describing an intention as an accomplishment.
+      # PARTLY CLOSED, 2026-09-10. The list above read as a problem already
+      # solved when only scanner.py, journal_store.py and gh_sync.py had gained
+      # tests. exit_monitor.py now has one too, and it runs below — it closes
+      # LIVE positions on an hourly schedule, so it was the worst gap. Two
+      # remain with no selftest at all: option_chain.py (picks the contract) and
+      # option_backtest.py (produces OPT_WIN_RATE).
       #
       # That is not cosmetic. exit_monitor.py decides when to close a LIVE
       # position and runs unattended on a schedule; option_chain.py picks which
@@ -110,6 +111,9 @@ jobs:
 
       - name: scanner.py — outage detection + alert cooldown (offline)
         run: python scanner.py --selftest
+
+      - name: exit_monitor.py — exit rules, offline (closes LIVE positions)
+        run: python exit_monitor.py --selftest
 
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py

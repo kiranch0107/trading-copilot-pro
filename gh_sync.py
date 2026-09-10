@@ -220,7 +220,8 @@ def _gh_put(path: str, data: list, message: str) -> str | None:
             f"{path} — another writer is holding it. Last: {last}")
 
 
-def merge_positions(local: list, remote: list) -> list:
+def merge_positions(local: list | None, remote: list,
+                    *, local_complete: bool = True) -> list:
     """
     Merge position lists by id, so the app and the monitor don't clobber
     each other.
@@ -231,8 +232,31 @@ def merge_positions(local: list, remote: list) -> list:
     state you most need. So for any id present in BOTH, we keep the record that
     has progressed further (EXIT_SIGNALLED beats OPEN); ids only in local are
     additions/removals the app owns.
+
+    `local_complete=False` (or local=None) means the local list is NOT a
+    statement about what exists — it came from a read that failed. Absence then
+    proves nothing, so no remote record is dropped.
+
+    WHY THE FLAG EXISTS. "id missing from local" and "local could not be read"
+    produce the same empty list, and the first legitimately means deletion — a
+    user who closes their last position really does leave local empty. So the
+    difference cannot be inferred here; it has to be carried from the read. With
+    it inferred, an unreadable open_positions.json wiped every position in the
+    repo.
     """
     rank = {"OPEN": 0, "EXIT_SIGNALLED": 1}
+    if local is None or not local_complete:
+        by_id = {p["id"]: p for p in (local or [])}
+        for rp in remote:
+            lp = by_id.get(rp["id"])
+            if lp is None or rank.get(rp.get("status"), 0) > rank.get(lp.get("status"), 0):
+                by_id[rp["id"]] = rp
+        logger.warning(
+            "merge: the local copy was unreadable, so %d remote position(s) "
+            "are KEPT rather than treated as deletions. Fix or remove the local "
+            "file; nothing has been lost.", len(remote))
+        return list(by_id.values())
+
     by_id = {p["id"]: p for p in local}
     for rp in remote:
         lp = by_id.get(rp["id"])
@@ -243,12 +267,31 @@ def merge_positions(local: list, remote: list) -> list:
     return list(by_id.values())
 
 
-def _local_load(path: Path) -> list:
-    try:
-        return json.loads(path.read_text()) if path.exists() else []
-    except Exception as e:
-        logger.exception("Failed to load %s: %s", path, e)
+def _local_load(path: Path) -> list | None:
+    """
+    Local copy, or None when the file exists but CANNOT BE READ.
+
+    The None matters. This used to return [] on a parse failure, which is not
+    "unknown" — it is the value that means "there are no positions". Combined
+    with merge_positions(), which reads an id missing from local as "the app
+    closed it", an unreadable open_positions.json erased every position in the
+    repo, EXIT_SIGNALLED records included.
+
+    Measured: 3 remote positions, local read fails -> [] -> merge returns 0 rows
+    -> save() writes [] to the repo. Silent, and the one piece of state you
+    cannot reconstruct.
+
+    An ABSENT file still returns [] — that genuinely is "nothing here yet".
+    """
+    if not path.exists():
         return []
+    try:
+        return json.loads(path.read_text())
+    except Exception as e:
+        logger.exception("Failed to load %s: %s — treating as UNKNOWN, not as "
+                         "empty, so a merge cannot mistake it for deletions",
+                         path, e)
+        return None
 
 
 def _local_save(path: Path, data: list) -> bool:
@@ -260,18 +303,46 @@ def _local_save(path: Path, data: list) -> bool:
         return False
 
 
+# Files whose LOCAL copy could not be parsed this process. save(merge=True) must
+# not read absence in such a list as a deletion — see merge_positions().
+_LOCAL_READ_FAILED: set[str] = set()
+
+
+def local_read_failed(path: Path) -> bool:
+    """True if this file's local copy failed to parse during this process."""
+    return path.name in _LOCAL_READ_FAILED
+
+
 def load(path: Path) -> list:
-    """Prefer the repo (shared, durable); fall back to local disk."""
+    """
+    Prefer the repo (shared, durable); fall back to local disk.
+
+    Always returns a list so the UI can render. When the local fallback is
+    UNREADABLE the emptiness is recorded as unknown rather than as fact, because
+    the caller will hand this same list back to save() and an inferred deletion
+    there wiped the repo copy.
+    """
     if gh_enabled():
         data, _sha, err = _gh_get(path.name)
         if err:
             logger.warning("%s — falling back to local disk", err)
             st.session_state["_gh_last_error"] = err
         elif data is not None:
+            _LOCAL_READ_FAILED.discard(path.name)
             return data
         else:
+            _LOCAL_READ_FAILED.discard(path.name)
             return []          # file not created yet
-    return _local_load(path)
+    local = _local_load(path)
+    if local is None:
+        _LOCAL_READ_FAILED.add(path.name)
+        st.session_state["_gh_last_error"] = (
+            f"{path.name} could not be read from local disk. It is being treated "
+            f"as UNKNOWN, not as empty — existing records in the repo will be "
+            f"preserved on the next save. Fix or delete the local file.")
+        return []
+    _LOCAL_READ_FAILED.discard(path.name)
+    return local
 
 
 def save(path: Path, data: list, *, merge: bool = False) -> list:
@@ -298,7 +369,11 @@ def save(path: Path, data: list, *, merge: bool = False) -> list:
     if merge:
         remote, _sha, err = _gh_get(path.name)
         if not err and remote:
-            data = merge_positions(data, remote)
+            # local_complete=False when this file's local copy failed to parse
+            # this process: `data` then descends from a read that returned
+            # nothing, and absence in it is not evidence of a deletion.
+            data = merge_positions(
+                data, remote, local_complete=not local_read_failed(path))
     err = _gh_put(path.name, data, f"chore: update {path.name} from app")
     st.session_state["_gh_last_error"] = err
     if err:
@@ -413,6 +488,46 @@ def selftest() -> int:
         if saved is not None:
             os.environ["GITHUB_REPO"] = saved
     print(f"repo resolution         : env overrides the fallback, flagged when not")
+
+    # ── an unreadable local copy must not read as deletions ──
+    # Before this, _local_load() returned [] on a parse failure and
+    # merge_positions() read every missing id as "the app closed it", so a
+    # corrupt open_positions.json wiped every position in the repo —
+    # EXIT_SIGNALLED records included. Measured: 3 remote, 0 survived.
+    import tempfile as _tf
+    _remote3 = [{"id": "A", "status": "OPEN"},
+                {"id": "B", "status": "EXIT_SIGNALLED"},
+                {"id": "C", "status": "OPEN"}]
+
+    _d = Path(_tf.mkdtemp())
+    (_d / "corrupt.json").write_text("{ not json")
+    assert _local_load(_d / "corrupt.json") is None, \
+        "an unreadable file must report UNKNOWN, not an empty list"
+    assert _local_load(_d / "absent.json") == [], \
+        "an absent file genuinely is empty and must stay []"
+    (_d / "good.json").write_text(json.dumps(_remote3))
+    assert len(_local_load(_d / "good.json")) == 3
+    print("local load       : corrupt -> None, absent -> [], good -> rows")
+
+    _wiped = merge_positions([], _remote3, local_complete=False)
+    assert len(_wiped) == 3, (
+        f"an unreadable local copy erased {3 - len(_wiped)} remote position(s); "
+        f"absence in data that could not be read is not a deletion")
+    assert merge_positions(None, _remote3) == merge_positions(
+        [], _remote3, local_complete=False), \
+        "local=None and local_complete=False must behave identically"
+    # and the EXIT_SIGNALLED record specifically must survive
+    assert any(p["id"] == "B" and p["status"] == "EXIT_SIGNALLED"
+               for p in _wiped), "the exit alert is the one record you cannot " \
+                                 "reconstruct; it must survive"
+    print("unreadable merge : all 3 remote rows kept, exit alert intact")
+
+    # LIVENESS: the legitimate deletion must still work, or the fix above is
+    # just "never delete anything" wearing a flag.
+    _closed = merge_positions([_remote3[0]], _remote3)
+    assert [p["id"] for p in _closed] == ["A"], (
+        f"a real close must still remove the position, got {_closed}")
+    print("real deletion    : still honoured when the local copy was read")
 
     print("\nAll self-tests passed.")
     return 0

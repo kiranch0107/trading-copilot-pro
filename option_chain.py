@@ -256,9 +256,15 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
             (opts["mid"] > 0) &
             (opts["bid"] > 0) &
             (opts["volume"] > 0) &
-            # Was 0.15. At a 15% spread this signal needs a 26.5% win rate
-            # and has 23.8% — the filter was admitting contracts that cannot
-            # win. Derived in risk_params.MAX_OPTION_SPREAD_PCT.
+            # Was 0.15. Single-sourced from risk_params.MAX_OPTION_SPREAD_PCT.
+            #
+            # This comment used to justify the change with "at a 15% spread this
+            # signal needs a 26.5% win rate and has 23.8%". That 26.5% came from
+            # a TP+200 breakeven while OPT_WIN_RATE was measured at TP+100 — the
+            # basis mismatch corrected in risk_params.py on 2026-09-10. At the
+            # measured basis a 15% spread needs 44.1%, and 8% needs 38.9%, so
+            # NO spread clears 23.8%. The ceiling is a loss cap, not a
+            # profitability threshold; read risk_params.py for the full account.
             (opts["spread"] / opts["mid"]
              <= risk_params.MAX_OPTION_SPREAD_PCT / 100.0)
         ]
