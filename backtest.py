@@ -449,6 +449,69 @@ def print_concentration(all_trades: list) -> None:
               f"without {c['best']}{frag}")
 
 
+def hold_profile(trades: list) -> dict | None:
+    """
+    How many trades are resolved on the bar they were entered on.
+
+    backtest_trade()'s exit walk starts at entry_i, so a position can open at
+    one bar's open and close within that same session — hold == 0. That is
+    correct modelling (price hitting your stop the day you enter takes you out
+    in real life too), but it is not visible in "avg hold 4.4 bars", and the
+    entry bar is structurally asymmetric:
+
+        stop   sits ATR_STOP x ATR from entry  -- inside a normal day's range
+        target sits ATR_TGT  x ATR from entry  -- several times outside it
+
+    So the entry bar can reach the stop and essentially cannot reach the
+    target. If a large share of trades resolve there, they resolve badly, and
+    the aggregate is partly a measurement of that rather than of the signal.
+    """
+    if not trades:
+        return None
+    h = np.array([t["hold"] for t in trades])
+    r = np.array([t["r"] for t in trades])
+    same = h == 0
+    n_same = int(same.sum())
+    if n_same == 0:
+        return {"n": len(trades), "n_same": 0, "median_hold": float(np.median(h))}
+    losses = sum(1 for t, sm in zip(trades, same)
+                 if sm and t.get("outcome") == "loss")
+    return {
+        "n": len(trades),
+        "n_same": n_same,
+        "pct_same": 100.0 * n_same / len(trades),
+        "loss_rate_same": 100.0 * losses / n_same,
+        "avg_r_same": float(r[same].mean()),
+        "avg_r_rest": float(r[~same].mean()) if (~same).any() else float("nan"),
+        "median_hold": float(np.median(h)),
+    }
+
+
+def print_hold_profile(trades: list, cfg: dict) -> None:
+    """Render the hold profile. Descriptive — see the closing note."""
+    hp = hold_profile(trades)
+    if not hp:
+        return
+    print("\n  HOLD PROFILE — how many trades resolve on the bar they opened on")
+    if not hp["n_same"]:
+        print(f"    none: every trade lived past its entry bar "
+              f"(median hold {hp['median_hold']:.0f} bars)")
+        return
+    rest = hp["n"] - hp["n_same"]
+    print(f"    same session  : {hp['n_same']:>5} ({hp['pct_same']:.1f}%)   "
+          f"{hp['loss_rate_same']:.0f}% lose   {hp['avg_r_same']:+.3f} R")
+    print(f"    held longer   : {rest:>5} ({100 - hp['pct_same']:.1f}%)"
+          f"{'':>13}{hp['avg_r_rest']:+.3f} R")
+    print(f"    median hold   : {hp['median_hold']:.0f} bars")
+    print(f"    The stop sits {cfg['atr_stop_mult']:g}x ATR from entry and the "
+          f"target {cfg['atr_tgt_mult']:g}x. A normal day's range reaches the")
+    print(f"    stop but not the target, so the entry bar is asymmetric by "
+          f"construction.")
+    print(f"    DESCRIPTIVE. Widening the stop because this reads badly is a "
+          f"parameter chosen")
+    print(f"    on data already spent — the ADX-35 mistake in a different hat.")
+
+
 def stats(trades: list[dict]) -> dict:
     if not trades:
         return {"trades": 0}
@@ -827,6 +890,7 @@ def run(cfg: dict) -> None:
               f"{'  <- CI clears 0' if lo > 0 else ''}")
 
     print_concentration(all_trades)
+    print_hold_profile(all_trades, cfg)
     if bar_cache is not None and _CACHE_LOG:
         metas = [m for m, _ in _CACHE_LOG]
         statuses = [st for _, st in _CACHE_LOG]
@@ -1168,6 +1232,71 @@ def selftest() -> int:
         "against itself"
     print("concentration render    : flags the fragile case, quiet on the "
           "broad and single-name ones")
+
+    # ── hold profile: same-session exits must be counted, and counted apart ──
+    # Fixture: three trades die on their entry bar, five live longer, and the
+    # two groups have DIFFERENT average R. A profile that pooled them would
+    # report one number and match neither.
+    # There are losses in BOTH groups on purpose. A fixture whose only losses
+    # were same-session would score identically whether the loss rate counted
+    # that group or every trade, and would pass a broken implementation.
+    def _t(r, hold, outcome):
+        return {"r": r, "trend": "Bullish", "hold": hold, "ticker": "A",
+                "outcome": outcome}
+    _hp_rows = ([_t(-1.0, 0, "loss"), _t(-1.0, 0, "loss"), _t(+1.0, 0, "win")]
+                + [_t(-1.0, 4, "loss")] * 3 + [_t(+2.0, 4, "win")] * 2)
+    _hp = hold_profile(_hp_rows)
+    assert _hp["n_same"] == 3 and _hp["n"] == 8, _hp
+    assert abs(_hp["pct_same"] - 37.5) < 1e-9, _hp["pct_same"]
+    _all_losses = sum(1 for t in _hp_rows if t["outcome"] == "loss")
+    assert _all_losses != _hp["n_same"], \
+        "fixture is broken: losses must NOT all be same-session, or a loss " \
+        "rate computed over every trade would score the same and pass"
+    assert abs(_hp["loss_rate_same"] - 200.0 / 3) < 1e-9, (
+        f"loss_rate_same={_hp['loss_rate_same']:.1f}, expected 66.7 — 2 of "
+        f"the 3 same-session trades lost. {_all_losses} of 8 lost overall, so "
+        f"a rate taken over all trades would read "
+        f"{100 * _all_losses / _hp['n_same']:.1f}.")
+    assert abs(_hp["avg_r_same"] + 1 / 3) < 1e-9, (
+        f"avg_r_same={_hp['avg_r_same']:.3f}, expected -0.333 (the three "
+        f"same-session trades). Getting {_hp['avg_r_rest']:.3f} or a blend "
+        f"means the two groups are being averaged together, which is the one "
+        f"thing this section exists to avoid.")
+    assert abs(_hp["avg_r_rest"] - 0.2) < 1e-9, (
+        f"avg_r_rest={_hp['avg_r_rest']:.3f}, expected +0.200 (the five "
+        f"longer-held trades)")
+    assert _hp["avg_r_same"] != _hp["avg_r_rest"], \
+        "the fixture must make the two groups differ or it tests nothing"
+    print(f"hold profile            : {_hp['pct_same']:.1f}% same-session at "
+          f"{_hp['avg_r_same']:+.2f} R vs {_hp['avg_r_rest']:+.2f} R — split, "
+          f"not pooled")
+
+    # hold == 1 is NOT the same session. An off-by-one here would silently
+    # inflate the headline number this whole section exists to report.
+    _off = [{"r": -1.0, "trend": "Bullish", "hold": 1, "ticker": "A",
+             "outcome": "loss"} for _ in range(4)]
+    assert hold_profile(_off)["n_same"] == 0, \
+        "hold == 1 means the trade survived its entry bar and exited on the " \
+        "next one — counting it as same-session overstates the finding"
+
+    _b2 = _io.StringIO()
+    with _ctx.redirect_stdout(_b2):
+        print_hold_profile(_hp_rows, dict(DEFAULTS))
+    _txt = _b2.getvalue()
+    assert "same session" in _txt and "37.5%" in _txt, _txt
+    assert "DESCRIPTIVE" in _txt, \
+        "the note that this is not a licence to retune the stop must survive"
+    _b3 = _io.StringIO()
+    try:
+        with _ctx.redirect_stdout(_b3):
+            print_hold_profile(_off, dict(DEFAULTS))
+    except Exception as _e:
+        raise AssertionError(
+            f"a run with no same-session exits must render, not raise: "
+            f"{type(_e).__name__}: {_e}") from None
+    assert "none: every trade lived past its entry bar" in _b3.getvalue(), \
+        "with no same-session exits the profile must say so, not print 0%"
+    print("hold profile render     : states the case, and the no-cases case")
 
     # ── the on-disk bar cache actually caches ──
     # A harness that refetches on every run cannot measure anything smaller
