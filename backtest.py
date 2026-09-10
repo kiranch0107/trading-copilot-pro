@@ -790,7 +790,7 @@ def download(ticker: str, years: int,
     return df
 
 
-def run(cfg: dict) -> None:
+def run(cfg: dict) -> list[dict]:
     _CACHE_LOG.clear()
     print("=" * 78)
     print("TRADING COPILOT ELITE — HISTORICAL BACKTEST (real data)")
@@ -1065,6 +1065,14 @@ def run(cfg: dict) -> None:
         print("     tickers/periods dragged it down before risking capital.")
     print("\n  Reminder: past performance is not predictive. Stops are not guaranteed")
     print("  (overnight gaps). Options add theta/slippage this share-based test omits.")
+
+    # Return the trades so callers can judge them rather than re-parse stdout.
+    # adx_retest.py needs per-trade R to compute significance, multiplicity
+    # correction and dose-response; scraping the printed table for that would
+    # break the moment a column moved. Previously this returned None and
+    # __main__ relied on that via `sys.exit(run(cfg) or 0)` — that line is
+    # updated below, because sys.exit(<non-empty list>) would exit non-zero.
+    return all_trades
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1703,4 +1711,5 @@ if __name__ == "__main__":
     _cfg, _selftest = parse_args()
     if _selftest:
         sys.exit(selftest())
-    sys.exit(run(_cfg) or 0)
+    run(_cfg)
+    sys.exit(0)
