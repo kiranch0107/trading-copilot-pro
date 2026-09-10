@@ -53,6 +53,16 @@ except ImportError:
 ATR_STOP_MULT = 1.0
 ATR_WINDOW = 14
 POST_EXIT_SESSIONS = 30       # how far past the exit to measure drift
+
+# Below this many measurable trades, the derived VERDICTS are withheld. The
+# per-trade rows and the raw means still print — they are facts — but the
+# sentences that turn them into a claim about the signal do not.
+#
+# This exists because the first run of this tool printed "Above 1.0 —
+# suggestive that entries carry directional information" from a single trade.
+# One trade's MFE/MAE ratio is a fact about that trade; the sentence was a
+# claim about the strategy, and nothing in between justified the step.
+MIN_ROWS_FOR_VERDICT = 5
 PREFETCH_DAYS = 120           # calendar days of history before entry, for ATR
 
 
@@ -414,11 +424,22 @@ def _section(label: str, rows: list[dict]) -> None:
     if mfe is not None and mae is not None:
         print(f"  Mean MFE            : {mfe:.3f} R")
         print(f"  Mean MAE            : {mae:.3f} R")
+    n = len(measurable)
     if mfe and mae and mae > 1e-9:
         ratio = mfe / mae
-        print(f"  Edge ratio MFE/MAE  : {ratio:.2f}")
+        print(f"  Edge ratio MFE/MAE  : {ratio:.2f}   (over {n} trade(s))")
         print()
-        if ratio > 1.15:
+        if n < MIN_ROWS_FOR_VERDICT:
+            print(f"  NO VERDICT AT n={n}. The ratio above is arithmetic on "
+                  f"{n} trade(s),")
+            print(f"  not evidence about the signal — at this size it is set by "
+                  f"which")
+            print(f"  bars happened to print, and it would read differently for "
+                  f"any other")
+            print(f"  {n}. A reading is withheld until n reaches "
+                  f"{MIN_ROWS_FOR_VERDICT}, and even then it is")
+            print(f"  description rather than a significance test.")
+        elif ratio > 1.15:
             print("  Above 1.0 — favourable excursion exceeded adverse. Suggestive")
             print("  that entries carry directional information. Not a significance")
             print("  test, and not a substitute for the out-of-sample result.")
@@ -432,6 +453,8 @@ def _section(label: str, rows: list[dict]) -> None:
     print("\n" + "-" * W)
     print("EXIT QUALITY")
     print("-" * W)
+    if n < MIN_ROWS_FOR_VERDICT:
+        print(f"  Shown for the record at n={n}; no reading is drawn from it.")
     eff = [r["efficiency"] for r in measurable if r["efficiency"] is not None]
     if eff:
         print(f"  Mean efficiency     : {mean(eff):.2f}   (1.0 = exited at the high)")
@@ -442,8 +465,10 @@ def _section(label: str, rows: list[dict]) -> None:
     if post:
         print(f"\n  Mean post-exit run  : {mean(post):+.2f} R in the "
               f"{POST_EXIT_SESSIONS} sessions after exit")
-        print("  (How far it kept going your way AFTER you were out. Large and")
-        print("   positive means exits were early; near zero means about right.)")
+        print("  (How far it kept going your way AFTER you were out.)")
+        if n >= MIN_ROWS_FOR_VERDICT:
+            print("  Large and positive means exits were early; near zero means")
+            print("  about right.")
 
     print("\n" + "-" * W)
     print("SIGNAL vs STRUCTURE")
@@ -593,6 +618,49 @@ def selftest() -> int:
                          "closed": "2026-07-05", "trend": "Bullish"})
     assert backfill_reason(share) is None
     print(f"back-filled row     : refused — {why[:46]}...")
+
+    # ── the verdict floor: a claim about the signal needs more than one trade ──
+    import io as _io, contextlib as _ctx
+
+    def _render(n_rows: int) -> str:
+        rows = [{**trade, "id": f"R{i}", "mode": "live", "underlying": "TEST",
+                 "daily_bar_measurable": True, "bars_held": 3,
+                 "entry_px": 100.0, "exit_px": 105.0, "atr_entry": 2.0,
+                 "mfe_r": 1.60, "mae_r": 0.40, "realised_r": 1.20,
+                 "efficiency": 0.75, "post_exit_r": 0.05, "post_exit_bars": 30,
+                 "trade_type": "SWING", "features": {}}
+                for i in range(n_rows)]
+        buf = _io.StringIO()
+        with _ctx.redirect_stdout(buf):
+            _section("SWING", rows)
+        return buf.getvalue()
+
+    VERDICT = "favourable excursion exceeded adverse"
+
+    # The floor has to be a real threshold, not a switch that turns the
+    # analysis off. Rendering at MIN_ROWS_FOR_VERDICT would scale with the
+    # constant and pass for ANY value of it — including 999, which withholds
+    # the verdict forever. So the bound is asserted, and the "speaks" fixture
+    # is a fixed, realistic n.
+    assert 2 <= MIN_ROWS_FOR_VERDICT <= 10, (
+        f"MIN_ROWS_FOR_VERDICT={MIN_ROWS_FOR_VERDICT} is not a floor. Below 2 "
+        f"it gates nothing; above 10 it silently disables the analysis on any "
+        f"journal this project will realistically have.")
+    one, many = _render(1), _render(10)
+
+    # Both fixtures have the SAME ratio (1.60/0.40 = 4.0), so only n can be
+    # what changes the output. Without this the test would pass for the wrong
+    # reason — a fixture whose ratio fell below the verdict threshold.
+    assert "Edge ratio MFE/MAE  : 4.00" in one and "4.00" in many, (one, many)
+    assert VERDICT not in one, \
+        "a verdict about the signal was printed from ONE trade"
+    assert "NO VERDICT AT n=1" in one, one
+    assert VERDICT in many, \
+        "the verdict must still appear once there are enough trades, or the " \
+        "floor has silently disabled the analysis instead of gating it"
+    assert "Mean MFE" in one, "the raw means are facts and must still print"
+    print(f"verdict floor       : same 4.00 ratio — withheld at n=1, stated "
+          f"at n=10 (floor {MIN_ROWS_FOR_VERDICT})")
     print("\nAll self-tests passed.")
     return 0
 
