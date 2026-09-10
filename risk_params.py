@@ -177,6 +177,22 @@ def spread_breakeven_wr(spread_pct: float,
     rule against the breakeven of another. Pass tp_pct/sl_pct explicitly to ask
     about a different structure — and if you do, remember that OPT_WIN_RATE is
     NOT the win rate for that structure.
+
+    IT MODELS THE SPREAD, NOT THE EARLY EXITS — SO IT UNDERSTATES BREAKEVEN.
+    Measured 2026-09-10 by `option_backtest.py --sweep` (BACKLOG 7): trades do
+    not reach their nominal levels, because the DTE-7 floor and max-hold close
+    them first. At TP+200/SL-50 the REALISED average win is +143.0%, not +200%,
+    and the average loss -44.6%, not -50%:
+
+        nominal payoff   4.00:1  ->  breakeven 20.0%
+        with 5% spread            ->  breakeven 22.1%   (what this returns)
+        REALISED payoff  3.21:1  ->  breakeven 23.8%   (what actually happened)
+
+    The gap is roughly 1.7 points across the sweep. This function still reaches
+    the right verdict at the current 8% ceiling, but by margin rather than by
+    modelling, and that is not a property to rely on. For a real decision use the
+    realised avg win / avg loss from the sweep table in BACKLOG.md, not nominal
+    TP/SL.
     """
     h = spread_pct / 2 / 100
     buy = 1 + h
