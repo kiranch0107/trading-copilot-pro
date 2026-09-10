@@ -283,10 +283,57 @@ existing measurement.
 
 ---
 
+## 12. The VRP is measured but the measurement has not been RUN
+
+**This is the gate on the whole short-premium direction. Nothing below it
+matters until the number exists.**
+
+`option_backtest.py` prices every contract at `iv_mult = 1.15` — it assumes
+implied vol runs 15% above realised. That constant is the short-premium thesis.
+It has never been measured.
+
+`vrp_check.py` measures it: VIX (30 **calendar** days implied) against SPY
+realised vol over the next 21 **trading** sessions. The bar is pre-registered in
+its docstring and was written before any run:
+
+- 95% CI on mean premium clears zero, **and**
+- at least 70% of sessions show implied > subsequent realised, **and**
+- mean premium >= 2.0 vol points.
+
+All three, or it fails. Thin-but-positive is a fail — a 0.5-point premium does
+not survive spreads and slippage.
+
+**To run** (network is blocked in the web sessions, so this is a Codespaces job):
+
+```
+python vrp_check.py
+```
+
+Exit 0 = pass, 1 = fail, 2 = could not measure (fetch failed / too little data).
+
+Costs no reserved data: `data_reservation.check_clean(['SPY','^VIX'])` reports
+SPY already contaminated and `^VIX` unknown.
+
+**What each outcome means:**
+
+- **PASS** → the premium exists on the **index**, and building defined-risk
+  short-premium structures on SPY/QQQ is worth the work. It licenses nothing
+  about single names — VIX says nothing about whether NKE's implied is rich.
+- **FAIL** → stop. Do not build spread machinery (two legs, assignment, margin)
+  on a premium that is not there. The honest next move is the opposite side:
+  if implied is systematically *cheap*, the measured long-option results in
+  item 7 are the thing to re-read, not to work around.
+
+Record the result in `results/` the same way `longshort_split.md` records the
+directional test — by-year table, worst five windows, verdict — whichever way it
+lands. A fail is a result.
+
+---
+
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 17 cross-module
-  invariants (17 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 22 cross-module
+  invariants (22 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip
