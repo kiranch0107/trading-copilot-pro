@@ -161,66 +161,51 @@ inputs identical by construction, which isolates the code change cleanly.
 `results/longshort_split.md` is no longer provisional. The bug was still real;
 it would have fired on any series with an interior NaN.
 
-## 7. Option win rate at every TP — MEASURED 2026-09-10, pending one re-run
+## 7. ~~Option win rate at every TP~~ — RESOLVED 2026-09-10
 
-`python option_backtest.py --sweep`, 7 tickers, 5y, DTE 30, IV 1.15x, 5% spread,
-398 trades per row:
+`option_backtest.py --sweep`, **DATA COVERAGE 7 of 7 confirmed**, 398 trades per
+row. Re-run on the fixed code reproduced the first run exactly.
 
-| TP / SL | win% | avg win | avg loss | realised payoff | realised breakeven | expectancy | PF |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| +50 / −50 | 32.7% | +74.4% | −46.7% | 1.59:1 | 38.6% | −7.11% | 0.77 |
-| +75 / −50 | 26.9% | +103.8% | −45.7% | 2.27:1 | 30.6% | −5.54% | 0.83 |
-| +100 / −50 | 24.9% | +120.0% | −45.1% | 2.66:1 | 27.3% | −4.07% | 0.88 |
-| +150 / −50 | 22.1% | +135.4% | −44.6% | 3.04:1 | 24.8% | −4.80% | 0.86 |
-| **+200 / −50** | **21.9%** | **+143.0%** | **−44.6%** | **3.21:1** | **23.8%** | **−3.58%** | **0.90** |
-| +300 / −50 | 21.9% | +144.7% | −44.6% | 3.24:1 | 23.6% | −3.21% | 0.91 |
+| TP / SL | win% | avg win | avg loss | realised | realised BE | margin | expectancy | PF |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| +50 / −50 | 32.7% | +74.4% | −46.7% | 1.59:1 | 38.6% | −5.9 | −7.11% | 0.77 |
+| +75 / −50 | 26.9% | +103.8% | −45.7% | 2.27:1 | 30.6% | −3.7 | −5.54% | 0.83 |
+| +100 / −50 | 24.9% | +120.0% | −45.1% | 2.66:1 | 27.3% | −2.4 | −4.07% | 0.88 |
+| +150 / −50 | 22.1% | +135.4% | −44.6% | 3.04:1 | 24.8% | −2.7 | −4.80% | 0.86 |
+| **+200 / −50** | **21.9%** | **+143.0%** | **−44.6%** | **3.21:1** | **23.8%** | **−1.9** | **−3.58%** | **0.90** |
+| +300 / −50 | 21.9% | +144.7% | −44.6% | 3.24:1 | 23.6% | −1.7 | −3.21% | 0.91 |
 
-**No structure clears.** PF 0.77–0.91, never 1.0. Every row falls short of its own
-realised breakeven by 1.7–5.9 points. The gap narrows as TP widens then flattens:
-+200 and +300 share the same 21.9% win rate, so there is nothing further out to
-reach for. TP+200 is the payoff both open positions use.
+Recorded in code as `risk_params.OPT_SWEEP_BY_TP`, with `measured_option_edge()`
+and `realised_breakeven_wr()`. `app.py` reads them, so a TP+200 position now gets
+its measured expectancy instead of a refusal — and an unmeasured structure still
+gets no number.
 
-### The finding that changes how breakeven must be computed
+`OPT_WIN_RATE` updated 0.238 → **0.249**, only after coverage was confirmed. It
+moves no gate: both are far under every breakeven above.
 
-Checked against NOMINAL breakeven, TP+200 looks fine: 50/(200+50) = 20.0%, and
-21.9% clears it. It does not, because **trades do not reach their nominal
-levels** — at TP+200 the realised average win is +143.0%, not +200%, and the
-average loss −44.6%, not −50%, because the DTE-7 floor and max-hold exit them
-early. Realised payoff 3.21:1, realised breakeven 23.8%.
+### THE PAYOFF PLATEAUS — "widen the take-profit" does not work here
 
-`risk_params.spread_breakeven_wr()` models the SPREAD but not the early exits, so
-it understates breakeven by roughly 1.7 points across the sweep. It happens to
-reach the right verdict at the 8% ceiling, but by margin, not by modelling. Use
-the realised avg win / avg loss from this table, not nominal TP/SL.
+Average win by TP: +74.4 → +103.8 → +120.0 → +135.4 → **+143.0 → +144.7**. It
+saturates near **3.2:1** because trades exit on the DTE-7 floor and max-hold, not
+at the target. Doubling the target from 150 to 300 buys 9 points of average win
+and costs 0.2 points of win rate.
 
-(Coincidence worth naming: the realised breakeven at TP+200 is 23.8%, the same
-number as the recorded `OPT_WIN_RATE`. Unrelated.)
+Nominal payoff and realised payoff also cross over, which is the trap:
 
-### TWO THINGS TO RESOLVE BEFORE `OPT_WIN_RATE` IS TOUCHED
+| TP | nominal | realised | |
+|---|---:|---:|---|
+| +50 | 1.00:1 | 1.59:1 | realised **better** — winners overshoot a near target |
+| +100 | 2.00:1 | 2.66:1 | better |
+| +150 | 3.00:1 | 3.04:1 | level |
+| +200 | 4.00:1 | 3.21:1 | realised **worse** — the target is not reached |
+| +300 | 6.00:1 | 3.24:1 | much worse |
 
-1. **23.8% did not reproduce.** Today's measurement at that exact basis
-   (TP+100/SL−50, 5y, 7 tickers) is **24.9%**. Two candidate causes, not
-   distinguished: the 5-year window is relative to today and has moved; and the
-   default universe includes **ROKU**, which is not in the 12-ticker set that
-   reproduced exactly — if ROKU carries an interior NaN, the alignment fix of
-   #27 would have moved this file's result. The share backtest reproducing
-   proves nothing about this one.
+So nominal breakeven flatters exactly where the live rules sit. At TP+200 the
+nominal breakeven is 20.0% and 21.9% "clears" it; the realised breakeven is 23.8%
+and 21.9% is **1.9 points short**. Same trades, opposite conclusion.
 
-2. **Coverage was not confirmed.** That run predated the #32 coverage guard, so
-   it printed no `DATA COVERAGE` line. 398 trades across all six rows is a good
-   sign (the comparable share run had 418) but is not confirmation.
-
-**NEXT ACTION — one command, in Codespaces:**
-
-```bash
-git pull && python option_backtest.py --sweep
-```
-
-Check the `DATA COVERAGE` line first. If it says `7 of 7`, the table above stands
-and `OPT_WIN_RATE` can be re-derived against it, recording the realised payoff
-alongside. If it says fewer, the run is over a partial universe and the numbers
-change. `OPT_WIN_RATE` is deliberately NOT updated until this is settled — it
-feeds the live spread gate.
+`spread_breakeven_wr()` charges the spread but still assumes nominal levels, so
+it understates by ~1.7 points. Use `realised_breakeven_wr()` for a decision.
 
 ## 8. Survivorship in the candidate pool — recorded, not fixable here
 

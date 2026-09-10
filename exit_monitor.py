@@ -73,6 +73,7 @@ if importlib.util.find_spec("requests") is None:
 
 import data_source
 import signal_core as sc
+import risk_params
 import notify
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -457,7 +458,10 @@ def format_alert(pos: dict, ev: dict) -> str:
     if ev.get("reliable") is False and ev.get("mid") is not None:
         lines += ["", "⚠️ No two-sided market — price is last-traded and may be "
                       "stale. Verify before acting."]
-    elif ev.get("spread_pct") and ev["spread_pct"] > 15:
+    # Was a hardcoded 15 — the fifth copy of a ceiling that moved to 8%, so this
+    # stayed silent on spreads between 8% and 15% that the entry gate would have
+    # refused outright.
+    elif ev.get("spread_pct") and ev["spread_pct"] > risk_params.MAX_OPTION_SPREAD_PCT:
         lines += ["", f"⚠️ Wide spread ({ev['spread_pct']:.0f}% of mid) — the mid "
                       f"shown is optimistic versus a real fill."]
     lines += ["", f"Opened {pos.get('opened','')}",

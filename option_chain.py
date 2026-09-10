@@ -321,8 +321,15 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
             why = f"{diag['had_volume']} strikes traded but none had open interest"
         elif diag["spread_ok"] == 0:
             tight = diag["best_spread_pct"]
+            # The ceiling is READ, not retyped. This said "exceeded 15% of mid"
+            # while the filter twelve lines up applies
+            # risk_params.MAX_OPTION_SPREAD_PCT (8%), so a real rejection came
+            # back self-contradicting: "every spread exceeded 15% — tightest was
+            # 13.3%". Both halves cannot be true, and the reader is left unable
+            # to tell whether the gate or the message is wrong.
             why = (f"{diag['had_oi']} strikes passed liquidity but every spread "
-                   f"exceeded 15% of mid — tightest was {tight}%")
+                   f"exceeded {risk_params.MAX_OPTION_SPREAD_PCT:g}% of mid "
+                   f"— tightest was {tight}%")
         else:
             why = "contracts passed the filters but none scored"
         return {"error": f"No liquid options found: {why}.", "diag": diag}

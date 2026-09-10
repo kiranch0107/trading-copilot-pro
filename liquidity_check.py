@@ -13,9 +13,13 @@ per-ticker results were mostly noise and will not repeat.
 Liquidity is different. It is:
   • structurally persistent — a mega-cap with tight options this month will
     almost certainly have tight options next month;
-  • a CERTAIN cost, not a speculative gain — at a 15% round-trip spread, a 2:1
-    payoff at a 40% win rate goes from +0.10 to -0.05 expected value. The
-    spread alone decides the sign;
+  • a CERTAIN cost, not a speculative gain. The illustration here used to be
+    "a 2:1 payoff at a 40% win rate", which is a SHARE win rate — the option
+    leg measures 21.9% at TP+200 (option_backtest.py --sweep, 7 of 7 tickers,
+    2026-09-10). On the payoff actually realised there, 3.21:1, breakeven is
+    23.8% and the measured rate falls short before any spread is paid; the
+    spread only decides how fast it loses. See risk_params.MAX_OPTION_SPREAD_PCT
+    for the full derivation and why the ceiling is a loss cap, not a threshold;
   • forward-looking — it describes the market you will actually trade in, not
     a sample of history you already know the answer to.
 
@@ -31,6 +35,7 @@ Run
 """
 from __future__ import annotations
 
+import risk_params
 import argparse
 import time
 from datetime import datetime, date
@@ -46,7 +51,16 @@ DEFAULT_CANDIDATES = [
     "AMD", "GOOGL", "NFLX", "INTC", "QQQ", "SPY",
 ]
 
-MAX_SPREAD_PCT = 15.0   # above this, the round trip eats a 2:1 edge outright
+# THE FIFTH COPY OF A CEILING THAT MOVED. This was its own 15.0, set when the
+# option gate was 15% — it is 8% now (risk_params.MAX_OPTION_SPREAD_PCT), so this
+# module was calling "OK" spreads the entry gate would refuse outright, and a
+# ticker could rank acceptable here and then never produce a tradeable contract.
+# That is exactly what happened on QQQI: tightest spread 13.3%, "acceptable" by
+# this file, rejected by the real gate.
+#
+# consistency_check.check_cost_gates_shared() existed to prevent precisely this
+# and did not see it: it scanned app.py, scanner.py and option_chain.py only.
+MAX_SPREAD_PCT = risk_params.MAX_OPTION_SPREAD_PCT
 
 
 def nearest_expiry(ticker: str, min_dte: int) -> tuple[str | None, int | None]:

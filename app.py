@@ -1872,7 +1872,8 @@ with TAB_STOCK:
                                     )
                                 st.caption(
                                     "**Liquidity gates:** bid > 0, volume > 0, open interest > 0, "
-                                    "and bid-ask spread ≤ 15% of mid."
+                                    f"and bid-ask spread ≤ {risk_params.MAX_OPTION_SPREAD_PCT:g}% "
+                                    "of mid."
                                 )
                                 st.caption(
                                     "**Ranking:** (volume + OI) × volume-weight ÷ spread-penalty, "
@@ -2312,43 +2313,59 @@ with TAB_POSITIONS:
         # 23.8% — negative, which is what option_backtest.py prints on its own
         # defaults. So: at the measured basis, say it loses; away from it, refuse
         # to put a number on it and point at --sweep.
-        on_basis = (abs(rule_tp - risk_params.OPT_WIN_RATE_TP_PCT) < 1e-9 and
-                    abs(rule_sl - risk_params.OPT_WIN_RATE_SL_PCT) < 1e-9)
-        ev = OPT_WIN_RATE * (rule_tp / 100) - (1 - OPT_WIN_RATE) * (rule_sl / 100)
+        # EVERY TP LEVEL IS NOW MEASURED (option_backtest.py --sweep, 7 of 7
+        # tickers, 2026-09-10), so this no longer has to refuse for TP+200 — it
+        # reads the measured row instead of extrapolating from TP+100.
+        #
+        # And it reads the REALISED payoff, not the nominal one. The `breakeven`
+        # computed above from rule_tp/rule_sl assumes trades reach their levels;
+        # they do not, because the DTE floor and max-hold close them early. At
+        # TP+200 the nominal breakeven is 20% and the realised one is 23.8% —
+        # the difference between "clears by 1.9 points" and "short by 1.9".
+        edge = (risk_params.measured_option_edge(rule_tp)
+                if abs(rule_sl - risk_params.OPT_WIN_RATE_SL_PCT) < 1e-9 else None)
         basis = (f"TP+{risk_params.OPT_WIN_RATE_TP_PCT:g}/"
                  f"SL-{risk_params.OPT_WIN_RATE_SL_PCT:g}")
         head = f"Payoff **{payoff:.1f}:1** → breakeven win rate **{breakeven:.0f}%**. "
-        if not on_basis:
-            st.warning(
-                "⚠️ " + head +
-                f"The only measured option win rate for this signal is "
-                f"**{OPT_WIN_RATE*100:.1f}%**, measured at **{basis}** — not at the "
-                f"TP+{rule_tp:g}/SL-{rule_sl:g} set here. A wider take-profit is hit "
-                f"*less* often, so applying {OPT_WIN_RATE*100:.1f}% to it overstates "
-                f"the result. **Expected value is unmeasured for these rules.** Run "
-                f"`option_backtest.py --sweep` to measure the win rate at this TP "
-                f"before treating any number here as real."
-            )
-        else:
-            line = (head +
-                    f"Measured option-level win rate for this signal is "
-                    f"**{OPT_WIN_RATE*100:.1f}%** at this exact basis, giving "
-                    f"expected value **{ev:+.2f}** per unit risked — before "
-                    f"spread and commissions.")
-            if breakeven >= OPT_WIN_RATE * 100:
-                st.error("⚠️ " + line + " These rules lose money at the win "
-                         "rate this signal actually achieves on OPTIONS. Treat it as "
-                         "a data-collection trade, not a positive-expectancy one. "
-                         "Widening take-profit does not fix it — it moves you off "
-                         "the only basis that has been measured.")
-            elif ev < 0.05:
-                st.warning("⚠️ " + line + " Thin — bid-ask spread alone could erase it.")
+        if edge is not None:
+            line = (f"Measured at **TP+{rule_tp:g}/SL-{rule_sl:g}**: win rate "
+                    f"**{edge['win_rate']:.1f}%**, and trades realise "
+                    f"**{edge['realised_payoff']:.2f}:1** rather than the nominal "
+                    f"{payoff:.1f}:1 because the DTE floor and max-hold close them "
+                    f"early. Breakeven on what is actually realised is "
+                    f"**{edge['breakeven']:.1f}%**, giving "
+                    f"**{edge['expectancy_pct']:+.2f}%** of premium per trade.")
+            if edge["margin"] < 0:
+                st.error(
+                    "⚠️ " + line +
+                    f" That is **{abs(edge['margin']):.1f} points short** of "
+                    f"breakeven. No measured take-profit level clears it — the "
+                    f"sweep runs {min(risk_params.OPT_SWEEP_BY_TP):g}% to "
+                    f"{max(risk_params.OPT_SWEEP_BY_TP):g}% and every one is "
+                    f"negative, so widening the target does not fix it. Treat "
+                    f"this as a data-collection trade.")
             else:
                 st.success("✅ " + line)
+        else:
+            # An UNMEASURED structure still gets no number. The sweep covers a
+            # fixed set of TP levels at SL-50; anything else would be an
+            # extrapolation, and extrapolating a win rate across payoffs is the
+            # original bug this whole block was rewritten to stop.
+            _levels = ", ".join(f"+{k:g}%" for k in sorted(risk_params.OPT_SWEEP_BY_TP))
+            st.warning(
+                "⚠️ " + head +
+                f"**TP+{rule_tp:g}/SL-{rule_sl:g} has not been measured.** The sweep "
+                f"covers {_levels} at SL-50 only, and a win rate does not carry "
+                f"across payoff structures — a wider target is hit less often. "
+                f"**Expected value is unmeasured for these rules.** Either set the "
+                f"rules to a measured level, or run `option_backtest.py --sweep` "
+                f"with this one added."
+            )
         st.caption(
-            "Note: even the best configuration measured (TP+300, thesis off) came "
-            "out at −0.27% expectancy. No setting here makes this signal "
-            "profitable — the rules limit damage and enforce consistency."
+            f"Note: every take-profit level in the sweep is negative, best case "
+            f"{max(e['expectancy_pct'] for e in (risk_params.measured_option_edge(k) for k in risk_params.OPT_SWEEP_BY_TP)):+.2f}% "
+            f"of premium at TP+300. No setting here makes this signal profitable "
+            f"— the rules limit damage and enforce consistency."
         )
 
     if not (rule_tp or rule_sl or rule_dte or rule_hold or rule_thesis):
