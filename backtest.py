@@ -382,6 +382,73 @@ def split_by_side(trades: list, side: str) -> list:
     return [t for t in trades if t.get("trend") == side]
 
 
+def side_concentration(trades: list, side: str) -> dict | None:
+    """
+    Is one side's result broad across names, or carried by one or two?
+
+    An aggregate of +0.100 R means something very different if eleven of
+    twelve tickers contribute it than if one does. `drop_best` answers that
+    directly: recompute the side's average with the single best-contributing
+    ticker removed. If a twelve-name average halves when one name leaves, the
+    average was describing that name.
+
+    This is a ROBUSTNESS check, not a search. It reports how fragile a number
+    is; it never nominates which tickers to trade. Picking the names that
+    looked good here is the ADX-35 mistake with a different label on it.
+    """
+    sub = split_by_side(trades, side)
+    if len(sub) < 2:
+        return None
+    by_tk: dict[str, list] = {}
+    for t in sub:
+        by_tk.setdefault(t.get("ticker", "?"), []).append(t["r"])
+    if len(by_tk) < 2:
+        return None
+
+    per = {tk: (len(rs), float(np.mean(rs))) for tk, rs in by_tk.items()}
+    overall = float(np.mean([t["r"] for t in sub]))
+    # "Best" by total R contributed, not by average: a name with 40 trades at
+    # +0.20 moves the aggregate far more than one with 3 trades at +2.00.
+    best = max(by_tk, key=lambda tk: sum(by_tk[tk]))
+    rest = [r for tk, rs in by_tk.items() if tk != best for r in rs]
+    return {
+        "per_ticker": per,
+        "overall": overall,
+        "n_positive": sum(1 for _, (_, avg) in per.items() if avg > 0),
+        "n_tickers": len(per),
+        "best": best,
+        "drop_best": float(np.mean(rest)) if rest else float("nan"),
+    }
+
+
+def print_concentration(all_trades: list) -> None:
+    """
+    Render the concentration check. Silent when there is nothing to say —
+    a single-ticker run has no concentration question to answer.
+
+    This lives in its own function so the selftest exercises the real render
+    path. Left inline in run() it could only be tested by a full backtest,
+    which needs the network, which means in practice it would not be tested.
+    """
+    conc = [(lbl, side_concentration(all_trades, sd)) for sd, lbl in SIDES]
+    if not any(c for _, c in conc):
+        return
+    print("\n  CONCENTRATION — how much of each side rests on one name")
+    print("  (a robustness check. It does NOT nominate tickers to trade:")
+    print("   picking the names that looked good here is the ADX-35 mistake.)")
+    for lbl, c in conc:
+        if not c:
+            continue
+        drop = c["drop_best"]
+        frag = ""
+        if np.isfinite(drop) and abs(c["overall"]) > 1e-9:
+            if 1 - (drop / c["overall"]) > 0.5:
+                frag = "  <- over half the result is that one name"
+        print(f"    {lbl}  positive in {c['n_positive']}/{c['n_tickers']} "
+              f"tickers   {c['overall']:+.3f} R -> {drop:+.3f} R "
+              f"without {c['best']}{frag}")
+
+
 def stats(trades: list[dict]) -> dict:
     if not trades:
         return {"trades": 0}
@@ -686,6 +753,8 @@ def run(cfg: dict) -> None:
         trades = backtest_ticker(df, cfg, params, regime_series=reg_series,
                                  weekly_series=wk_series, tally=tally)
         s = stats(trades)
+        for _t in trades:
+            _t["ticker"] = tk      # for the concentration check below
         all_trades.extend(trades)
         total_bars += len(df)
 
@@ -756,6 +825,8 @@ def run(cfg: dict) -> None:
               f"{ss['win_rate']:>5.1f}% win  {ss['avg_r']:+.3f} R  "
               f"PF {ss['pf']:.2f}  95% CI [{lo:+.3f}, {hi:+.3f}]"
               f"{'  <- CI clears 0' if lo > 0 else ''}")
+
+    print_concentration(all_trades)
     if bar_cache is not None and _CACHE_LOG:
         metas = [m for m, _ in _CACHE_LOG]
         statuses = [st for _, st in _CACHE_LOG]
@@ -1017,6 +1088,86 @@ def selftest() -> int:
     assert _long["trades"] + _short["trades"] == _all["trades"]
     print(f"long/short split        : +1.00 R long, -1.00 R short, "
           f"0.00 R blended — sides do not leak")
+
+    # ── the concentration check must actually detect concentration ──
+    # Fixture: four names contribute nothing, one name carries everything.
+    # Built so a check that ignores the per-ticker split cannot pass it.
+    _conc_rows = []
+    for _tk in ("A", "B", "C", "D"):
+        _conc_rows += [{"r": 0.0, "trend": "Bullish", "hold": 3, "ticker": _tk}
+                       for _ in range(5)]
+    _conc_rows += [{"r": 2.0, "trend": "Bullish", "hold": 3, "ticker": "HOG"}
+                   for _ in range(5)]
+    _c = side_concentration(_conc_rows, "Bullish")
+    assert _c is not None, \
+        "the check returned nothing on a 5-ticker fixture — it is not " \
+        "splitting by ticker at all"
+    assert _c["best"] == "HOG", _c["best"]
+    assert abs(_c["overall"] - 0.4) < 1e-9, _c["overall"]
+    assert abs(_c["drop_best"] - 0.0) < 1e-9, (
+        f"drop_best={_c['drop_best']:.3f}, expected 0.000. The four other "
+        f"names contribute nothing, so removing HOG must leave exactly 0 — "
+        f"a non-zero value means HOG is still in the leave-one-out set.")
+    assert _c["n_positive"] == 1 and _c["n_tickers"] == 5, _c
+    print(f"concentration           : {_c['overall']:+.2f} R -> "
+          f"{_c['drop_best']:+.2f} R without {_c['best']} — one name detected")
+
+    # And it must NOT cry concentration when the result is genuinely broad.
+    _broad = [{"r": 1.0, "trend": "Bullish", "hold": 3, "ticker": t}
+              for t in ("A", "B", "C", "D", "E") for _ in range(5)]
+    _b = side_concentration(_broad, "Bullish")
+    assert abs(_b["overall"] - 1.0) < 1e-9 and abs(_b["drop_best"] - 1.0) < 1e-9, _b
+    assert _b["n_positive"] == 5, _b
+    print(f"broad result            : {_b['overall']:+.2f} R unchanged when the "
+          f"best name leaves — no false alarm")
+
+    # "Best" must mean biggest CONTRIBUTION, not biggest single trade. STEADY
+    # totals +5.0 over ten trades; SPIKE totals +3.0 in one. Removing STEADY is
+    # what actually moves the aggregate, so STEADY is the name the check must
+    # name. A fixture where both rules agree would not test this.
+    _tie = ([{"r": 0.5, "trend": "Bullish", "hold": 3, "ticker": "STEADY"}
+             for _ in range(10)]
+            + [{"r": 3.0, "trend": "Bullish", "hold": 3, "ticker": "SPIKE"}])
+    _t = side_concentration(_tie, "Bullish")
+    assert sum(r["r"] for r in _tie if r["ticker"] == "STEADY") > \
+        sum(r["r"] for r in _tie if r["ticker"] == "SPIKE"), \
+        "fixture is broken: STEADY must out-total SPIKE or it tests nothing"
+    assert max(r["r"] for r in _tie if r["ticker"] == "SPIKE") > \
+        max(r["r"] for r in _tie if r["ticker"] == "STEADY"), \
+        "fixture is broken: SPIKE must have the larger single trade"
+    assert _t["best"] == "STEADY", (
+        f"best={_t['best']} — 'best' must be the biggest total contribution, "
+        f"not the biggest single trade: a lone +3.00 R outlier moves a "
+        f"12-trade average far less than ten steady +0.50s")
+    print(f"best = contribution     : STEADY (+5.0 total) over SPIKE "
+          f"(+3.0 in one trade)")
+
+    # ── the RENDER path, not just the arithmetic ──
+    import io as _io, contextlib as _ctx
+
+    def _render_conc(rows):
+        buf = _io.StringIO()
+        with _ctx.redirect_stdout(buf):
+            print_concentration(rows)
+        return buf.getvalue()
+
+    _fragile = _render_conc(_conc_rows)                 # HOG carries everything
+    assert "over half the result is that one name" in _fragile, (
+        "HOG carries 100% of this fixture's result and the fragility flag did "
+        "not fire. Rendered:\n" + _fragile)
+    assert "without HOG" in _fragile, (
+        "the render must name which ticker was removed. Rendered:\n" + _fragile)
+    _solid = _render_conc(_broad)                       # five equal names
+    assert "over half the result" not in _solid, \
+        "a broad, five-name result was flagged as carried by one ticker"
+    # One ticker means there is no concentration question — say nothing.
+    _single = [{"r": 1.0, "trend": "Bullish", "hold": 3, "ticker": "ONE"}
+               for _ in range(5)]
+    assert _render_conc(_single) == "", \
+        "a single-ticker run must print nothing rather than compare a name " \
+        "against itself"
+    print("concentration render    : flags the fragile case, quiet on the "
+          "broad and single-name ones")
 
     # ── the on-disk bar cache actually caches ──
     # A harness that refetches on every run cannot measure anything smaller
