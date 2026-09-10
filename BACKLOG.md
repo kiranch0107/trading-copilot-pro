@@ -126,7 +126,7 @@ the five were ever given tests.
 
 | module | what it decides | selftest | run by CI |
 |---|---|---|---|
-| `exit_monitor.py` | when to close a **live** position; runs unattended on a schedule | none | no |
+| `exit_monitor.py` | when to close a **live** position; runs unattended on a schedule | **added 2026-09-10** | **yes** |
 | `option_chain.py` | which contract to actually buy | none | no |
 | `option_backtest.py` | `OPT_WIN_RATE`, the input the live spread gate is derived from | none | no |
 | `liquidity_check.py` | — | none | no |
@@ -221,6 +221,42 @@ it is produced.
 If you compare a new snapshot against the three already in `universe_history/`,
 expect small membership differences for this reason — the old ones may have been
 ranked partly on unsettled bars.
+
+---
+
+## 10. `option_chain.py` still has no test — and it picks the contract
+
+The module that decides **which contract you buy** has no selftest. Its scoring
+blends liquidity, a volume weight and a quadratic theta penalty, and
+`valid.sort_values("score").iloc[0]` breaks ties by row order. None of it is
+asserted anywhere; `consistency_check` only proves it imports.
+
+Worth testing specifically: that the spread ceiling actually excludes a wide
+contract, that `bid > 0` and `volume > 0` are enforced (a mid can pass with
+bid=0), that the theta penalty prefers a longer-dated contract when DTE is
+short, and that the tie-break is deterministic.
+
+`option_backtest.py` and `universe_backtest.py` are the other two with none.
+`option_backtest.py` matters most of the three because it produces
+`OPT_WIN_RATE` (see item 7).
+
+## 11. Live weekly trend and backtested weekly trend are different rules
+
+`market_context.weekly_trend_from_bars()` reads `close.iloc[-1]` — the CURRENT
+weekly bar, which does not close until Friday. `backtest.build_weekly_trend_map()`
+deliberately lags each week's verdict so it is only usable from the following
+week, and its selftest asserts that lag at a week where the verdict flips.
+
+So anything the backtest concluded about the weekly filter does not transfer to
+the live rule. It is harmless **today** only because
+`signal_core.DEFAULTS.weekly_confirm` is `False` and pinned False by an
+assertion (it rejected 5 bars in 13,748).
+
+`consistency_check.check_weekly_rule_parity()` now fails CI if the filter is ever
+turned on while the divergence stands. To actually close it: either lag the live
+rule to match the backtest, or re-measure the filter with the live (unlagged)
+definition and record the result. Do not enable it on the strength of the
+existing measurement.
 
 ---
 

@@ -146,9 +146,13 @@ SUGGEST_OPTIONS  = True
 OPT_MIN_DTE      = 21
 OPT_MAX_DTE      = 45
 OPT_MAX_EXPIRIES = 3        # each expiry is one chain fetch — keep it lean
-# Derived from the breakeven arithmetic, not chosen. At the old 15% the
-# strategy needed a 26.5% win rate against a measured 23.8% — the gate
-# admitted contracts that could not win. See risk_params.py.
+# Single-sourced from risk_params.py, not chosen here.
+#
+# This said "at the old 15% the strategy needed a 26.5% win rate against a
+# measured 23.8%". That 26.5% was a TP+200 breakeven while OPT_WIN_RATE was
+# measured at TP+100 — the basis mismatch corrected on 2026-09-10. At the
+# measured basis 15% needs 44.1% and the 8% ceiling needs 38.9%, so no spread
+# clears 23.8%: this is a loss cap, not a profitability threshold.
 OPT_MAX_SPREAD   = risk_params.MAX_OPTION_SPREAD_PCT
 
 # Shown in the alert for context. NOT used to filter during the test phase —

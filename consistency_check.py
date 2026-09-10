@@ -861,8 +861,9 @@ def check_cost_gates_shared() -> None:
     0.238 in app.py and a re-typed 23.8 in risk_params' own selftest.
 
     That matters more than the usual duplication, because the ceiling is
-    DERIVED from the win rate. At a 15% spread this signal needs a 26.5% win
-    rate and has 23.8% — the gates were admitting contracts that cannot win.
+    DERIVED from the win rate — and the 26.5% this docstring used to quote was
+    itself a TP+200 breakeven against a win rate measured at TP+100. At the
+    measured basis 15% needs 44.1% and the 8% ceiling needs 38.9%, against 23.8%.
     Two numbers that must move together, spread across five files, will not.
 
     Both now live in risk_params.py. This check keeps them there.
@@ -1240,6 +1241,63 @@ def check_reservation_self_consistent() -> None:
     print(f"  clean shots defensible: {', '.join(sorted(avail)) or 'none'}")
 
 
+# ---------------------------------------------------------------------------
+# 21. the weekly filter cannot be switched on while live and backtest disagree
+# ---------------------------------------------------------------------------
+
+def check_weekly_rule_parity() -> None:
+    """
+    The live weekly trend and the backtested one are different rules.
+
+    market_context.weekly_trend_from_bars() reads close.iloc[-1] — the CURRENT
+    weekly bar, which does not close until Friday. backtest.build_weekly_trend_map()
+    shifts each week's verdict so it is only usable from the following week,
+    because using it mid-week leaks Thursday and Friday into a Wednesday
+    decision; its own docstring calls that "the whole difficulty here".
+
+    That divergence is harmless today only because
+    signal_core.DEFAULTS.weekly_confirm is False, so the live verdict gates
+    nothing. The danger is the flip: turning the filter on would put a rule into
+    production that no backtest has measured, while the backtest that justified
+    it measured a LAGGED version. Nothing connected those two facts.
+
+    This check is the connection. While the filter is off it simply records the
+    divergence. If it is ever turned on, CI fails and says what has to happen
+    first.
+    """
+    import inspect
+    import signal_core as sc
+    import market_context as mc
+
+    live_src = inspect.getsource(mc.weekly_trend_from_bars)
+    reads_current_week = "iloc[-1]" in live_src.replace(" ", "")
+
+    if not sc.DEFAULTS.weekly_confirm:
+        assert reads_current_week, (
+            "market_context.weekly_trend_from_bars() no longer reads the current "
+            "weekly bar. If it was changed to lag like the backtest, that is the "
+            "fix this check was waiting for — update this check and re-measure "
+            "the filter before enabling it.")
+        # The divergence must stay documented where a reader will meet it.
+        assert "does not CLOSE until" in inspect.getdoc(mc.weekly_trend_from_bars), (
+            "the docstring no longer warns that this reads an unfinished week. "
+            "That warning is the only thing standing between a reader and a "
+            "rule the backtest never measured.")
+        print("  weekly filter OFF; live reads the unfinished week, backtest "
+              "lags it — divergence recorded, gating nothing")
+        return
+
+    raise AssertionError(
+        "signal_core.DEFAULTS.weekly_confirm is now TRUE, but\n"
+        "  market_context.weekly_trend_from_bars() still reads the CURRENT,\n"
+        "  unfinished weekly bar while backtest.build_weekly_trend_map() uses\n"
+        "  the previous week's closed verdict.\n"
+        "  Enabling the filter now ships a rule no backtest has measured.\n"
+        "  Either lag the live rule to match the backtest, or re-measure the\n"
+        "  filter with the live (unlagged) definition and record the result —\n"
+        "  then update this check deliberately.")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -1260,6 +1318,7 @@ CHECKS = [
     ("compute() keeps Open/Date on their row",     check_compute_preserves_alignment),
     ("is_market_open agrees across 4 copies",      check_market_hours_agree),
     ("reservation lock agrees with itself",        check_reservation_self_consistent),
+    ("weekly filter off while rules diverge",      check_weekly_rule_parity),
     ("every production module imports",            check_modules_import),
 ]
 

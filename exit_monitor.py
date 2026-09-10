@@ -107,6 +107,27 @@ def is_market_open(now: datetime | None = None) -> bool:
             <= now <= now.replace(hour=ch, minute=cm, second=0, microsecond=0))
 
 
+def drop_unsettled_bars(df: "pd.DataFrame",
+                        now: datetime | None = None) -> "pd.DataFrame":
+    """
+    Remove any bar dated today while the market is still open.
+
+    Separate from is_market_open() so it can be tested without a clock or a
+    network fetch — the THESIS rule had no test at all, and the bug it carried
+    was invisible precisely because nothing could assert on it.
+    """
+    if df is None or len(df) == 0:
+        return df
+    now = now or datetime.now(ET)
+    if not is_market_open(now):
+        return df
+    try:
+        idx = pd.to_datetime(df.index).tz_localize(None).normalize()
+    except TypeError:
+        idx = pd.to_datetime(df.index).tz_convert(None).normalize()
+    return df[idx < pd.Timestamp(now.date())]
+
+
 # ══════════════════════════════════════════════════════════════════
 # TELEGRAM
 # ══════════════════════════════════════════════════════════════════
@@ -168,7 +189,8 @@ def get_option_quote(ticker: str, expiry: str, strike: float,
         return None
 
 
-def get_underlying_state(ticker: str) -> dict | None:
+def get_underlying_state(ticker: str,
+                         now: datetime | None = None) -> dict | None:
     """
     Last daily close and EMA20, for the thesis-invalidation check.
 
@@ -189,12 +211,34 @@ def get_underlying_state(ticker: str) -> dict | None:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df = df.dropna(subset=["Close"])
+        # NEVER EVALUATE "CLOSED BELOW EMA20" ON A BAR THAT HAS NOT CLOSED.
+        #
+        # This workflow runs hourly THROUGH the session
+        # (cron "0 13,14,...,21 * * 1-5"), which is the point of an exit
+        # monitor. While the market is open, Yahoo's last daily row is today's
+        # in-progress bar: its Close is the live price. Taking iloc[-1] meant the
+        # THESIS rule compared an INTRADAY print against an EMA20 that also
+        # included that partial bar — and then the alert said the ticker
+        # "closed" there.
+        #
+        # The effect is a premature exit on a real position: an intraday dip
+        # through EMA20 that recovers by the close fired THESIS anyway. This is
+        # the same partial-bar defect already fixed in signal_core
+        # (drop_partial_bar), app.py, scanner.py, backtest (_drop_todays_bar) and
+        # universe.py (drop_unsettled) — and the only place it closes a position
+        # instead of mis-reporting a number.
+        #
+        # Dropped only while the market is OPEN: after the close today's bar is
+        # settled and is the one the rule should use, so the 20:00/21:00 UTC runs
+        # still see the current session.
+        df = drop_unsettled_bars(df, now=now)
         if len(df) < 25:
             return None
         # Matches the app's ta.trend.ema_indicator(window=20)
         ema20 = df["Close"].ewm(span=20, adjust=False).mean()
         return {"close": round(float(df["Close"].iloc[-1]), 2),
-                "ema20": round(float(ema20.iloc[-1]), 2)}
+                "ema20": round(float(ema20.iloc[-1]), 2),
+                "as_of": str(pd.to_datetime(df.index[-1]).date())}
     except Exception as e:
         logger.warning("get_underlying_state(%s) failed: %s", ticker, e)
         return None
@@ -298,22 +342,52 @@ def check_option_position(pos: dict) -> dict:
                              pos["strike"], pos["right"])
     if quote:
         mid = quote["mid"]
-        pnl_pct = ((mid - entry_prem) / entry_prem * 100) if entry_prem > 0 else 0
-        info.update(mid=mid, pnl_pct=round(pnl_pct, 1),
+        # A non-positive entry premium makes every percentage rule meaningless.
+        # This used to set pnl_pct = 0, which is NOT missing data — it is a
+        # number that satisfies `is not None` and then fails both comparisons,
+        # so STOP and TARGET silently never fired for the rest of the position's
+        # life. Treated as absent, like a missing quote.
+        if entry_prem > 0:
+            pnl_pct = (mid - entry_prem) / entry_prem * 100
+        else:
+            pnl_pct = None
+            logger.warning("%s: entry_premium is %s — price rules cannot be "
+                           "evaluated", pos.get("ticker"), entry_prem)
+        info.update(mid=mid,
+                    pnl_pct=round(pnl_pct, 1) if pnl_pct is not None else None,
                     reliable=quote["reliable"], spread_pct=quote.get("spread_pct"))
     else:
         mid = pnl_pct = None
         info.update(mid=None, pnl_pct=None, reliable=False)
 
+    # PRICE RULES REQUIRE A PRICE WORTH ACTING ON.
+    #
+    # get_option_quote() falls back to lastPrice when there is no two-sided
+    # market and flags reliable=False, and its own docstring says why: lastPrice
+    # "can be hours stale on a quiet contract and would produce phantom exits".
+    # That flag was put into `info` and then never read — STOP and TARGET fired
+    # on the stale number anyway. The module identified the hazard, labelled it,
+    # and acted on it regardless.
+    #
+    # So price rules are skipped when the quote is unreliable, and the position
+    # is SURFACED rather than passed over: this is an alerting tool (the workflow
+    # says so), and "I could not price this" is information the human needs. The
+    # clock and thesis rules below do not depend on the quote and still run.
+    price_ok = pnl_pct is not None and info.get("reliable") is True
+    if pnl_pct is not None and not info.get("reliable"):
+        info["price_rules_skipped"] = (
+            f"quote unreliable (no two-sided market; lastPrice {mid}) — STOP and "
+            f"TARGET not evaluated. Check this contract by hand.")
+
     # 1. STOP — premium fell by more than the allowed %
     sl = rules.get("sl_pct") or 0
-    if sl and pnl_pct is not None and pnl_pct <= -abs(sl):
+    if sl and price_ok and pnl_pct <= -abs(sl):
         return {**info, "exit": True, "reason": "STOP",
                 "detail": f"Premium {pnl_pct:+.1f}% (limit −{abs(sl):.0f}%)"}
 
     # 2. TARGET — premium rose past the take-profit
     tp = rules.get("tp_pct") or 0
-    if tp and pnl_pct is not None and pnl_pct >= abs(tp):
+    if tp and price_ok and pnl_pct >= abs(tp):
         return {**info, "exit": True, "reason": "TARGET",
                 "detail": f"Premium {pnl_pct:+.1f}% (target +{abs(tp):.0f}%)"}
 
@@ -587,6 +661,13 @@ def run(args) -> int:
                                "were SKIPPED this run; only TIME/THESIS could "
                                "have fired. Run --diagnose to see why.", tag)
                 unpriced.append(tag)
+            elif ev.get("price_rules_skipped"):
+                # A PRICE EXISTS BUT IS NOT WORTH ACTING ON. Same consequence as
+                # no quote at all — TP and SL did not run — so it gets the same
+                # visibility instead of the reassuring "open" line, which would
+                # report a position as fine when two of its rules were inert.
+                logger.warning("%s — %s", tag, ev["price_rules_skipped"])
+                unpriced.append(f"{tag} (unreliable quote)")
             else:
                 logger.info("%s open — premium %.2f (%+.1f%%), %s DTE",
                             tag, ev["mid"], ev["pnl_pct"], ev.get("dte"))
@@ -624,6 +705,191 @@ def run(args) -> int:
     return 0
 
 
+# ══════════════════════════════════════════════════════════════════
+# SELFTEST — offline, no network, no clock dependence
+# ══════════════════════════════════════════════════════════════════
+# This module had NO test and was not in CI, while running hourly through the
+# session and deciding when to close live positions. Both bugs it carried were
+# invisible for the same reason: nothing could assert on them.
+#
+# Everything here injects its inputs. get_option_quote() and
+# get_underlying_state() are monkeypatched, so no Yahoo call is made and the
+# result does not depend on what day it is run.
+def selftest() -> int:
+    import pandas as _pd
+
+    print("exit_monitor.py selftest")
+    print("=" * 66)
+
+    # ── session counting ──
+    # Fri 2026-09-11 -> Mon 2026-09-14 is ONE session, not three days.
+    assert trading_sessions_between(date(2026, 9, 11), date(2026, 9, 14)) == 1, \
+        "a weekend must not age a position by three sessions"
+    assert trading_sessions_between(date(2026, 9, 9), date(2026, 9, 9)) == 0
+    # Thanksgiving 2026-11-26 is a holiday; 11-25 -> 11-27 is one session.
+    assert trading_sessions_between(date(2026, 11, 25), date(2026, 11, 27)) == 1, \
+        "a market holiday is not a session"
+    # Half-days ARE sessions.
+    assert trading_sessions_between(date(2026, 11, 26), date(2026, 11, 27)) == 1
+    print("sessions          : weekends and holidays skipped, half-days counted")
+
+    # ── bars_held prefers the epoch and survives a missing one ──
+    _open_dt = datetime(2026, 9, 4, 14, 30, tzinfo=ET)
+    _pos = {"opened_epoch": _open_dt.timestamp()}
+    assert bars_held(_pos) is not None
+    assert bars_held({"opened": "2026-09-04 14:30 ET"}) is not None, \
+        "the literal ' ET' suffix must not defeat the fallback parser"
+    assert bars_held({}) is None, \
+        "with no usable date the HOLD rule must be disabled, not guessed"
+    print("bars_held         : epoch preferred, string fallback, None disables")
+
+    # ── the partial-bar guard on the THESIS input ──
+    _idx = _pd.bdate_range(end=_pd.Timestamp("2026-09-10"), periods=6)
+    _df = _pd.DataFrame({"Close": [10, 11, 12, 13, 14, 99.0]}, index=_idx)
+    assert _pd.Timestamp("2026-09-10") in _df.index, "fixture needs a today bar"
+    _mid_session = datetime(2026, 9, 10, 11, 0, tzinfo=ET)     # market OPEN
+    _after_close = datetime(2026, 9, 10, 17, 30, tzinfo=ET)    # market CLOSED
+    assert is_market_open(_mid_session) and not is_market_open(_after_close), \
+        "fixture timestamps must straddle the close, or this proves nothing"
+    _kept = drop_unsettled_bars(_df, now=_mid_session)
+    assert len(_kept) == len(_df) - 1 and float(_kept["Close"].iloc[-1]) == 14.0, \
+        "while the market is open, today's in-progress bar must be dropped — " \
+        "its Close is the live price, and THESIS claims to read a CLOSE"
+    _full = drop_unsettled_bars(_df, now=_after_close)
+    assert len(_full) == len(_df) and float(_full["Close"].iloc[-1]) == 99.0, \
+        "after the close today's bar is settled and is the one the rule wants"
+    print("partial bar       : dropped intraday, kept after the close")
+
+    # ── the exit rules, with the quote injected ──
+    _real_quote, _real_under = get_option_quote, get_underlying_state
+    _g = globals()
+    try:
+        def _q(mid, reliable=True):
+            _g["get_option_quote"] = lambda *a, **k: {
+                "mid": mid, "bid": mid, "ask": mid,
+                "reliable": reliable, "spread_pct": 2.0}
+
+        def _base(**over):
+            pos = {"ticker": "TEST", "right": "CALL", "strike": 100.0,
+                   "expiry": (datetime.now(ET).date() + timedelta(days=40)
+                              ).strftime("%Y-%m-%d"),
+                   "entry_premium": 2.00,
+                   "rules": {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7,
+                             "max_hold_bars": 30, "invalidate_ema": False},
+                   "opened_epoch": datetime.now(ET).timestamp()}
+            pos.update(over)
+            return pos
+
+        _g["get_underlying_state"] = lambda *a, **k: None
+
+        _q(0.90)                                    # -55% on a 2.00 entry
+        ev = check_option_position(_base())
+        assert ev["exit"] and ev["reason"] == "STOP", ev
+        _q(6.10)                                    # +205%
+        ev = check_option_position(_base())
+        assert ev["exit"] and ev["reason"] == "TARGET", ev
+        _q(2.00)
+        ev = check_option_position(_base())
+        assert not ev["exit"], ev
+        print("STOP / TARGET     : fire at the limits, quiet in between")
+
+        # TIME beats HOLD: a contract at the theta cliff needs out today.
+        _near = (datetime.now(ET).date() + timedelta(days=3)).strftime("%Y-%m-%d")
+        ev = check_option_position(_base(expiry=_near))
+        assert ev["exit"] and ev["reason"] == "TIME", ev
+        # HOLD fires on sessions, not calendar days.
+        _old = datetime.now(ET).timestamp() - 90 * 86400
+        ev = check_option_position(_base(opened_epoch=_old))
+        assert ev["exit"] and ev["reason"] == "HOLD", ev
+        print("TIME / HOLD       : DTE floor takes priority, HOLD counts sessions")
+
+        # ── an UNRELIABLE quote must not drive a price exit ──
+        # get_option_quote() falls back to lastPrice with reliable=False and its
+        # own docstring says that "would produce phantom exits". The flag was
+        # recorded and never read.
+        _q(0.90, reliable=False)                    # would be a -55% STOP
+        ev = check_option_position(_base())
+        assert not ev["exit"], (
+            "a STOP fired on an unreliable lastPrice — this is the phantom exit "
+            f"the quote docstring warns about: {ev}")
+        assert ev.get("price_rules_skipped"), \
+            "skipping the price rules silently is worse than acting; it must be " \
+            "surfaced so the human checks by hand"
+        _q(6.10, reliable=False)
+        assert not check_option_position(_base())["exit"], \
+            "TARGET must not fire on an unreliable quote either"
+        # ...but the clock rules do not depend on the quote and must still run.
+        ev = check_option_position(_base(expiry=_near))
+        assert ev["exit"] and ev["reason"] == "TIME", (
+            "an unreliable quote must not disable the rules that never needed "
+            f"it: {ev}")
+        print("unreliable quote  : price rules skipped and flagged, clock still runs")
+
+        # ── a non-positive entry premium makes % rules meaningless ──
+        _q(1.00)
+        ev = check_option_position(_base(entry_premium=0.0))
+        assert ev["pnl_pct"] is None, \
+            "entry_premium 0 used to give pnl_pct = 0, which passes " \
+            "`is not None` and then fails every comparison — so STOP and " \
+            "TARGET were silently dead for the life of the position"
+        assert not ev["exit"] or ev["reason"] in ("TIME", "HOLD"), ev
+        print("bad entry premium : treated as missing, not as 0% P&L")
+
+        # ── THESIS reads the injected close, and respects direction ──
+        _q(2.00)
+        _g["get_underlying_state"] = lambda *a, **k: {
+            "close": 95.0, "ema20": 100.0, "as_of": "2026-09-09"}
+        ev = check_option_position(_base(rules={"invalidate_ema": True}))
+        assert ev["exit"] and ev["reason"] == "THESIS", ev
+        _g["get_underlying_state"] = lambda *a, **k: {
+            "close": 105.0, "ema20": 100.0, "as_of": "2026-09-09"}
+        assert not check_option_position(
+            _base(rules={"invalidate_ema": True}))["exit"], \
+            "a CALL above its EMA20 is not invalidated"
+        ev = check_option_position(_base(right="PUT",
+                                        rules={"invalidate_ema": True}))
+        assert ev["exit"] and ev["reason"] == "THESIS", \
+            "a PUT is invalidated ABOVE the EMA20, not below"
+        print("THESIS            : direction-aware for CALL and PUT")
+
+        # ── and the WIRING: get_underlying_state() must itself drop the bar ──
+        # Testing drop_unsettled_bars() alone passed even with the call removed
+        # from get_underlying_state — a guard that exists but is not reached is
+        # the same as no guard. This asserts the path, not the helper.
+        _g["get_underlying_state"] = _real_under
+        import data_source as _ds
+        _real_fetch = _ds.fetch_daily
+        try:
+            _idx2 = _pd.bdate_range(end=_pd.Timestamp("2026-09-10"), periods=30)
+            _closes = [100.0] * 29 + [1.0]      # today gaps to 1.00 intraday
+            _frame = _pd.DataFrame({"Close": _closes}, index=_idx2)
+            _ds.fetch_daily = lambda *a, **k: (_frame, "yahoo")
+
+            _u_open = get_underlying_state("TEST", now=_mid_session)
+            assert _u_open is not None, _u_open
+            assert _u_open["as_of"] == "2026-09-09", (
+                f"while the market is open get_underlying_state() must report "
+                f"the last SETTLED session, got {_u_open['as_of']}")
+            assert _u_open["close"] == 100.0, (
+                f"it returned the live intraday print {_u_open['close']} — the "
+                f"THESIS rule would fire on a dip that may recover by the close")
+
+            _u_closed = get_underlying_state("TEST", now=_after_close)
+            assert _u_closed["as_of"] == "2026-09-10" and _u_closed["close"] == 1.0, (
+                f"after the close today's settled bar is the one to use, got "
+                f"{_u_closed}")
+            print("THESIS input      : settled close intraday, today's after the close")
+        finally:
+            _ds.fetch_daily = _real_fetch
+    finally:
+        _g["get_option_quote"] = _real_quote
+        _g["get_underlying_state"] = _real_under
+
+    print("=" * 66)
+    print("All self-tests passed.")
+    return 0
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Option exit monitor")
     p.add_argument("--positions", default="open_positions.json")
@@ -636,11 +902,15 @@ def parse_args():
                         "alert did or did not fire. Sends nothing.")
     p.add_argument("--test-telegram", action="store_true",
                    help="Send one test message to verify credentials.")
+    p.add_argument("--selftest", action="store_true",
+                   help="Run the offline rule tests. No network, no alerts.")
     return p.parse_args()
 
 
 if __name__ == "__main__":
     _args = parse_args()
+    if _args.selftest:
+        sys.exit(selftest())
     if _args.test_telegram:
         sys.exit(test_telegram())
     sys.exit(run(_args))
