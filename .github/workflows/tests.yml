@@ -127,6 +127,9 @@ jobs:
       - name: power_check.py — can a planned test detect what it looks for
         run: python power_check.py --selftest
 
+      - name: adx_retest.py — Holm correction, dose-response, sample floor
+        run: python adx_retest.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 
