@@ -75,6 +75,37 @@ the true results are worse than the table. The failure stands a fortiori and doe
 not need re-running to be believed; the model should still be corrected before
 any result is ever used to argue *for* a structure.
 
+## AMENDED 2026-09-10: clause 1 was underpowered and should not be read as "no edge"
+
+Run after the fact with `power_check.py`, which did not exist when this ran:
+
+```
+sd 4.90%/cycle, n = 83, alpha 0.05, power 0.80
+  smallest detectable effect : +1.51%/cycle = +18.1%/yr
+  observed                   : +0.32%/cycle = +3.8%/yr
+  cycles needed for +0.32%   : 1,844  =  154 years at 12/year
+```
+
+**This test could only have detected an edge larger than about +18%/yr.** An
+ordinary, genuinely profitable +6%/yr edge would have returned "CI does not clear
+zero" — the identical output it gives for a true zero. So clause 1 was never
+informative here, and the earlier reading of it as evidence of no edge was wrong.
+
+By contrast `backtest.py`'s directional result (1,386 trades, detectable 0.075 R,
+observed −0.048 R) **was** adequately powered. Of this repo's two negatives, only
+that one means what it appeared to mean.
+
+**What survives unchanged.** Clauses 2 and 5 are direct measurements, not
+inferences, and do not depend on sample size:
+
+- max drawdown **33.8%** against a 25% bar — a fact about the realised path
+- the best arm returned **~2.6%/yr** and lost to holding the same dollars in the
+  index — a comparison, not a significance test
+
+So the strategy still fails, and the FAIL stands. But it fails on **risk and
+opportunity cost**, not on "there is no edge to find." That distinction matters
+for what gets tried next: it argues against this vehicle, not against the premium.
+
 ## Where this leaves the thesis
 
 `vrp_check` was right and remains right: implied vol is systematically richer

@@ -124,6 +124,9 @@ jobs:
       - name: spread_backtest.py — defined-risk spread engine + pre-registered bar
         run: python spread_backtest.py --selftest
 
+      - name: power_check.py — can a planned test detect what it looks for
+        run: python power_check.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 
