@@ -56,6 +56,23 @@ seeing the number (the ADX-35 sweep, the discovery-set long side). The bar:
 
     FAIL otherwise, and short premium is not the answer either.
 
+AMENDED 2026-09-10, BEFORE ANY RUN — the CI is now HAC, not iid
+---------------------------------------------------------------
+The first draft computed the 95% CI as 1.96 * sd / sqrt(n). That is wrong here
+and it was wrong in the direction that matters: each day's forward window
+overlaps the next 20 days' windows, so ~2,500 daily premiums carry roughly
+n / 21 independent observations. Treating them as independent understates the
+standard error by about sqrt(21) ~= 4.6x, which would have made the "CI clears
+zero" clause pass on almost any positive mean — a decorative guard, the exact
+failure mode this repo has already found seven times in its own fixtures.
+
+The CI is now a Newey-West (Bartlett kernel) standard error at lag
+FORWARD_SESSIONS - 1, which is the standard correction for overlapping windows.
+This amendment STRICTLY TIGHTENS the bar and was made before the measurement was
+ever run against real data, so it is not bar-shopping. The iid interval is still
+printed alongside, labelled, so the size of the correction is visible rather
+than hidden.
+
 MIN_EDGE_VOL_POINTS is a JUDGMENT, not a derivation, and it is stated here so it
 cannot be revised after the fact. A credit spread pays bid-ask on TWO legs, and
 this repo's own ceiling is 8% of mid on ONE. Two vol points of average edge is
@@ -81,6 +98,7 @@ Run
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 
 import numpy as np
@@ -117,6 +135,63 @@ def forward_realised_vol(closes: pd.Series,
     return fwd * np.sqrt(TRADING_DAYS) * 100.0
 
 
+def hac_se(x, lag: int) -> float:
+    """
+    Newey-West (Bartlett kernel) standard error of the MEAN.
+
+    Overlapping forward windows make consecutive premiums heavily
+    autocorrelated, so the iid sd/sqrt(n) is far too small. This sums the
+    autocovariances out to `lag` with Bartlett weights, which is the standard
+    correction. Falls back to the iid variance if the weighted sum goes
+    non-positive (possible in small or pathological samples).
+    """
+    e = np.asarray(x, dtype=float)
+    n = len(e)
+    if n < 2:
+        return float("nan")
+    e = e - e.mean()
+    gamma0 = float(e @ e) / n
+    total = gamma0
+    for k in range(1, min(lag, n - 1) + 1):
+        weight = 1.0 - k / (lag + 1.0)
+        total += 2.0 * weight * (float(e[k:] @ e[:-k]) / n)
+    if total <= 0.0:
+        total = gamma0
+    return math.sqrt(total / n)
+
+
+def summarise(frame: pd.DataFrame, *, unevaluable: int, rows_seen: int) -> dict:
+    """
+    Turn a frame with a `premium` column into the result dict `verdict()` reads.
+
+    Split out of measure() so the selftest can exercise THIS code path offline.
+    measure() needs the network; this does not, and it is where the HAC/iid
+    choice is actually made — testing hac_se() alone would leave the wiring
+    untested, which is how a guard in this repo passed with itself removed.
+    """
+    p = frame["premium"]
+    n = len(p)
+    sd = float(p.std(ddof=1))
+    mean = float(p.mean())
+    # HAC is the one the verdict uses; iid is kept only to show the correction.
+    se_hac = hac_se(p.to_numpy(), FORWARD_SESSIONS - 1)
+    se_iid = sd / math.sqrt(n)
+    half = 1.96 * se_hac
+
+    return {
+        "n": n, "unevaluable": unevaluable, "rows_seen": rows_seen,
+        "mean": mean, "median": float(p.median()), "sd": sd,
+        "se_hac": se_hac, "se_iid": se_iid,
+        "eff_n": n / float(FORWARD_SESSIONS),
+        "ci_iid": (mean - 1.96 * se_iid, mean + 1.96 * se_iid),
+        "ci": (mean - half, mean + half),
+        "pct_positive": float((p > 0).mean() * 100.0),
+        "p05": float(p.quantile(0.05)), "p95": float(p.quantile(0.95)),
+        "worst": float(p.min()), "best": float(p.max()),
+        "frame": frame,
+    }
+
+
 def measure(years: int = 10) -> dict | None:
     spy = bt.download(UNDERLYING, years)
     vix = bt.download(VIX_TICKER, years)
@@ -147,21 +222,7 @@ def measure(years: int = 10) -> dict | None:
         print("  ! no overlapping days — cannot measure", file=sys.stderr)
         return None
 
-    p = frame["premium"]
-    n = len(p)
-    sd = float(p.std(ddof=1))
-    mean = float(p.mean())
-    half = 1.96 * sd / np.sqrt(n)
-
-    return {
-        "n": n, "unevaluable": unevaluable, "rows_seen": total,
-        "mean": mean, "median": float(p.median()), "sd": sd,
-        "ci": (mean - half, mean + half),
-        "pct_positive": float((p > 0).mean() * 100.0),
-        "p05": float(p.quantile(0.05)), "p95": float(p.quantile(0.95)),
-        "worst": float(p.min()), "best": float(p.max()),
-        "frame": frame,
-    }
+    return summarise(frame, unevaluable=unevaluable, rows_seen=total)
 
 
 def verdict(r: dict) -> tuple[bool, list[str]]:
@@ -195,7 +256,13 @@ def report(r: dict, years: int) -> int:
 
     print(f"\n  mean premium   : {r['mean']:+.2f} vol points")
     print(f"  median         : {r['median']:+.2f}")
-    print(f"  95% CI         : [{r['ci'][0]:+.2f}, {r['ci'][1]:+.2f}]")
+    print(f"  95% CI (HAC)   : [{r['ci'][0]:+.2f}, {r['ci'][1]:+.2f}]"
+          f"   <- the one the bar uses")
+    print(f"  95% CI (iid)   : [{r['ci_iid'][0]:+.2f}, {r['ci_iid'][1]:+.2f}]"
+          f"   (WRONG here: overlapping windows)")
+    print(f"  SE hac / iid   : {r['se_hac']:.3f} / {r['se_iid']:.3f} "
+          f"(x{r['se_hac'] / r['se_iid']:.1f});  ~{r['eff_n']:.0f} independent "
+          f"windows in {r['n']} days")
     print(f"  days positive  : {r['pct_positive']:.1f}%")
     print(f"  5th / 95th pct : {r['p05']:+.2f} / {r['p95']:+.2f}")
     print(f"  worst / best   : {r['worst']:+.2f} / {r['best']:+.2f}")
@@ -265,6 +332,47 @@ def selftest() -> int:
         "at least one full forward window must be unevaluable at the tail"
     print(f"forward window   : rises before the vol does, "
           f"{int(fwd.isna().sum())} tail rows unevaluable")
+
+    # ── the overlap correction actually corrects something ──
+    # This is the clause that was nearly decorative: with overlapping 21-day
+    # windows the iid SE is ~4.6x too small, so "CI clears zero" would have
+    # passed on almost any positive mean. A HAC SE that came back equal to the
+    # iid SE would mean the correction is not wired in.
+    white = rng.normal(0, 1.0, 3000)
+    overlapped = pd.Series(white).rolling(21).mean().dropna().to_numpy()
+    se_iid = overlapped.std(ddof=1) / math.sqrt(len(overlapped))
+    se_hac = hac_se(overlapped, 20)
+    assert se_hac > 2.0 * se_iid, (
+        f"HAC SE {se_hac:.4f} is not materially wider than iid {se_iid:.4f} on "
+        f"deliberately overlapped data — the overlap correction is not working, "
+        f"and the CI clause is decorative")
+    # ...and on genuinely independent data it must NOT inflate much, or it
+    # would be rejecting real edge rather than correcting for overlap.
+    se_iid_w = white.std(ddof=1) / math.sqrt(len(white))
+    se_hac_w = hac_se(white, 20)
+    assert 0.7 < se_hac_w / se_iid_w < 1.4, (
+        f"HAC SE {se_hac_w:.4f} vs iid {se_iid_w:.4f} on iid data — the "
+        f"correction should be near-neutral when there is no autocorrelation")
+    print(f"overlap correction: HAC x{se_hac / se_iid:.1f} wider on overlapped "
+          f"data, x{se_hac_w / se_iid_w:.2f} on iid")
+
+    # WIRING: the reported `ci` must be the HAC one, not the iid one. Testing
+    # hac_se() alone would pass even if summarise() ignored it.
+    shifted = pd.DataFrame({"premium": overlapped + 0.05})
+    wired = summarise(shifted, unevaluable=0, rows_seen=len(shifted))
+    assert wired["se_hac"] > 2.0 * wired["se_iid"], "summarise lost the HAC SE"
+    hac_w = wired["ci"][1] - wired["ci"][0]
+    iid_w = wired["ci_iid"][1] - wired["ci_iid"][0]
+    assert hac_w > 2.0 * iid_w, (
+        f"reported CI width {hac_w:.4f} is not the HAC one ({iid_w:.4f} iid) — "
+        f"summarise() is publishing the uncorrected interval")
+    # And the correction must be able to FLIP the verdict, not just widen a
+    # number nobody reads: this mean clears zero on iid and does not on HAC.
+    assert wired["ci_iid"][0] > 0 > wired["ci"][0], (
+        f"iid CI {wired['ci_iid']} / HAC CI {wired['ci']} — the correction "
+        f"does not change the verdict on a case built to be borderline")
+    print(f"overlap wiring   : reported CI is the HAC one (x{hac_w / iid_w:.1f} "
+          f"wider) and flips this borderline case to FAIL")
 
     # ── the verdict applies the bar it pre-registered ──
     good = {"mean": 3.0, "ci": (2.1, 3.9), "pct_positive": 80.0}

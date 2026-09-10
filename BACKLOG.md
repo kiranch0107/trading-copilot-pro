@@ -296,7 +296,9 @@ It has never been measured.
 realised vol over the next 21 **trading** sessions. The bar is pre-registered in
 its docstring and was written before any run:
 
-- 95% CI on mean premium clears zero, **and**
+- 95% **HAC** CI on mean premium clears zero — Newey-West at lag 20, because
+  the 21-day forward windows overlap and the iid interval is ~4.6x too narrow
+  (the run prints both, so the size of the correction is visible), **and**
 - at least 70% of sessions show implied > subsequent realised, **and**
 - mean premium >= 2.0 vol points.
 
