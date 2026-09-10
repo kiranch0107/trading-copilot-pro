@@ -143,25 +143,23 @@ one to do first — its date math (`trading_sessions_between`, the DTE countdown
 is pure and testable offline, and it is the module that can close a real
 position.
 
-## 6. Re-run the three backtest cuts on the fixed alignment
+## 6. ~~Re-run the three backtest cuts on the fixed alignment~~ — DONE 2026-09-10
 
-`results/longshort_split.md` carries every figure from runs made **before** the
-`Open`/`Date` alignment fix of 2026-09-10. The fix is a deletion and is a no-op
-on data with no interior NaN, but whether those three series had one is not
-knowable now — the bar cache is local and gitignored, and the provider is
-unreachable from the session that found it.
+Run in Codespaces on the fixed code. **All three fingerprints reproduced and
+every figure matched exactly**, so the `Open`/`Date` alignment bug was latent in
+these three series, not live:
 
-By the file's own rule, the code moved while the fingerprints did not, so the
-numbers are provisional. The re-run is a cache replay, not a refetch:
+| run | fingerprint | expectancy |
+|---|---|---:|
+| 7 tickers, 5y | `v2-24b0f52e1203ecd5` ✓ | +0.012 R |
+| 12 tickers, 5y | `v2-6b5c07fe41849b1c` ✓ | −0.012 R |
+| 12 tickers, 10y | `v2-e09e31d6eaf30233` ✓ | −0.048 R |
 
-```bash
-python backtest.py                                   # 7 tickers, 5y
-python backtest.py --tickers GOOGL,AVGO,AMD,NFLX,CRM,ADBE,QCOM,MU,ORCL,NOW,PANW,LRCX
-python backtest.py --years 10 --tickers GOOGL,AVGO,AMD,NFLX,CRM,ADBE,QCOM,MU,ORCL,NOW,PANW,LRCX
-```
+The runs reported `cached / 0 fetched`, so they replayed the original bars —
+inputs identical by construction, which isolates the code change cleanly.
 
-Compare fingerprints first. If they match and the numbers do not, the alignment
-bug was live in those runs; if both match, it was latent and the record stands.
+`results/longshort_split.md` is no longer provisional. The bug was still real;
+it would have fired on any series with an interior NaN.
 
 ## 7. Measure the option win rate at the TP actually traded
 

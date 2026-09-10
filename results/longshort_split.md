@@ -2,9 +2,9 @@
 
 **Date:** 2026-09-09
 **Status:** hypothesis tested and not supported. Tranche A NOT spent.
-**Re-run required before these numbers are quoted again — see the banner below.**
+**Re-run 2026-09-10 on the fixed code: all three fingerprints and every figure reproduced exactly. Confirmed, not provisional.**
 
-> ### ⚠️ EVERY FIGURE BELOW PREDATES AN ALIGNMENT FIX, 2026-09-10
+> ### ✅ RE-RUN AND CONFIRMED — the alignment bug was latent here, 2026-09-10
 >
 > `backtest.run()` re-attached each bar's `Open` and `Date` with
 > `raw.tail(len(df))`, which is correct only if `compute()` drops rows
@@ -32,11 +32,28 @@
 > figures are **provisional until re-run**, and the re-run is cheap: the cache
 > makes it a replay, not a refetch.
 >
-> **The conclusions are unlikely to move, and that is not the same as verified.**
-> The direction is supported by a separate 591-trade OOS failure, and a
-> mis-paired Open is noise rather than a directional bias. But "probably fine"
-> is the argument this file exists to refuse. Treat −0.048 R as unconfirmed until
-> `python backtest.py --years 10 --tickers …` has been re-run on the fixed code.
+> **RESOLVED — all three cuts were re-run on the fixed code, 2026-09-10.**
+>
+> | run | fingerprint | expectancy | verdict |
+> |---|---|---:|---|
+> | 7 tickers, 5y | `v2-24b0f52e1203ecd5` ✓ | +0.012 R | reproduced exactly |
+> | 12 tickers, 5y | `v2-6b5c07fe41849b1c` ✓ | −0.012 R | reproduced exactly |
+> | 12 tickers, 10y | `v2-e09e31d6eaf30233` ✓ | −0.048 R | reproduced exactly |
+>
+> Not only the headline expectancies — every derived figure matched: the
+> per-side counts and CIs, the gapped-fill counts (8 / 17 / 42, with the same
+> stop/target split), the hold profile (17.9% / 17.5% / 17.2%), and every
+> concentration leave-one-out. The runs read `12 cached / 0 fetched`, so they
+> replayed the ORIGINAL bars rather than refetching — the inputs are
+> byte-identical by construction and the comparison isolates the code change
+> exactly. A fresh fetch would have been weaker evidence.
+>
+> **So the figures below are confirmed, and this file is no longer provisional.**
+>
+> What it does NOT mean: the bug was not real. It would have mis-paired the
+> entry price on any series carrying an interior NaN — one missing Volume value
+> deletes 20 rows — and these three simply never met one. The fix and the
+> invariant stand on their own; the record survives them.
 >
 > Pinned by `consistency_check.check_compute_preserves_alignment()`.
 
