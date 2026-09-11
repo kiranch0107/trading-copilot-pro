@@ -376,6 +376,17 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
         "filled": True, "trend": trend, "outcome": outcome,
         "censored": bool(censored and outcome == "timeout"),
         "r": r_multiple, "rr_planned": trade["rr"],
+        # Relative volume AT THE SIGNAL BAR. signal_i's bar has closed by the
+        # time we act — entry is signal_i + 1's open — so this is knowable
+        # before the trade, not after. Reading it at entry_i instead would be
+        # lookahead: that bar is still forming when the decision is made.
+        # Carried on the trade so rvol_retest.py can bucket without re-running
+        # the backtest per threshold, which is what adx_retest had to do.
+        "rvol": (float(df["Volume"].iloc[signal_i]
+                       / df["VOL_AVG20"].iloc[signal_i])
+                 if {"Volume", "VOL_AVG20"} <= set(df.columns)
+                 and float(df["VOL_AVG20"].iloc[signal_i]) > 0
+                 else None),
         "hold": exit_i - entry_i,
         "entry_date": df["Date"].iloc[entry_i] if "Date" in df.columns else entry_i,
     }

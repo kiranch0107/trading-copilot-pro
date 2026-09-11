@@ -851,6 +851,7 @@ IMPORTABLE_MODULES = [
     "oos_validate", "data_reservation", "excursion_analysis", "churn_tracker",
     "universe_backtest", "option_backtest", "liquidity_check", "vrp_check",
     "spread_backtest", "power_check", "adx_retest", "pead_study",
+    "rvol_retest",
 ]
 
 

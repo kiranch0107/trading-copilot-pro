@@ -133,6 +133,9 @@ jobs:
       - name: adx_retest.py — Holm correction, dose-response, sample floor
         run: python adx_retest.py --selftest
 
+      - name: rvol_retest.py — RVOL bucketing, live-gate clause, no lookahead
+        run: python rvol_retest.py --selftest
+
       - name: pead_study.py — entry timing, SUE lookahead, cohort clustering
         run: python pead_study.py --selftest
 
