@@ -472,6 +472,33 @@ reversed.
 
 ---
 
+## 16. The record is verified on current code — with the fix proven live
+
+`record_recheck.py`, run 2026-09-11. All three recorded cuts reproduce exactly,
+**and the 2026-09-10 gap-fill scoring fix demonstrably fired**: 8 / 17 / 42
+setups rejected across the cuts, 67 in total.
+
+The arithmetic closes the question that started this: recorded trades equal
+passed-gates minus rejections in every cut (426−8=418, 701−17=684,
+1428−42=1386). If the 04:21 re-run on 2026-09-10 had missed the 03:23 fixes, the
+record would carry the pre-rejection counts. It does not.
+
+**Two predictions of mine were wrong and are recorded as such:**
+
+1. I expected CODE MOVED on at least one cut, reasoning that a 1,386-trade
+   sample must contain rescored fills. All three confirmed.
+2. I then framed it as "three correctness bugs, all latent on these samples,
+   which suggests the data is narrower than the trade counts imply." **Wrong.**
+   The gap fix was not latent at all — it rejected 67 setups. The simpler
+   explanation was the right one: the earlier re-run genuinely picked up every
+   fix, so there was nothing left to move.
+
+Run `python record_recheck.py` after any change to `backtest.py` scoring,
+`signal_core.py`, or the price basis. It costs nothing and it is the only thing
+that distinguishes a confirmed record from a stale one.
+
+---
+
 ## Working conventions
 
 - `signal_core.py` is canonical. `consistency_check.py` enforces 22 cross-module
