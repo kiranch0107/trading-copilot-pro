@@ -138,13 +138,26 @@ def live_gate(trades: list[dict], gate: float = LIVE_GATE) -> dict | None:
     if len(hi) < 2 or len(lo) < 2:
         return None
     diff = float(hi.mean() - lo.mean())
+    # Welch standard error of the difference. The CI and the p-value MUST come
+    # from this same number.
+    #
+    # The first version did not. It built the CI from `se` but computed p from
+    # a pooled sd at min(n_hi, n_lo), which on a 897 / 2,509 split threw away
+    # the larger group's precision entirely. The two then disagreed in the live
+    # output: 95% CI [+0.015, +0.280], which clears zero, printed beside
+    # p = 0.0676, which does not. Both described one quantity and were free to
+    # contradict each other — the same defect as the "spread exceeded 15% —
+    # tightest was 13.3%" message, in statistical clothing.
     se = math.sqrt(hi.var(ddof=1) / len(hi) + lo.var(ddof=1) / len(lo))
+    z = abs(diff) / se if se > 0 else 0.0
+    p = math.erfc(z / math.sqrt(2.0))
+    # The detection threshold is a different question — "what could a sample
+    # this size have found" — so it legitimately uses a pooled sd and the
+    # smaller group, which is the binding constraint on power.
     pooled = math.sqrt((hi.var(ddof=1) + lo.var(ddof=1)) / 2)
     return {"gate": gate, "n_hi": len(hi), "n_lo": len(lo),
             "mean_hi": float(hi.mean()), "mean_lo": float(lo.mean()),
-            "diff": diff, "se": se,
-            "p": ar.t_pvalue(diff, pooled * math.sqrt(2),
-                             min(len(hi), len(lo))),
+            "diff": diff, "se": se, "p": p,
             "detectable": pw.mde(pooled, min(len(hi), len(lo))),
             "ci": (diff - 1.96 * se, diff + 1.96 * se)}
 
@@ -303,6 +316,58 @@ def selftest() -> int:
     assert g["n_hi"] == 500 and g["n_lo"] == 500, g
     assert abs(g["diff"] - 2.0) < 1e-9, g["diff"]
     print(f"live gate split  : {g['n_hi']}/{g['n_lo']} at 1.2, diff {g['diff']:+.1f} R")
+
+    # ── THE CI AND THE p MUST AGREE. This is the bug the live run exposed. ──
+    # A 95% CI that clears zero means p < 0.05, always. If the two come from
+    # different standard errors they can contradict, and the first version did
+    # exactly that in production output.
+    #
+    # The FIRST version of this guard was itself decorative. It drew random
+    # samples at a fixed shift, and every one landed far from the boundary, so
+    # CI and p agreed under the buggy formula too and the assertion never fired.
+    # Reverting the bug did not fail the suite. A guard that cannot reach the
+    # contradiction zone is not a guard.
+    #
+    # So the fixture is now CONSTRUCTED to sit in that zone, and pinned to the
+    # observed live case: 897 vs 2,509 trades, sd ~1.6, difference +0.147 R.
+    # There the Welch p is 0.030 (CI clears) while the pooled-at-min(n) p is
+    # 0.068 (CI appears not to) — the exact contradiction that was printed.
+    def _exact(n, mean, sd, seed):
+        """A sample whose mean and sd are exactly as asked, not approximately."""
+        x = np.random.default_rng(seed).normal(0, 1, n)
+        x = (x - x.mean()) / x.std(ddof=1)
+        return mean + sd * x
+
+    for n_hi, n_lo, diff_target in ((897, 2509, 0.147),    # the live case
+                                    (897, 2509, 0.120),
+                                    (897, 2509, 0.175),
+                                    (500, 3000, 0.130),
+                                    (2000, 2000, 0.000)):
+        sample = ([mk(2.0, float(v)) for v in _exact(n_hi, diff_target, 1.6, 1)] +
+                  [mk(0.5, float(v)) for v in _exact(n_lo, 0.0, 1.6, 2)])
+        g2 = live_gate(sample, gate=1.2)
+        clears = g2["ci"][0] > 0 or g2["ci"][1] < 0
+        assert clears == (g2["p"] < 0.05), (
+            f"CI and p disagree at n={n_hi}/{n_lo}, diff {g2['diff']:+.3f}: CI "
+            f"[{g2['ci'][0]:+.3f}, {g2['ci'][1]:+.3f}] "
+            f"{'clears' if clears else 'straddles'} zero but p = {g2['p']:.4f}. "
+            f"They describe one quantity and must come from one standard error")
+    # and the live case must actually BE in the contradiction zone, or this
+    # whole block is testing nothing again.
+    live = ([mk(2.0, float(v)) for v in _exact(897, 0.147, 1.6, 1)] +
+            [mk(0.5, float(v)) for v in _exact(2509, 0.0, 1.6, 2)])
+    gl = live_gate(live, gate=1.2)
+    assert gl["ci"][0] > 0 and gl["p"] < 0.05, (
+        f"the pinned live case must clear zero under the CORRECT formula, "
+        f"got CI {gl['ci']} p {gl['p']:.4f}")
+    _pl = 1.6
+    _buggy = ar.t_pvalue(gl["diff"], _pl * math.sqrt(2), 897)
+    assert _buggy > 0.05, (
+        f"the pinned case must be one where the BUGGY formula says p = "
+        f"{_buggy:.4f} > 0.05 while the CI clears — otherwise this fixture "
+        f"cannot catch the regression it exists for")
+    print(f"CI / p agree     : 5 constructed splits; the live 897/2509 case "
+          f"(p {gl['p']:.3f} correct vs {_buggy:.3f} buggy) is pinned")
 
     # and it must detect the SIGN, since a negative diff is the ADX finding
     flipped = [mk(2.0, -1.0)] * 500 + [mk(0.5, 1.0)] * 500

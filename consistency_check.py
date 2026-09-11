@@ -844,6 +844,50 @@ def check_journal_and_sizing_guards() -> None:
 # app.py is excluded on purpose: importing it executes the whole Streamlit
 # script body, which renders the UI and makes live Yahoo calls. CI compiles it
 # instead (see tests.yml).
+def check_no_stale_tranche_notes() -> None:
+    """
+    A SPENT tranche must not carry a note calling itself held-out.
+
+    THE BUG THIS PINS, 2026-09-11. The lock file's `spent` flag said tranche B
+    was consumed on 2026-09-02 (live alerts had been firing on its names), while
+    its `note` field still read "Second held-out set. Do not touch until A is
+    spent." A session read the note, not the flag, and planned a confirmation
+    run on 48 tickers believing 32 of them were clean. The power estimate built
+    on that was wrong by a factor of three.
+
+    Two fields describing one fact, free to disagree — the same defect as the
+    "spread exceeded 15%, tightest was 13.3%" message and the CI/p mismatch in
+    rvol_retest. The flag is the truth; the note is prose that nobody updates.
+    """
+    import json
+    import os
+    path = "data_reservation.lock.json"
+    if not os.path.exists(path):
+        print("  no reservation lock — nothing to check")
+        return
+    lock = json.load(open(path, encoding="utf-8"))
+    claims = ("held-out", "held out", "do not touch", "unspent", "pristine")
+    bad = []
+    for name, tr in lock.get("reserved", {}).items():
+        if not tr.get("spent"):
+            continue
+        note = (tr.get("note") or "").lower()
+        # A corrected note may QUOTE the old claim; the marker is what counts.
+        if "spent" in note.split(".")[0]:
+            continue
+        if any(c in note for c in claims):
+            bad.append((name, tr.get("note")))
+    if bad:
+        raise AssertionError(
+            "A SPENT tranche still describes itself as held-out:\n" +
+            "\n".join(f"    {n}: {note}" for n, note in bad) +
+            "\n  The `spent` flag is the truth and the note is stale prose. "
+            "Reading the note instead of the flag is how a confirmation run "
+            "got planned on 32 contaminated tickers.")
+    n_spent = sum(1 for t in lock.get("reserved", {}).values() if t.get("spent"))
+    print(f"  no spent tranche claims to be held-out ({n_spent} spent)")
+
+
 IMPORTABLE_MODULES = [
     "signal_core", "data_source", "rate_limit", "market_context", "gh_sync",
     "journal_store", "bar_cache", "risk_params", "notify",
@@ -1458,6 +1502,7 @@ CHECKS = [
     ("reservation lock agrees with itself",        check_reservation_self_consistent),
     ("weekly filter off while rules diverge",      check_weekly_rule_parity),
     ("unsettled-bar decision has one source",      check_unsettled_bar_single_source),
+    ("no spent tranche claims to be held-out",     check_no_stale_tranche_notes),
     ("every production module imports",            check_modules_import),
 ]
 
