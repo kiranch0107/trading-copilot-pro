@@ -319,6 +319,44 @@ def selftest() -> int:
         f"the bottom bucket with trades that have no volume data")
     print("missing RVOL     : dropped and counted, never coerced to 0.0")
 
+    # ── WIRING: main()'s real path, with backtest.run stubbed ──
+    # Everything above exercises bucket_by_rvol() and live_gate(). None of it
+    # would notice that main() calls a signature that does not exist — which is
+    # precisely what happened in adx_retest.py, where the recommended command
+    # crashed on an AttributeError while every selftest passed.
+    import contextlib, io, sys as _sys
+    import backtest as _bt
+
+    assert hasattr(_bt, "run"), "backtest.run must exist"
+    calls = []
+    def _fake_run(cfg):
+        calls.append(cfg["adx_min"])
+        g = np.random.default_rng(11)
+        return [{"r": float(g.normal(0, 1)), "rvol": float(g.uniform(0.3, 3.0)),
+                 "trend": "Bullish", "hold": 5} for _ in range(3000)]
+
+    real_run, real_argv = _bt.run, _sys.argv
+    try:
+        _bt.run = _fake_run
+        _sys.argv = ["rvol_retest.py", "--tickers", "AAPL"]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            rc = main()
+    finally:
+        _bt.run, _sys.argv = real_run, real_argv
+
+    assert calls == [0.0], (
+        f"main() must run the UNFILTERED baseline (adx_min 0), got {calls} — "
+        f"filtering first would shrink the sample for a gate already shown not "
+        f"to help")
+    assert rc in (0, 1), f"main() must return a verdict code, got {rc}"
+    body = out.getvalue()
+    assert "RELATIVE VOLUME" in body, "main() must print the report"
+    assert "THE LIVE GATE" in body, (
+        "clause 4 must appear — it is the only clause that can change live code")
+    print(f"main() wiring    : ran at adx_min {calls[0]:g}, printed the report "
+          f"and clause 4, exit {rc}")
+
     print("=" * 70)
     print("All self-tests passed.")
     return 0
