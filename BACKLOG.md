@@ -439,6 +439,39 @@ literature — made openly, not smuggled in via an underpowered backtest.
 
 ---
 
+## 15. RVOL refuted, tranche A spent, no clean data remains
+
+`results/rvol_confirm_run1.md`. The ρ = +0.90 dose-response that looked like
+this project's first real finding was an artifact of the 12 tickers it was found
+on. On 16 clean held-out tickers it is **ρ = −0.10**; on the broader
+supplements, −0.90 and −0.70. The primary test cleared its pre-registered
+sample floor (1,145 against ~1,060), so this is a genuine negative.
+
+**Two lessons worth carrying, both about the guards rather than the result:**
+
+1. **Dose-response did not prevent this — it was passed by the artifact.** Only
+   held-out data caught it. Dose-response killed ADX without spending a tranche;
+   only a tranche could kill RVOL. Both guards were necessary, neither
+   sufficient.
+2. **The lowest-volume bucket came back +0.118 R at p = 0.030** — the only
+   nominally significant cell, and the opposite of the hypothesis. Fishing would
+   now produce "low relative volume predicts returns." The pre-registered bar is
+   the only reason that did not happen.
+
+**No clean data remains.** Tranche A and B are both spent. Any future hypothesis
+is judged on contaminated data or not at all. Read alongside item 14: the
+verifiability screen already found the public factor literature fails on Sharpe
+before a line is written. The programme has exhausted both its candidate ideas
+and its capacity to test new ones.
+
+`volume_mult = 1.2` is **not** recommended for removal. It sets the "Strong" tag
+(with an RSI extreme), not whether a signal fires, and what was measured is RVOL
+alone rather than the conjunction. A null licenses neither keeping nor removing;
+removing a gate on a non-significant negative is the ADX-35 error with the sign
+reversed.
+
+---
+
 ## Working conventions
 
 - `signal_core.py` is canonical. `consistency_check.py` enforces 22 cross-module
