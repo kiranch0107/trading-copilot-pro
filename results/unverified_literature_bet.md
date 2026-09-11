@@ -21,7 +21,15 @@ Not "factors work." Something narrower and checkable-in-principle:
 > low-volatility, momentum and trend are real and persist at a magnitude
 > materially above zero, net of the costs of the chosen implementation.
 
-**FILL IN — which specific premia, and via which instruments.**
+**SET 2026-09-11: the value premium**, on the grounds in §5 — it is the only
+candidate whose mechanism has a published, freely available observable, and the
+only one this project holds no contrary evidence against.
+
+**Instrument: FILL IN.** A broad, low-cost, long-only value fund. The specific
+vehicle is the owner's choice and this repo is not competent to name one; what
+it can say is what to check — expense ratio, how the fund defines "value", and
+its realised tracking error against a broad index, since §6's reasoning depends
+on that tracking error being of the order of 4–5%/yr rather than much larger.
 
 ## 2. Honest evidence grade
 
@@ -141,12 +149,10 @@ published, freely available observable.
 - **Threshold — SET 2026-09-11: the 15th percentile.** The mechanism is
   declared broken when the value spread sits **below the 15th percentile of its
   own history**. Chosen before entering, which is the only time it counts.
-- **Persistence — STILL OPEN.** A percentile alone is not a rule. A spread can
-  touch the 15th percentile for one noisy quarter and rebound. Without a
-  persistence requirement the trigger fires on noise, which is the failure this
-  section was written to prevent. **FILL IN — how many consecutive quarterly
-  readings below the 15th percentile constitute "broken". Two is a reasonable
-  floor; one is not a rule.**
+- **Persistence — SET 2026-09-11: three consecutive quarters.** The mechanism
+  is declared broken only when the spread reads below the 15th percentile on
+  **three consecutive quarterly observations** — roughly nine months of
+  sustained compression. One quarter is noise; three is a regime.
 - **Cadence**: quarterly. Frequent enough to notice a regime change, infrequent
   enough that quarter-to-quarter noise cannot trigger it.
 
@@ -200,8 +206,51 @@ An unverified bet should not be sized like a verified one. This repo has one
 measured, reproduced result (`vrp_check`: +3.63 vol points, 11/11 years) and it
 still did not license trading, because the harvest failed separately.
 
-**FILL IN — allocation, stated as a fraction of the account, with the reasoning
-for why that fraction and not double it.**
+**SET 2026-09-11: 50% of the account.**
+
+### Why 50% is not the contradiction it looks like
+
+The rule above says an unverified bet should not be sized like a verified one,
+and 50% appears to violate it. Decomposed, it mostly does not — and the reason
+matters more than the number.
+
+**A long-only value ETF is not 50% of factor bet.** It is two things bolted
+together:
+
+| component | size | is this the unverified part? |
+|---|---|---|
+| equity beta | ~100% of the position | **No.** This is simply being invested. |
+| value tilt | ~4.5%/yr tracking error | **Yes.** This is the bet. |
+
+At a 50% allocation the tilt contributes roughly **2.2%/yr of account-level
+variance**, against roughly **8%/yr** from the equity exposure itself. The
+unverified component is a rounding error beside the beta it rides on.
+
+**The consequence is the strongest argument in its favour: this is a low-regret
+bet.** If the value premium turns out to be exactly zero, the outcome is having
+held equities — a near-identical result to an index fund, not a loss. That is a
+genuinely different risk profile from the option structures this project
+rejected, where a wrong premise cost the whole premium.
+
+So the honest framing is: **the allocation decision here is "50% invested",
+which is an asset-allocation choice and not this document's business. The
+unverified bet is only the tilt, and it is small.**
+
+### The interaction that does bite: allocation × drawdown rule
+
+Reading A fires when the **position** is down 50%. At a 50% allocation that is
+**25% of the account** — $1,250 on $5,000 — and it liquidates the remaining
+$1,250 *after* a ~50% market fall, which is the worst available moment to sell
+equities.
+
+**The larger the allocation, the more that rule costs when it fires.** A 50%
+allocation makes Reading A *more* dangerous, not less. If the drawdown limit
+stays at Reading A, its real function is to force a sale at a market bottom, and
+that should be understood as the cost of the rule rather than discovered during
+the event.
+
+This is the one place where the two answers given interact badly, and it is
+recorded here rather than left to be found later.
 
 ## 7. What this document is not
 
@@ -210,5 +259,23 @@ record that makes an unverifiable premise *legible* — so that in a year, the
 reasoning can be audited, and so that a good run cannot be retold as
 confirmation.
 
-If §§1, 5 and 6 are left blank, the bet has not actually been made explicit and
-this file is decoration.
+### Status, 2026-09-11
+
+| section | decision |
+|---|---|
+| §1 premium | **value** |
+| §1 instrument | open — a broad, low-cost long-only value fund; check the tracking error |
+| §5 trigger | spread below the **15th percentile** for **three consecutive quarters** |
+| §5 cadence | quarterly |
+| §6 allocation | **50% of the account** |
+| drawdown limit | **−50%**, reading A or B still open, defaulting to A |
+
+The bet is made. Two items remain open and neither blocks it: the specific
+vehicle, and which drawdown reading applies.
+
+**What must not happen to this file.** It records a premise accepted *without*
+verification. A good year does not convert it into a verified result, and a bad
+year does not refute it — §4 shows both need decades before they mean anything.
+The only things that may close this bet are the §5 trigger firing, the drawdown
+limit firing as a risk control, or the owner changing their mind for a stated
+reason written here.
