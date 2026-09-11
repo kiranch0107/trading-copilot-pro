@@ -24,7 +24,7 @@
   },
   "reserved": {
     "A": {
-      "note": "First held-out set. Spend on the next completed hypothesis.",
+      "note": "SPENT 2026-09-11. No longer out-of-sample \u2014 see spent_on. (Previous note, now false: \"First held-out set. Spend on the next completed hypothesis.\")",
       "tickers": [
         "TXN",
         "INTC",
@@ -43,15 +43,17 @@
         "MCD",
         "COST"
       ],
-      "spent": false,
+      "spent": true,
       "annulled": {
         "reason": "Ledger entry 2026-08-24 'tool manual test' was written while checking that --spend worked, in the same second the lock was created (created=2026-08-24T22:50:05Z, entry at=22:50:05Z). No backtest ran on these 16 names and no result was observed, so the tranche is still out-of-sample. Corroborated by the tranche B entry of 2026-09-02, which records that A was deliberately EXCLUDED from universe.CANDIDATE_POOL so it would stay unspent \u2014 consistency_check.check_universe_not_spending_reserved() enforces that. Annulled rather than left as a reset flag, which is how a real spend would come to look pristine.",
         "at": "2026-09-10T03:33:10+00:00",
         "annulled_entries": 1
-      }
+      },
+      "spent_on": "RVOL confirmation: does the rho +0.90 dose-response and the volume_mult=1.2 gate replicate out-of-sample? Pre-registered in results/rvol_confirm_preregistration.md (commit 7cabcb4), written BEFORE any fetch. Both tranches spent together to avoid optional stopping.",
+      "spent_at": "2026-09-11T05:18:35+00:00"
     },
     "B": {
-      "note": "Second held-out set. Do not touch until A is spent and the result written down.",
+      "note": "SPENT 2026-09-02. No longer out-of-sample \u2014 see spent_on. (Previous note, now false: \"Second held-out set. Do not touch until A is spent and the result written down.\")",
       "tickers": [
         "TGT",
         "WMT",
@@ -153,7 +155,30 @@
         "COP",
         "SLB"
       ]
+    },
+    {
+      "tranche": "A",
+      "purpose": "RVOL confirmation: does the rho +0.90 dose-response and the volume_mult=1.2 gate replicate out-of-sample? Pre-registered in results/rvol_confirm_preregistration.md (commit 7cabcb4), written BEFORE any fetch. Both tranches spent together to avoid optional stopping.",
+      "at": "2026-09-11T05:18:35+00:00",
+      "tickers": [
+        "TXN",
+        "INTC",
+        "AMAT",
+        "KLAC",
+        "SNPS",
+        "CDNS",
+        "INTU",
+        "IBM",
+        "CSCO",
+        "DIS",
+        "HD",
+        "LOW",
+        "NKE",
+        "SBUX",
+        "MCD",
+        "COST"
+      ]
     }
   ],
-  "state_hash": "5098d8761149c10d"
+  "state_hash": "a81e419ea937db6e"
 }

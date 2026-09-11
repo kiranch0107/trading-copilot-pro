@@ -5,6 +5,38 @@ Everything below is fixed. Nothing here may be changed after the result is seen;
 that is the entire function of this document existing in git with a timestamp
 that precedes the run.
 
+## AMENDED 2026-09-11, BEFORE ANY FETCH — tranche B was already spent
+
+The first version of this document planned to spend A + B together for a +238%
+power margin. **That margin did not exist.** Tranche B was spent on
+**2026-09-02**, de facto: `universe.py`'s RS ranking had been selecting
+tranche-B names (ABT, TGT, TMO, BAC, MA, UNP) and the scanner alerted on them,
+so their outcomes were observed.
+
+The error was reading the lock file's `note` field — *"Second held-out set. Do
+not touch"* — which is stale prose, instead of the `spent` flag, which is the
+truth. The plan was built on data that is not clean.
+
+**Corrected design, fixed before anything is fetched:**
+
+| role | tickers | status | judged against the bar? |
+|---|---|---|---|
+| **PRIMARY** | tranche A (16) | genuinely clean | **yes** |
+| supplement | tranche B (32) | spent 2026-09-02 | no — descriptive only |
+| supplement | A + B (48) | mixed | no — descriptive only |
+
+**Only tranche A is judged.** B and the combined run are reported for
+information and breadth, never as the verdict. That keeps this a **single**
+pre-registered test rather than three, so there is no multiplicity to correct
+and no opportunity to quote whichever of three numbers reads best.
+
+**Why B is reported at all.** Its contamination is *"outcomes were observed in
+live alerts"*, not *"parameters were fit to this data"*. RVOL's threshold of 1.2
+comes from `signal_core.DEFAULTS`, set long before and never tuned on B; the
+buckets are equal-count. There is no pathway by which B's contamination could
+have shaped this test's result. That makes it useful evidence — just not
+out-of-sample evidence, and the distinction is preserved rather than blurred.
+
 ## What is being spent, and why both
 
 `results/rvol_run1.md` found the project's first passing dose-response
@@ -17,10 +49,12 @@ detection threshold by 0.013 R.
 | A alone | 16 | ~1,196 | +13% |
 | **A + B** | **48** | **~3,588** | **+238%** |
 
-A alone carries a 13% margin **on an estimate**. If these names fire fewer
-signals than the mega-cap set did, the confirmation lands underpowered and the
-tranche is burned for an inconclusive answer. Both are spent so that one run
-settles it either way.
+**Superseded by the amendment above.** A alone carries a 13% margin **on an
+estimate**, and that is now the whole of the clean sample. If these names fire
+fewer signals than the mega-cap set did, the primary test lands underpowered —
+and that outcome is to be reported as UNMEASURABLE rather than as negative,
+because a sample too small to see the effect says nothing about whether the
+effect exists.
 
 **A sequential spend was explicitly rejected.** "Spend A, and if inconclusive
 spend B" chooses the sample size after seeing the result — optional stopping,
@@ -73,6 +107,11 @@ Unchanged from `rvol_retest.py`:
 - **FAIL on power despite correct sign and grading.** The effect is real but
   smaller than this project can resolve with all the data it has. Recorded as
   such, and the search ends there: **there is no third tranche.**
+- **UNMEASURABLE.** If tranche A returns fewer than ~1,060 trades at RVOL ≥ 1.2,
+  the primary test could not have detected +0.147 R and is reported as
+  unmeasurable — not as a failure. The supplements may then be read for what
+  they are worth, with their contamination stated, but they do not convert into
+  a verdict.
 
 ## Binding conditions
 
