@@ -59,6 +59,8 @@ import contextlib
 import io
 import sys
 
+import re
+
 import numpy as np
 
 # ── The record, pinned. Source: results/longshort_split.md ──
@@ -110,7 +112,22 @@ def measure(cut: dict) -> dict | None:
                     break
         if fp:
             break
+    # Did the FIXED code paths actually fire on this data? "Reproduced exactly"
+    # cannot distinguish a latent fix from a dead one, and run() already counts
+    # the gapped fills the 2026-09-10 scoring fix rejects — the harness just
+    # never surfaced it. Without this, CONFIRMED is ambiguous.
+    text = buf.getvalue()
+    gap = 0
+    m = re.search(r"gapped past its levels\s*:\s*(\d+)", text)
+    if m:
+        gap = int(m.group(1))
+    passed = None
+    m2 = re.search(r"survived every gate\s*:\s*(\d+)", text)
+    if m2:
+        passed = int(m2.group(1))
+
     return {"trades": len(rs), "avg_r": float(rs.mean()), "fingerprint": fp,
+            "gapped": gap, "passed_gates": passed,
             "long_n": len(longs),
             "long_r": float(longs.mean()) if len(longs) else float("nan"),
             "short_n": len(shorts),
@@ -147,7 +164,24 @@ def compare(cut: dict, got: dict) -> tuple[str, list[str]]:
                      f"any moved number says nothing about the code")
         return ("DATA CHANGED", notes + moved)
     if not moved:
-        return ("CONFIRMED", ["fingerprint and every figure reproduce"])
+        # CONFIRMED is not one thing. If the 2026-09-10 scoring fix rejected
+        # fills on this data, the numbers reproducing is a STRONG confirmation:
+        # the fix ran, changed which setups became trades, and the survivors
+        # still score identically. If it rejected nothing, the fix was never
+        # exercised here, and this run says nothing about whether it works —
+        # only that it did not need to.
+        g = got.get("gapped", 0)
+        if g:
+            return ("CONFIRMED", [
+                "fingerprint and every figure reproduce",
+                f"and the 2026-09-10 gap-fill fix FIRED: {g} setups rejected, "
+                f"so the fixed path ran and the survivors still score the same"])
+        return ("CONFIRMED (fix not exercised)", [
+            "fingerprint and every figure reproduce",
+            "but the 2026-09-10 gap-fill fix rejected NOTHING on this data, so "
+            "this run confirms the record without testing that fix. The fix is "
+            "not dead code — backtest.py's own selftest exercises it on "
+            "synthetic bars — it simply had no qualifying trade here"])
     notes.append("fingerprint is UNCHANGED, so the data is identical and these "
                  "moves are the CODE:")
     return ("CODE MOVED", notes + moved)
@@ -179,11 +213,19 @@ def report(results: list[tuple[dict, dict | None]]) -> int:
             print(f"    {label:<14} " + fmt.format(w) + " " + fmt.format(h) + flag)
         print(f"    {'fingerprint':<14} {cut['fingerprint']:>12} "
               f"{str(got['fingerprint']):>12}")
+        g, pg = got.get("gapped", 0), got.get("passed_gates")
+        print(f"    {'gapped fills':<14} {'':>12} {g:>12}"
+              + ("   <-- the 09-10 scoring fix FIRED here" if g else
+                 "   (fix did not fire on this data)"))
+        if pg is not None:
+            print(f"    {'passed gates':<14} {'':>12} {pg:>12}")
         verdict, notes = compare(cut, got)
         print(f"\n    VERDICT: {verdict}")
         for n in notes:
             print(f"      - {n}")
-        worst = max(worst, {"CONFIRMED": 0, "CODE MOVED": 1,
+        worst = max(worst, {"CONFIRMED": 0,
+                            "CONFIRMED (fix not exercised)": 0,
+                            "CODE MOVED": 1,
                             "DATA CHANGED": 2, "INDETERMINATE": 2}[verdict])
 
     print("\n" + "=" * 78)
@@ -212,6 +254,7 @@ def selftest() -> int:
     # ── the four verdicts, each reachable ──
     same = {k: base[k] for k in ("trades", "avg_r", "long_n", "long_r",
                                  "short_n", "short_r", "fingerprint")}
+    same["gapped"] = 3          # default: the fix fired
     v, _ = compare(base, dict(same))
     assert v == "CONFIRMED", v
 
@@ -225,6 +268,21 @@ def selftest() -> int:
     assert v == "DATA CHANGED", (
         "a changed fingerprint must NOT be reported as a code change — the "
         "provider rewriting history is a different fact with a different fix")
+
+    # ── CONFIRMED must distinguish "fix fired" from "fix never ran" ──
+    # Numbers reproducing means two very different things depending on whether
+    # the fixed code path was exercised, and collapsing them is how a dead fix
+    # gets mistaken for a latent one.
+    fired = compare(base, dict(same, gapped=7))
+    assert fired[0] == "CONFIRMED" and any("FIRED" in n for n in fired[1]), fired
+    idle = compare(base, dict(same, gapped=0))
+    assert idle[0] == "CONFIRMED (fix not exercised)", idle[0]
+    assert any("rejected NOTHING" in n for n in idle[1]), idle[1]
+    assert fired[0] != idle[0], (
+        "a run where the fix rejected setups and one where it rejected none "
+        "must not report the same verdict — that is the difference between "
+        "testing the fix and merely not needing it")
+    print("fix exercised?   : CONFIRMED splits on whether the gap fix fired")
 
     v, _ = compare(base, dict(same, fingerprint=None))
     assert v == "INDETERMINATE", v
