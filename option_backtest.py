@@ -149,32 +149,55 @@ def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
 
         # 1. STOP
         if cfg["sl"] and pnl_pct <= -abs(cfg["sl"]):
-            return _result("STOP", entry_prem, mid, held, dte_left, pnl_pct)
+            return _result("STOP", entry_prem, mid, held, dte_left, pnl_pct,
+                           spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
+                           right=right, dte0=dte0)
         # 2. TARGET
         if cfg["tp"] and pnl_pct >= abs(cfg["tp"]):
-            return _result("TARGET", entry_prem, mid, held, dte_left, pnl_pct)
+            return _result("TARGET", entry_prem, mid, held, dte_left, pnl_pct,
+                           spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
+                           right=right, dte0=dte0)
         # 3. TIME
         if cfg["dte_exit"] and dte_left <= cfg["dte_exit"]:
-            return _result("TIME", entry_prem, mid, held, dte_left, pnl_pct)
+            return _result("TIME", entry_prem, mid, held, dte_left, pnl_pct,
+                           spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
+                           right=right, dte0=dte0)
         # 4. THESIS — underlying closed the wrong side of EMA20
         if cfg["use_thesis"] and "EMA20" in df.columns:
             ema20 = float(df["EMA20"].iloc[j])
             broke = (spot < ema20) if right == "CALL" else (spot > ema20)
             if broke:
-                return _result("THESIS", entry_prem, mid, held, dte_left, pnl_pct)
+                return _result("THESIS", entry_prem, mid, held, dte_left, pnl_pct,
+                               spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
+                               right=right, dte0=dte0)
 
     # Ran out of data or reached expiry — mark to intrinsic
     j = min(entry_i + dte0, n - 1)
     spot = float(df["Close"].iloc[j])
     mid = max(0.0, (spot - strike) if right == "CALL" else (strike - spot))
     pnl_pct = (mid - entry_prem) / entry_prem * 100
-    return _result("EXPIRY", entry_prem, mid, j - entry_i, 0, pnl_pct)
+    return _result("EXPIRY", entry_prem, mid, j - entry_i, 0, pnl_pct,
+                   spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
+                   right=right, dte0=dte0)
 
 
-def _result(reason, entry_prem, exit_prem, held, dte_left, pnl_pct) -> dict:
+def _result(reason, entry_prem, exit_prem, held, dte_left, pnl_pct,
+            *, spot0=None, spot_exit=None, strike=None, iv=None,
+            right=None, dte0=None) -> dict:
+    """
+    One option trade.
+
+    The entry state (spot0, strike, iv, right, dte0) is carried so the P&L can
+    be decomposed after the fact. Without it a trade records only that it lost,
+    never whether it lost to time or to direction — and those have opposite
+    remedies. option_decompose.py is the consumer; keyword-only and defaulted so
+    every existing caller and fixture keeps working.
+    """
     return {"reason": reason, "entry_prem": round(entry_prem, 2),
             "exit_prem": round(exit_prem, 2), "held": held,
-            "dte_left": dte_left, "pnl_pct": round(pnl_pct, 1)}
+            "dte_left": dte_left, "pnl_pct": round(pnl_pct, 1),
+            "spot0": spot0, "spot_exit": spot_exit, "strike": strike,
+            "iv": iv, "right": right, "dte0": dte0}
 
 
 # ══════════════════════════════════════════════════════════════════

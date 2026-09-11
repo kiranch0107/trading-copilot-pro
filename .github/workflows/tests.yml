@@ -145,6 +145,9 @@ jobs:
       - name: atr_stop_test.py — paired deltas, same-bar rate, the five clauses
         run: python atr_stop_test.py --selftest
 
+      - name: option_decompose.py — exact P&L split and the convexity null
+        run: python option_decompose.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 
