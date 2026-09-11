@@ -247,7 +247,7 @@ ranked partly on unsettled bars.
 
 ---
 
-## 10. `option_chain.py` still has no test — and it picks the contract
+## 10. ~~`option_chain.py` has no test~~ — CLOSED 2026-09-11
 
 The module that decides **which contract you buy** has no selftest. Its scoring
 blends liquidity, a volume weight and a quadratic theta penalty, and

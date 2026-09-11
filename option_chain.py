@@ -167,7 +167,8 @@ def get_full_chain_data(ticker: str, min_dte: int) -> dict:
 
 def get_option_data(ticker: str, price: float, trend: str, strength: str,
                     min_dte: int, atr_tgt_mult: float, budget_max: float,
-                    is_market_open, atr: float | None = None) -> dict:
+                    is_market_open, atr: float | None = None,
+                    chain_data: dict | None = None) -> dict:
     """
     Strike selection.
 
@@ -187,7 +188,12 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
     we size the window to ±2.0 ATR (floored/capped at sane percentage bounds);
     otherwise we fall back to fixed percentages.
     """
-    chain_data = get_full_chain_data(ticker, min_dte)
+    # chain_data is injectable so the selftest can exercise strike selection and
+    # the rejection messages offline. This module picks the contract real money
+    # is spent on and had NO test at all (BACKLOG 10) precisely because every
+    # path needed a live Yahoo chain.
+    if chain_data is None:
+        chain_data = get_full_chain_data(ticker, min_dte)
     if chain_data.get("error"):
         return {"error": chain_data["error"]}
 
@@ -216,6 +222,7 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
     # Those need different responses, so count them.
     diag = {"expiries": 0, "in_window": 0, "had_bid": 0, "had_volume": 0,
             "had_oi": 0, "spread_ok": 0, "best_spread_pct": None,
+            "tightest": None,
             "window_lo": round(lo, 2), "window_hi": round(hi, 2)}
 
     for entry in chain_data["expiries"]:
@@ -250,6 +257,26 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
             _tightest = float(_sp.min())
             if diag["best_spread_pct"] is None or _tightest < diag["best_spread_pct"]:
                 diag["best_spread_pct"] = round(_tightest, 1)
+                # Keep the CONTRACT, not just the number. "tightest was 13.3%"
+                # tells you the chain is wide; it does not tell you which strike
+                # to look at, what it costs, or how far off the gate it was.
+                # Compared on the same _sp series the minimum came from, so the
+                # row and the percentage can never disagree.
+                _row = _oi.loc[_sp.idxmin()]
+                diag["tightest"] = {
+                    "right": "CALL" if trend == "Bullish" else "PUT",
+                    "strike": round(float(_row["strike"]), 2),
+                    "expiry": expiry, "dte": dte,
+                    "bid": round(float(_row["bid"]), 2),
+                    "ask": round(float(_row["ask"]), 2),
+                    "mid": round(float(_row["mid"]), 2),
+                    "spread": round(float(_row["spread"]), 2),
+                    "spread_pct": round(_tightest, 1),
+                    "volume": int(_row.get("volume", 0)),
+                    "oi": int(_row.get("openInterest", 0)),
+                    "over_by_pct": round(
+                        _tightest - risk_params.MAX_OPTION_SPREAD_PCT, 1),
+                }
         # Require bid > 0 (mid can pass even when bid=0 on wide/illiquid strikes)
         # and volume > 0 (a zero-volume contract is untradeable regardless of OI).
         valid = opts[
@@ -330,6 +357,19 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
             why = (f"{diag['had_oi']} strikes passed liquidity but every spread "
                    f"exceeded {risk_params.MAX_OPTION_SPREAD_PCT:g}% of mid "
                    f"— tightest was {tight}%")
+            t = diag.get("tightest")
+            if t:
+                # Naming the contract is useful — it says WHERE the chain is
+                # least bad and what it would cost. It is also an invitation to
+                # trade a contract that just failed the gate, so the text says
+                # REJECTED first and states the overshoot. The number is
+                # information, not a recommendation.
+                why += (f". Tightest (REJECTED, {t['over_by_pct']:+g} pts over "
+                        f"the {risk_params.MAX_OPTION_SPREAD_PCT:g}% ceiling): "
+                        f"{t['right']} {t['strike']:g} exp {t['expiry']} "
+                        f"({t['dte']}d), bid {t['bid']:.2f} / ask {t['ask']:.2f}, "
+                        f"mid {t['mid']:.2f}, spread {t['spread']:.2f}, "
+                        f"vol {t['volume']}, OI {t['oi']}")
         else:
             why = "contracts passed the filters but none scored"
         return {"error": f"No liquid options found: {why}.", "diag": diag}
@@ -346,3 +386,104 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
             "days_needed":days_needed,
             "dte_adequate":dte >= days_needed,
             "is_budget":row["mid"]<=budget_max}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SELF-TEST — synthetic chains, no network.
+#
+# This module chooses the contract real money is spent on and had NO test at
+# all until 2026-09-11 (BACKLOG item 10). It was untestable because every path
+# fetched a live Yahoo chain; get_option_data() now accepts an injected
+# chain_data, so strike selection and every rejection message run offline.
+# ══════════════════════════════════════════════════════════════════════
+def _chain(rows, expiry="2026-10-16", dte=35):
+    """One expiry built from (strike, bid, ask, volume, oi) tuples."""
+    import pandas as _pd
+    df = _pd.DataFrame(rows, columns=["strike", "bid", "ask", "volume",
+                                      "openInterest"])
+    return {"expiries": [{"expiry": expiry, "dte": dte,
+                          "calls": df, "puts": df}]}
+
+
+def selftest() -> int:
+    print("option_chain.py selftest")
+    print("=" * 70)
+    _open = lambda: True                                        # noqa: E731
+    price = 100.0
+
+    def _pick(chain, **kw):
+        return get_option_data("TEST", price, kw.pop("trend", "Bullish"),
+                               kw.pop("strength", "Normal"), 20, 3.0,
+                               kw.pop("budget_max", 1e9), _open,
+                               atr=kw.pop("atr", None), chain_data=chain)
+
+    # ── the tightest contract reported IS the tightest, across expiries ──
+    # Two expiries; the better spread is in the SECOND one, so a version that
+    # kept the first match rather than the minimum would fail here.
+    import pandas as pd
+    wide = pd.DataFrame([(100, 1.00, 1.40, 10, 10)],
+                        columns=["strike", "bid", "ask", "volume", "openInterest"])
+    less = pd.DataFrame([(100, 1.00, 1.24, 10, 10)],
+                        columns=["strike", "bid", "ask", "volume", "openInterest"])
+    two = {"expiries": [{"expiry": "2026-10-16", "dte": 35, "calls": wide, "puts": wide},
+                        {"expiry": "2026-11-20", "dte": 70, "calls": less, "puts": less}]}
+    r = _pick(two)
+    assert "error" in r, f"both spreads are over the ceiling; expected rejection: {r}"
+    t = r["diag"]["tightest"]
+    assert t["expiry"] == "2026-11-20", (
+        f"the tightest spread is in the SECOND expiry; reported {t['expiry']}. "
+        f"Keeping the first match instead of the minimum would look correct on "
+        f"a single-expiry chain and be wrong on every real one")
+    # 1.00/1.24 -> spread 0.24, mid 1.12 -> 21.4%
+    assert abs(t["spread_pct"] - 21.4) < 0.2, t
+    assert abs(t["spread_pct"] - r["diag"]["best_spread_pct"]) < 0.2, (
+        "the reported contract and the reported percentage must come from the "
+        "same row, or the message contradicts itself")
+    print(f"tightest contract : picked from expiry 2 at {t['spread_pct']}%, "
+          f"strike {t['strike']:g}, mid {t['mid']:.2f}")
+
+    # ── the message names it, says REJECTED, and states the overshoot ──
+    msg = r["error"]
+    assert "REJECTED" in msg, (
+        "naming the tightest contract invites trading a contract that just "
+        "failed the gate — the message must say so")
+    for piece in ("CALL 100", "2026-11-20", "bid 1.00", "ask 1.24"):
+        assert piece in msg, (piece, msg)
+    assert f"{t['over_by_pct']:+g}" in msg, "the overshoot must be stated"
+    assert abs(t["over_by_pct"] - (t["spread_pct"] -
+               risk_params.MAX_OPTION_SPREAD_PCT)) < 1e-9
+    print(f"message           : names it, marks REJECTED, "
+          f"{t['over_by_pct']:+g} pts over the ceiling")
+
+    # ── the ceiling is still ENFORCED, not merely described ──
+    ok_row = _chain([(100, 1.00, 1.04, 50, 50)])       # spread 0.04 / mid 1.02 = 3.9%
+    good = _pick(ok_row)
+    assert "error" not in good, f"a 3.9% spread is inside the ceiling: {good}"
+    assert good["label"] == "CALL" and good["strike"] == 100
+    edge = _chain([(100, 1.00, 1.18, 50, 50)])         # 0.18 / 1.09 = 16.5%
+    assert "error" in _pick(edge), "a 16.5% spread must still be refused"
+    print(f"ceiling enforced  : 3.9% passes, 16.5% refused at the "
+          f"{risk_params.MAX_OPTION_SPREAD_PCT:g}% gate")
+
+    # ── tightest is only reported when something reached the spread test ──
+    no_oi = _chain([(100, 1.00, 1.40, 10, 0)])
+    r2 = _pick(no_oi)
+    assert "error" in r2 and r2["diag"]["tightest"] is None, (
+        "a contract that never passed open interest must not be offered as the "
+        "tightest — it was never eligible")
+    assert "open interest" in r2["error"]
+    print("gating order      : no-OI strikes never surface as 'tightest'")
+
+    # ── PUT side reports PUT, not CALL ──
+    bear = _pick(_chain([(100, 1.00, 1.40, 10, 10)]), trend="Bearish")
+    assert bear["diag"]["tightest"]["right"] == "PUT", bear["diag"]["tightest"]
+    print("side              : bearish rejection reports a PUT")
+
+    print("=" * 70)
+    print("All self-tests passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.exit(selftest())
