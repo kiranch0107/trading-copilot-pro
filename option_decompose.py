@@ -57,6 +57,7 @@ import sys
 
 import numpy as np
 
+import backtest as bt
 import option_backtest as ob
 import risk_params as rp
 
@@ -321,6 +322,44 @@ def selftest() -> int:
     print(f"wiring           : _result returns all {len(REQUIRED)} fields, and a "
           f"record from it decomposes")
 
+    # ── WIRING, THE PART THAT ACTUALLY BROKE: run main() end to end ──
+    # The guard above checks the record SHAPE. It said nothing about whether
+    # main() can build the cfg dicts run_ticker needs — and it could not. The
+    # first version passed sig_cfg = {} and omitted cfg["years"], so the very
+    # first ticker raised KeyError: 'adx_min' inside bt.build_signal_params()
+    # while this entire suite passed. Fake only the DOWNLOAD, so every other
+    # line on the path is the real one.
+    import pandas as pd
+    idx = pd.bdate_range("2021-01-04", periods=400)
+    rng = np.random.default_rng(7)
+    px = 100.0 * np.exp(np.cumsum(rng.normal(0.0007, 0.016, len(idx))))
+    fake = pd.DataFrame({"Date": idx, "Open": px, "High": px * 1.012,
+                         "Low": px * 0.988, "Close": px,
+                         "Volume": np.full(len(idx), 3_000_000.0)})
+    real_dl, real_argv = bt.download, sys.argv
+    calls = []
+    try:
+        bt.download = lambda tk, years, *a, **k: (calls.append((tk, years)), fake.copy())[1]
+        sys.argv = ["option_decompose.py", "--tickers", "AAA,BBB", "--years", "3"]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            rc = main()
+    finally:
+        bt.download, sys.argv = real_dl, real_argv
+
+    assert calls, "main() never reached bt.download — it failed before any data"
+    assert [c[0] for c in calls] == ["AAA", "BBB"], calls
+    assert all(c[1] == 3 for c in calls), (
+        f"cfg['years'] must reach download; got {calls} — omitting it was one of "
+        f"the two bugs this guard exists for")
+    body = out.getvalue()
+    assert rc in (0, 2), rc
+    if rc == 0:
+        assert "DECOMPOSITION" in body and "directional edge" in body.lower(), body[:400]
+        assert "carry" in body and "mirror" in body, body[:400]
+    print(f"main() wiring    : ran end to end on {len(calls)} tickers through the "
+          f"real run_ticker, exit {rc}")
+
     print("=" * 72)
     print("All self-tests passed.")
     return 0
@@ -340,10 +379,19 @@ def main() -> int:
         return selftest()
 
     tickers = [t.strip().upper() for t in a.tickers.split(",") if t.strip()]
-    cfg = dict(dte=a.dte, tp=rp.OPT_WIN_RATE_TP_PCT, sl=rp.OPT_WIN_RATE_SL_PCT,
+    # Both dicts are built exactly as option_backtest.main() builds them. The
+    # first version passed sig_cfg = {} and omitted cfg["years"], and crashed on
+    # the first ticker with KeyError: 'adx_min' — run_ticker feeds sig_cfg to
+    # bt.build_signal_params(), which reads seven keys out of it. Every selftest
+    # passed, because none of them called main(). That is the adx_retest failure
+    # repeated one function over, which is why the wiring test below now runs
+    # main() end to end against a faked download.
+    cfg = dict(years=a.years, dte=a.dte,
+               tp=rp.OPT_WIN_RATE_TP_PCT, sl=rp.OPT_WIN_RATE_SL_PCT,
                dte_exit=7, use_thesis=True, iv_mult=a.iv_mult,
-               spread_pct=a.spread_pct)
-    sig_cfg: dict = {}
+               spread_pct=a.spread_pct, cooldown_bars=bt.DEFAULTS["cooldown_bars"])
+    sig_cfg = dict(bt.DEFAULTS)
+    sig_cfg.update(tickers=tickers, years=a.years)
     trades = []
     for tk in tickers:
         print(f"  {tk} ...", file=sys.stderr)
