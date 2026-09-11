@@ -82,6 +82,23 @@ in this repo that is well powered before it runs.**
      the status quo. Changing an unattended live exit rule on a difference the
      data cannot resolve is churn dressed as research.
 
+## AMENDED 2026-09-11, BEFORE THE RUN: clause 4 is redundant
+
+Implementing the bar showed **clause 4 cannot fire**. `mde` uses z = 2.802
+(alpha 0.05 **and** power 0.80); the 95% CI half-width uses 1.96. Since
+2.802 > 1.96, any delta that passes clause 3 has already cleared zero, so
+clause 4 is implied by clause 3 and is unreachable as written.
+
+It is **kept, not removed** — it guards against a future edit that weakens
+clause 3 — and the selftest asserts the inequality that makes it redundant
+rather than pretending it fires, plus proves the branch still works when handed
+a state that reaches it.
+
+Recorded here rather than quietly dropped, and dated: this was found while
+writing the code, **before any data was seen**, so it is a clarification of the
+bar and not a change to it. The bar is unchanged in effect — clauses 1, 2, 3 and
+5 decide everything.
+
 ## What a PASS does NOT mean
 
 The system's directional edge is **−5.08%** with a CI of [−11.69, +1.52] — no

@@ -955,6 +955,7 @@ IMPORTABLE_MODULES = [
     "universe_backtest", "option_backtest", "liquidity_check", "vrp_check",
     "spread_backtest", "power_check", "adx_retest", "pead_study",
     "rvol_retest", "record_recheck", "atr_stop_test", "option_decompose",
+    "thesis_test",
 ]
 
 
