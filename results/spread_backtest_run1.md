@@ -65,7 +65,12 @@ same decade returned several times that at a comparable drawdown. **That
 comparison is now computed inside the module from the same data, not estimated
 here**, and the next run will print it as the `hold%` column.
 
-## A flaw in this run, which makes the FAIL more robust, not less
+## ~~A flaw in this run, which makes the FAIL more robust, not less~~ — THIS SECTION IS WRONG
+
+> **Superseded by the 2026-09-11 amendment below.** The claim that the run
+> under-charged costs is false for three of the four arms, and the arm it was
+> most wrong about is the iron condor. Left in place because the record of what
+> was believed matters, but do not quote it.
 
 Costs are charged as a fraction of the **net credit** (`cost_frac *
 MAX_OPTION_SPREAD_PCT * credit * n_legs`), not of each leg's own price. Real
@@ -105,6 +110,57 @@ inferences, and do not depend on sample size:
 So the strategy still fails, and the FAIL stands. But it fails on **risk and
 opportunity cost**, not on "there is no edge to find." That distinction matters
 for what gets tried next: it argues against this vehicle, not against the premium.
+
+## AMENDED 2026-09-11: the cost claim above was WRONG, and wrong in the flattering direction for the wrong arm
+
+The section "A flaw in this run, which makes the FAIL more robust, not less"
+asserted that charging costs against the net credit **under**-charged, so "the
+failure stands a fortiori". That is not true. The model was
+
+```
+cost = cost_frac * MAX_OPTION_SPREAD_PCT * NET CREDIT * n_legs
+```
+
+which is wrong in **shape**, not merely in scale: it priced the toll off a number
+no exchange quotes, and scaled it by leg *count* rather than by what those legs
+cost. Those two errors do not cancel and do not point the same way. Measured at
+SPY 650, 5% OTM, skew 20, against the corrected model (each leg's own price,
+crossing from mid at half the quoted width, charged once because these cycles are
+held to expiry):
+
+| arm | old cost/cycle | corrected | |
+|---|---:|---:|---|
+| put_spread w5 | 0.045 | 0.073 | 1.63× — genuinely under-charged |
+| put_spread w10 | 0.079 | 0.064 | 0.82× — **over**-charged |
+| iron_condor w5 | 0.199 | 0.148 | 0.74× — **over**-charged |
+| iron_condor w10 | 0.348 | 0.129 | **0.37× — over-charged 2.7×** |
+
+Only one of four arms was under-charged. The worst distortion fell on the **iron
+condor**, the structure that lost most catastrophically — because its net credit
+is large and it has four legs, so the erroneous `credit × n_legs` taxed it hardest
+precisely where the error was biggest. Part of the condor's recorded disaster was
+an artifact of the cost model.
+
+**What this does and does not change.** The direction of the arithmetic is known
+even before a re-run: the condor's toll falls by ~0.22/cycle (~$22 per contract),
+which moves a −1.38%/cycle arm to roughly −0.94%/cycle on a $5,000 account. It
+remains deeply negative with a drawdown over 100%. The put_spread w10 toll falls
+by ~0.015/cycle, moving +0.32% to roughly +0.35%/cycle — still a CI spanning zero,
+still a 33.8% drawdown against a 25% bar, still losing to holding the same dollars
+in the index. **The FAIL is expected to stand; the reasoning given for why it
+stood does not.**
+
+Exact figures require a re-run with the corrected model. Until that run exists,
+no number in the original table should be quoted as the arm's cost-adjusted
+result.
+
+**The lesson is about the guard, not the arithmetic.** The selftest had a cost
+check the whole time. It asserted that paying the bid-ask reduces the return —
+which is true under both the wrong model and the right one. It tested that cost
+was wired to *something*, never what it was charged *on*, so a green suite
+certified a model that mis-ranked the structures it existed to compare.
+
+---
 
 ## Where this leaves the thesis
 

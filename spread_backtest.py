@@ -125,6 +125,13 @@ def implied_at(base_vol: float, spot: float, strike: float, skew: float) -> floa
     return max(0.01, base_vol - skew / 100.0 * m)
 
 
+# Filling at mid and crossing to the executable side pays half the quoted width,
+# not all of it. Separate from cost_frac, which says how much of the 8% CEILING
+# a real SPY/QQQ contract's quoted spread actually is. Two different haircuts
+# that happen to share a value; conflating them is how the shape error hid.
+CROSS_FRAC = 0.5
+
+
 def _leg(spot, strike, t, base_vol, right, skew):
     return bs_price(spot, strike, t, implied_at(base_vol, spot, strike, skew),
                     right, r=RISK_FREE)
@@ -150,10 +157,12 @@ def build(structure: str, spot: float, base_vol: float, t: float,
         legs.append(("CALL", long_call, +1))
 
     credit = 0.0
+    gross = 0.0
     for right, strike, qty in legs:
         px = _leg(spot, strike, t, base_vol, right, skew)
         credit -= qty * px          # short legs (-1) add to credit
-    return {"legs": legs, "credit": credit,
+        gross += abs(px)            # what the bid-ask is actually charged on
+    return {"legs": legs, "credit": credit, "gross": gross,
             "max_loss": width - credit if structure == PUT_SPREAD
             else width - credit}
 
@@ -210,9 +219,29 @@ def run(ticker: str, *, structure: str, width: float, otm_pct: float,
         exit_spot = float(closes.iloc[i + dte])
         owed = settle(pos["legs"], exit_spot)
 
-        n_legs = len(pos["legs"])
-        # Crossing the spread on the way in and on the way out, every leg.
-        cost = cost_frac * rp.MAX_OPTION_SPREAD_PCT / 100.0 * pos["credit"] * n_legs
+        # CROSSING COST, charged per LEG against that leg's own price.
+        #
+        # The bid-ask is quoted on each contract, not on the net credit. The
+        # previous model charged
+        #     cost_frac * MAX_OPTION_SPREAD_PCT * NET CREDIT * n_legs
+        # which is wrong in shape twice over: it priced the toll off a number no
+        # exchange quotes, and it scaled by leg COUNT instead of by what those
+        # legs cost. The two errors do not cancel and do not even point the same
+        # way — measured at SPY 650, 5% OTM, skew 20, the old model charged the
+        # 5-wide put spread 0.61x of the real toll and the 10-wide condor 2.7x.
+        # A four-leg structure with a fat net credit was penalised hardest
+        # precisely because its credit was fat.
+        #
+        # MAX_OPTION_SPREAD_PCT is the ceiling on the FULL quoted width as a
+        # share of mid — option_chain.py screens on (ask - bid) / mid. These legs
+        # are priced at a Black-Scholes mid, so filling means crossing from mid to
+        # the executable side, which costs HALF that width: CROSS_FRAC.
+        #
+        # Charged ONCE. These cycles are held to expiry and settle at intrinsic,
+        # so there is no exit to cross — the old comment claimed a round trip the
+        # model never had.
+        cost = (cost_frac * rp.MAX_OPTION_SPREAD_PCT / 100.0
+                * CROSS_FRAC * pos["gross"])
         pnl = (pos["credit"] - owed - cost) * 100.0     # one contract, 100 shares
 
         cycles.append({
@@ -495,6 +524,72 @@ def selftest() -> int:
         "model is wired to nothing")
     print(f"cost model       : {free['mean_pct']:+.3f}% free -> "
           f"{paid['mean_pct']:+.3f}% after crossing")
+
+    # LIVENESS IS NOT ENOUGH. The test above passes under BOTH the old model and
+    # the corrected one — it only asks whether cost subtracts, never what it is
+    # charged on. That is exactly how the shape error survived a green suite.
+    # These three ask what it is charged on.
+
+    # ── build() exposes what the bid-ask is actually quoted against ──
+    b = build(PUT_SPREAD, 400.0, 0.20, 30 / 365, 10, 5.0, 0.0)
+    legs_px = [_leg(400.0, k, 30 / 365, 0.20, r, 0.0) for r, k, q in b["legs"]]
+    assert abs(b["gross"] - sum(abs(x) for x in legs_px)) < 1e-12, b["gross"]
+    assert b["gross"] > abs(b["credit"]), (
+        f"gross {b['gross']:.3f} must exceed the NET credit {b['credit']:.3f} — "
+        f"the legs are what carry a bid-ask, and they do not net out")
+    ic = build(IRON_CONDOR, 400.0, 0.20, 30 / 365, 10, 5.0, 0.0)
+    assert ic["gross"] > b["gross"], "four quoted legs cost more to cross than two"
+    print(f"gross            : {b['gross']:.2f} on 2 legs vs net credit "
+          f"{b['credit']:.2f}; condor {ic['gross']:.2f} on 4")
+
+    # ── the engine's toll must equal the formula, to the cent and charged ONCE ──
+    # Every cycle on the flat path builds an identical position, so the expected
+    # charge is exact rather than approximate. A stray factor of two for a
+    # round trip the model does not take would fail here.
+    expect_usd = (rp.MAX_OPTION_SPREAD_PCT / 100.0 * CROSS_FRAC
+                * build(PUT_SPREAD, 400.0, 0.20, 30 / 365, 10, 5.0, 0.0)["gross"]
+                * 100.0)
+    observed_usd = (free["mean_pct"] - paid["mean_pct"]) / 100.0 * 5000.0
+    assert abs(observed_usd - expect_usd) < 0.01, (
+        f"engine charged ${observed_usd:.4f}/cycle, formula says ${expect_usd:.4f} — "
+        f"a 2x here means an exit crossing was charged on a position held to expiry")
+    print(f"charged once     : ${observed_usd:.3f}/cycle, matching the legs and "
+          f"not a round trip")
+
+    # CROSS_FRAC is INVISIBLE to the guard above — it sits on both sides of that
+    # equation, so setting it to 1.0 keeps engine and formula in agreement and
+    # the check stays green. Found by deliberately breaking it. Pin the number
+    # to its meaning instead: a leg quoted at exactly the ceiling has
+    # ask - bid = 8% of mid, and crossing from mid to the ask pays HALF of that.
+    mid = 2.00
+    full_width = mid * rp.MAX_OPTION_SPREAD_PCT / 100.0
+    ask = mid + full_width / 2.0
+    assert abs((ask - mid) - CROSS_FRAC * full_width) < 1e-12, (
+        f"CROSS_FRAC {CROSS_FRAC} does not equal the mid-to-ask distance as a "
+        f"share of the quoted width; at a {rp.MAX_OPTION_SPREAD_PCT}% ceiling on "
+        f"a {mid:.2f} mid that distance is {ask - mid:.4f} of {full_width:.4f}")
+    print(f"CROSS_FRAC       : {CROSS_FRAC} = mid-to-ask / quoted width, pinned "
+          f"independently of the engine")
+
+    # ── THE BUG, pinned in both directions ──
+    # Charging cost_frac * pct * NET CREDIT * n_legs does not merely mis-scale;
+    # it mis-ranks. At the run's own parameters it under-charged the narrow put
+    # spread and over-charged the wide condor by more than two to one, which is
+    # why "the failure stands a fortiori" was not a safe thing to have written.
+    def _old(pos):
+        return 0.5 * rp.MAX_OPTION_SPREAD_PCT / 100.0 * pos["credit"] * len(pos["legs"])
+    def _new(pos):
+        return 0.5 * rp.MAX_OPTION_SPREAD_PCT / 100.0 * CROSS_FRAC * pos["gross"]
+    ps5 = build(PUT_SPREAD, 650.0, 0.16, 30 / 365, 5, 5.0, REALISTIC_SKEW)
+    ic10 = build(IRON_CONDOR, 650.0, 0.16, 30 / 365, 10, 5.0, REALISTIC_SKEW)
+    assert _new(ps5) > _old(ps5), (
+        f"the 5-wide put spread was UNDER-charged: old {_old(ps5):.3f} vs "
+        f"{_new(ps5):.3f}")
+    assert _new(ic10) < _old(ic10) / 2.0, (
+        f"the 10-wide condor was OVER-charged more than 2x: old {_old(ic10):.3f} "
+        f"vs {_new(ic10):.3f} — its fat net credit was the thing being taxed")
+    print(f"mis-ranking      : put w5 {_old(ps5):.3f}->{_new(ps5):.3f}, "
+          f"condor w10 {_old(ic10):.3f}->{_new(ic10):.3f}")
 
     print("=" * 70)
     print("All self-tests passed.")
