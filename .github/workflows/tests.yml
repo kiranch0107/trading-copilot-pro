@@ -142,6 +142,9 @@ jobs:
       - name: pead_study.py — entry timing, SUE lookahead, cohort clustering
         run: python pead_study.py --selftest
 
+      - name: atr_stop_test.py — paired deltas, same-bar rate, the five clauses
+        run: python atr_stop_test.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 

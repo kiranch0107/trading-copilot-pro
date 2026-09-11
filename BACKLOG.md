@@ -129,7 +129,12 @@ test completes or if sizing changes.
 
 ## 4. Open pre-registered test: the 1.5× ATR stop
 
-Not started. The one question in the research record with real power behind it.
+**Pre-registered and built; not yet run.** The rule is fixed in
+`results/atr_stop_preregistration.md` (committed before any code existed) and
+implemented in `atr_stop_test.py`, whose `verdict()` is that document clause for
+clause. Nothing here is measured until the run happens.
+
+The one question in the research record with real power behind it.
 
 ~17.5% of trades die on the bar they opened on, 84% of those lose, averaging
 −0.770 R — and `0.172 × (−0.770) + 0.828 × (+0.101) = −0.048` means that group
@@ -149,6 +154,28 @@ The only lever is a wider stop, and it moves both sides of the ledger:
 Observed win rate is 31.3%, so widening puts breakeven **above** it — while also
 raising the win rate by an unknown amount. Which effect wins is a
 pre-registered test, not an adjustment. Write the rule down before running it.
+
+The rule, as written down: stops swept at 1.0 / 1.25 / 1.5 / 2.0 × ATR with the
+target **fixed** at 3.0 ×; trades paired on `(ticker, entry_date)` so a signal
+whose outcome is unchanged contributes a delta of exactly zero; and **clause 5
+demands the destination, not the direction** — expectancy at the winning width
+must clear **zero**, because −0.048 R → −0.020 R satisfies every other clause and
+still loses money on every trade.
+
+Note the same-bar figure above is `hold == 0`, matching
+`backtest.print_hold_profile()`. `atr_stop_test.py` first counted `hold <= 1`,
+which is two bars; that is fixed, and the baseline 1.0 × arm should reproduce
+~17.2% and −0.048 R. **If it does not, that is drift, not a result.**
+
+Run (after the test lands on `main`):
+
+```bash
+python atr_stop_test.py --tickers GOOGL,AVGO,AMD,NFLX,CRM,ADBE,QCOM,MU,ORCL,NOW,PANW,LRCX --years 10
+```
+
+Standing limitation: both data tranches are spent, so a PASS licenses changing
+`atr_stop_mult` and nothing more — it is out-of-sample against nothing and stays
+a hypothesis permanently.
 
 ---
 
