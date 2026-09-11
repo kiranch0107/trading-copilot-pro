@@ -888,6 +888,65 @@ def check_no_stale_tranche_notes() -> None:
     print(f"  no spent tranche claims to be held-out ({n_spent} spent)")
 
 
+def check_backlog_coverage_table_current() -> None:
+    """
+    BACKLOG's test-coverage table must match reality.
+
+    THE PATTERN THIS PINS, which has now bitten three times in two days:
+
+      - the reservation lock said tranche B was "held-out" in `note` while its
+        `spent` flag said otherwise, and a confirmation run was planned on 32
+        contaminated tickers
+      - BACKLOG item 5's table listed option_chain.py and option_backtest.py as
+        untested for weeks after both were given tests and wired into CI
+      - item 10's body still named option_backtest.py as untested inside an item
+        already marked CLOSED
+
+    Every instance is the same shape: prose describing a fact, sitting beside the
+    fact, free to drift. Prose does not update itself, so the table is checked
+    against the filesystem instead of trusted.
+    """
+    import os
+    import re
+    if not os.path.exists("BACKLOG.md"):
+        print("  no BACKLOG.md — nothing to check")
+        return
+    doc = open("BACKLOG.md", encoding="utf-8").read()
+    wf = (open(".github/workflows/tests.yml", encoding="utf-8").read()
+          if os.path.exists(".github/workflows/tests.yml") else "")
+
+    rows = re.findall(r"^\|\s*`([\w.]+\.py)`\s*\|[^|]*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*$",
+                      doc, re.M)
+    if not rows:
+        print("  no coverage table found in BACKLOG.md")
+        return
+
+    def truthy(cell: str) -> bool:
+        return "yes" in cell.lower()
+
+    bad = []
+    for mod, claim_test, claim_ci in rows:
+        if not os.path.exists(mod):
+            bad.append(f"{mod}: named in the table but the file does not exist")
+            continue
+        src = open(mod, encoding="utf-8").read()
+        real_test = bool(re.search(r"def selftest\s*\(", src)) or "--selftest" in src
+        real_ci = f"python {mod}" in wf
+        if truthy(claim_test) != real_test:
+            bad.append(f"{mod}: table says selftest={claim_test.strip()!r}, "
+                       f"actually {real_test}")
+        if truthy(claim_ci) != real_ci:
+            bad.append(f"{mod}: table says CI={claim_ci.strip()!r}, "
+                       f"actually {real_ci}")
+    if bad:
+        raise AssertionError(
+            "BACKLOG.md's coverage table has drifted from the repository:\n" +
+            "\n".join(f"    {b}" for b in bad) +
+            "\n  The table is prose; the filesystem is the fact. Update the "
+            "table, or stop claiming coverage it cannot see.")
+    print(f"  BACKLOG coverage table matches the repo ({len(rows)} modules)")
+
+
 IMPORTABLE_MODULES = [
     "signal_core", "data_source", "rate_limit", "market_context", "gh_sync",
     "journal_store", "bar_cache", "risk_params", "notify",
@@ -1503,6 +1562,7 @@ CHECKS = [
     ("weekly filter off while rules diverge",      check_weekly_rule_parity),
     ("unsettled-bar decision has one source",      check_unsettled_bar_single_source),
     ("no spent tranche claims to be held-out",     check_no_stale_tranche_notes),
+    ("BACKLOG coverage table is current",          check_backlog_coverage_table_current),
     ("every production module imports",            check_modules_import),
 ]
 
