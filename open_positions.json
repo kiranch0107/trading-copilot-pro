@@ -18,11 +18,16 @@
     "notes": "Paper trade on 9/1",
     "opened": "2026-09-02 14:29 ET",
     "opened_epoch": 1788373742.7716753,
-    "last_check_epoch": 1789068475.2070296,
-    "status": "OPEN",
-    "exit_alerted": false,
+    "last_check_epoch": 1789138870.1235855,
+    "status": "EXIT_SIGNALLED",
+    "exit_alerted": true,
     "mode": "paper",
     "source": "unknown",
-    "traded_at": null
+    "traded_at": null,
+    "exit_reason": "TIME",
+    "exit_detail": "7 DTE left (floor 7) \u2014 theta decay accelerates from here regardless of P&L",
+    "exit_premium": 3.17,
+    "exit_pnl_pct": 36.6,
+    "exit_detected": "2026-09-11 11:01 ET"
   }
 ]
