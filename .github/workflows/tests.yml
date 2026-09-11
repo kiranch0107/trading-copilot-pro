@@ -136,6 +136,9 @@ jobs:
       - name: rvol_retest.py — RVOL bucketing, live-gate clause, no lookahead
         run: python rvol_retest.py --selftest
 
+      - name: record_recheck.py — the record's universes and drift verdicts
+        run: python record_recheck.py --selftest
+
       - name: pead_study.py — entry timing, SUE lookahead, cohort clustering
         run: python pead_study.py --selftest
 

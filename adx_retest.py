@@ -73,7 +73,19 @@ import numpy as np
 import power_check as pw
 
 DEFAULT_LEVELS = (0.0, 20.0, 25.0, 30.0, 35.0)
+# CORRECTED 2026-09-11. This list was described as "the 12-ticker cut" and is
+# not: the record's 12-ticker set is the 591-trade OOS set (see
+# record_recheck.OOS_12), which shares NO names with the 7-ticker sweep set.
+# What was actually used is all SEVEN Aug-2026 parameter-sweep tickers — ~60
+# configurations swept over them — plus five of the OOS twelve.
+#
+# The claim that ADX 25's -0.039 R "reproduces the record's -0.048 R, so the
+# engine agrees with itself" compared two different universes. RETRACTED.
+#
+# The name says what it is now. Results already recorded on it stay valid as
+# results; only the description of what they were run on was wrong.
 DEFAULT_TICKERS = "TSLA,NVDA,AAPL,MSFT,AMZN,META,SPY,GOOGL,AMD,NFLX,ORCL,CRM"
+SWEPT_MIX_12 = DEFAULT_TICKERS   # explicit alias: 7 swept + 5 OOS, NOT the OOS 12
 DEFAULT_YEARS = 10
 MIN_RHO = 0.6
 # A bucket smaller than this cannot carry the verdict, however good it looks.
