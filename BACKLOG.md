@@ -127,12 +127,32 @@ test completes or if sizing changes.
 
 ---
 
-## 4. Open pre-registered test: the 1.5× ATR stop
+## 4. ~~Open pre-registered test: the 1.5× ATR stop~~ — RUN 2026-09-11, NOT ESTABLISHED
 
-**Pre-registered and built; not yet run.** The rule is fixed in
-`results/atr_stop_preregistration.md` (committed before any code existed) and
-implemented in `atr_stop_test.py`, whose `verdict()` is that document clause for
-clause. Nothing here is measured until the run happens.
+**Result: `results/atr_stop_run1.md`.** Clauses 3 and 4 cleared; clauses 1, 2 and
+5 failed. The control reproduced the record exactly (1386 trades, −0.048 R, 17.2%
+same-bar), so the engine had not drifted and the run is interpretable.
+
+The mechanism's own predictions came true and bought nothing. Same-bar deaths
+fell 17.2% → 4.8%; win rate rose 31.3% → 45.3%; expectancy moved by +0.017 R with
+a CI of [−0.034, +0.068] against a detectable threshold of 0.073 R. Payoff fell by
+as much as win rate rose.
+
+Win rate minus breakeven at each width — −1.6, −1.1, −2.2, −0.6 points —
+reproduces each arm's expectancy to three decimals. The signal lands just under
+fair odds at every stop width, so widening only slides along an indifference
+curve. **The stop is not mis-calibrated; there is nothing for it to be
+mis-calibrated against.**
+
+Read it as UNMEASURABLE, not "no effect": only 20 of ~1390 pairs were identical,
+so the pairing halved the standard error rather than collapsing it, and an effect
+of ~+0.03 R would have gone undetected. What is ruled out is a large effect.
+
+Do **not** sweep more widths. Both tranches are spent, so nothing a sweep finds
+could be confirmed, and the indifference-curve result says the search has no
+destination.
+
+The original item, kept for the record:
 
 The one question in the research record with real power behind it.
 
