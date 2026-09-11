@@ -88,6 +88,39 @@ def effective_n(n: int, corr: float = 0.0, block: int = 1) -> float:
     return max(1.0, float(n))
 
 
+def span_tstat(mu_per_month: float, sd_per_month: float, years: float,
+               per_year: float = 12.0) -> float:
+    """
+    Expected t-statistic for a strategy observed over a fixed CALENDAR span.
+
+    Deliberately takes `per_year` and deliberately ignores it in the answer,
+    because the point is that it does not matter. Effect grows linearly with
+    time, noise with its square root, so sampling more often shrinks the
+    per-observation signal exactly as fast as it multiplies the observations.
+    Over 20 years at 0.75%/month and 6% sd, monthly / weekly / daily sampling
+    all give t = 1.936.
+
+    See tstat_is_frequency_invariant() in the selftest for the proof.
+    """
+    scale = 12.0 / per_year
+    n = years * per_year
+    mu = mu_per_month * scale
+    sd = sd_per_month * math.sqrt(scale)
+    if sd <= 0 or n < 2:
+        return float("nan")
+    return mu / (sd / math.sqrt(n))
+
+
+def years_needed(mu_per_month: float, sd_per_month: float, *,
+                 alpha: float = 0.05, power: float = 0.80) -> float:
+    """Calendar years required — the only lever that actually moves power."""
+    if mu_per_month <= 0:
+        raise SystemExit("mu_per_month must be positive; it is a size, not a sign")
+    z = _z(Z_ALPHA, alpha, "alpha") + _z(Z_POWER, power, "power")
+    months = (z * sd_per_month / mu_per_month) ** 2
+    return months / 12.0
+
+
 def mde(sd: float, n: float, *, alpha: float = 0.05, power: float = 0.80) -> float:
     """Smallest true effect this test would detect, in the units of sd."""
     return (_z(Z_ALPHA, alpha, "alpha") + _z(Z_POWER, power, "power")) \
@@ -210,6 +243,48 @@ def selftest() -> int:
     print(f"the two cases    : spread {spread_mde * 12:+.1f}%/yr detectable "
           f"(hopeless), directional {dir_mde:.3f} R (adequate)")
 
+    # ── sampling frequency buys NOTHING, which is the load-bearing claim ──
+    # Written as a test because it is counter-intuitive and because acting on
+    # the opposite belief — "rebalance weekly for 4x the data points" — is a
+    # way to feel better about an underpowered study without improving it.
+    base = span_tstat(0.75, 6.0, 20, per_year=12)
+    for per_year in (12, 52, 252, 1000):
+        t = span_tstat(0.75, 6.0, 20, per_year=per_year)
+        assert abs(t - base) < 1e-9, (
+            f"t-stat must be invariant to sampling frequency: {per_year}/yr gave "
+            f"{t:.6f} vs monthly {base:.6f}. If this ever differs, the scaling "
+            f"is wrong and the module is telling people to over-sample")
+    # ...while the three things that DO move it, move it.
+    # t grows with the SQUARE ROOT of calendar time, which is the whole reason
+    # these studies need decades. A first draft asserted "16x the time must 4x
+    # the t-stat" while comparing 80 years to 20 — that is 4x the time and so
+    # exactly 2x the t-stat, and the assertion failed on its own arithmetic.
+    # Pin the relationship rather than a remembered multiple.
+    for mult in (4, 16, 25):
+        got = span_tstat(0.75, 6.0, 20 * mult) / span_tstat(0.75, 6.0, 20)
+        assert abs(got - math.sqrt(mult)) < 1e-9, (
+            f"{mult}x the calendar time must give exactly sqrt({mult}) = "
+            f"{math.sqrt(mult):.3f}x the t-stat, got {got:.3f}")
+    assert span_tstat(0.75, 3.0, 20) > span_tstat(0.75, 6.0, 20), \
+        "halving volatility must raise it"
+    assert span_tstat(1.50, 6.0, 20) > span_tstat(0.75, 6.0, 20), \
+        "doubling the effect must raise it"
+    print(f"frequency         : t = {base:.3f} at 12, 52, 252 and 1000 obs/year "
+          f"— identical")
+
+    # ── the momentum veto, pinned as a case ──
+    # Cross-sectional momentum: 0.5-1.0%/month premium, 5-8% monthly sd.
+    # This is why it cannot be settled with the data this project can reach.
+    assert years_needed(0.75, 6.0) > 40, (
+        f"a 0.75%/month effect at 6% sd needs "
+        f"{years_needed(0.75, 6.0):.0f} years — if this ever reads as feasible, "
+        f"re-derive it before believing a momentum result")
+    assert years_needed(1.00, 5.0) < 20, \
+        "the optimistic corner should be reachable, or the bar is unfalsifiable"
+    print(f"momentum veto     : 0.75%/mo at 6% sd needs "
+          f"{years_needed(0.75, 6.0):.0f} years; the optimistic corner "
+          f"(1.0%/mo, 5% sd) needs {years_needed(1.0, 5.0):.0f}")
+
     # ── --strict must actually refuse, and only when it should ──
     import io, contextlib
     def _run(**kw):
@@ -249,11 +324,39 @@ def main() -> int:
                     help="observations per year, to annualise the answer")
     ap.add_argument("--strict", action="store_true",
                     help="exit 1 if the test cannot detect --effect")
+    ap.add_argument("--mu-month", type=float,
+                    help="expected effect per month, for a calendar-span check")
+    ap.add_argument("--sd-month", type=float,
+                    help="strategy stdev per month")
+    ap.add_argument("--span-years", type=float,
+                    help="calendar years of data available")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
 
     if a.selftest:
         return selftest()
+
+    if a.mu_month is not None and a.sd_month is not None:
+        need = years_needed(a.mu_month, a.sd_month, alpha=a.alpha, power=a.power)
+        print("=" * 72)
+        print("CALENDAR-SPAN CHECK — for a strategy measured as a periodic return")
+        print("=" * 72)
+        print(f"  effect {a.mu_month:+.3f}%/month, sd {a.sd_month:.2f}%/month")
+        print(f"  YEARS NEEDED : {need:,.0f}")
+        if a.span_years:
+            t = span_tstat(a.mu_month, a.sd_month, a.span_years)
+            print(f"  you have     : {a.span_years:,.0f} years -> expected t = {t:.2f}")
+            print()
+            if need > a.span_years:
+                print(f"  UNDERPOWERED by {need / a.span_years:.1f}x. Rebalancing more")
+                print(f"  often does NOT help — the t-stat is invariant to sampling")
+                print(f"  frequency over a fixed span. Only more calendar time, less")
+                print(f"  volatility, or a bigger effect moves it.")
+                print("=" * 72)
+                return 1 if a.strict else 0
+            print("  ADEQUATE.")
+        print("=" * 72)
+        return 0
     if a.sd is None or (a.n is None and a.effect is None):
         ap.error("need --sd, and at least one of --n / --effect")
     return report(a.sd, a.n, a.effect, alpha=a.alpha, power=a.power,

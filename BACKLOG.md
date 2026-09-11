@@ -366,6 +366,41 @@ lands. A fail is a result.
 
 ---
 
+## 13. Power check BEFORE the build, not after — now a hard rule
+
+Two studies in this repo were built and run before anyone asked whether they
+could detect the thing they were looking for:
+
+- `spread_backtest.py` — 83 cycles, detectable +18%/yr. "No CI cleared zero" was
+  read as "no edge" when it meant nothing at all.
+- `pead_study.py` — 382 paired events, detectable 2.25% against a 2-3% effect.
+  Only the negative grading rescued that verdict from being inconclusive.
+
+Momentum was the first to be checked first, and it was **vetoed without writing
+code** (`results/momentum_veto.md`): 42 years of data needed, ~20 available.
+
+The rule, in order:
+
+1. state the mechanism — who is on the other side and why do they lose?
+2. `python power_check.py` — can the available data detect the expected effect?
+3. only then write the study
+4. pre-register the bar, including a dose-response clause where the hypothesis
+   predicts one
+5. benchmark against the dumbest alternative that takes the same risk
+
+Step 2 has a calendar-span mode for anything measured as a periodic return:
+
+```
+python power_check.py --mu-month 0.75 --sd-month 6.0 --span-years 20 --strict
+```
+
+And the lesson that mode exists to deliver: **sampling more often buys no
+power.** Over a fixed span the t-statistic is identical at monthly, weekly or
+daily rebalancing. Only more calendar time, lower volatility, or a bigger effect
+moves it.
+
+---
+
 ## Working conventions
 
 - `signal_core.py` is canonical. `consistency_check.py` enforces 22 cross-module
