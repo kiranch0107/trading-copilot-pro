@@ -60,10 +60,19 @@ already-passing result was re-judged.
 The reasoning: a short put spread is net long delta. Over a decade in which the
 index roughly tripled, a positive mean is what long delta produces whether or not
 any premium was harvested. `SPY put_spread w10` returned **+26.3% over ten years
-— about 2.6%/yr — while carrying a 33.8% drawdown.** Buy-and-hold SPY over the
-same decade returned several times that at a comparable drawdown. **That
+— about 2.6%/yr — while carrying a 33.8% drawdown.** ~~Buy-and-hold SPY over the
+same decade returned several times that at a comparable drawdown.~~ **That
 comparison is now computed inside the module from the same data, not estimated
 here**, and the next run will print it as the `hold%` column.
+
+> **The `hold%` column now exists — see `results/spread_backtest_run2.md` — and
+> the struck sentence is wrong for the test clause 5 implements.** `hold%` is
+> CAPITAL-MATCHED: it holds only the dollars the spread ties up, not the whole
+> account. On that basis three of four put-spread arms BEAT it. The prose above
+> was comparing against a full-account buy-and-hold, which is a different and
+> much harder benchmark that clause 5 never ran. Clause 5 is a weaker test than
+> this section claimed, and passing it is not evidence a strategy is worth
+> running — the winning margin is 25x below what the design can detect.
 
 ## ~~A flaw in this run, which makes the FAIL more robust, not less~~ — THIS SECTION IS WRONG
 
