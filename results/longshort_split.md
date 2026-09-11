@@ -4,6 +4,28 @@
 **Status:** hypothesis tested and not supported. Tranche A NOT spent.
 **Re-run 2026-09-10 on the fixed code: all three fingerprints and every figure reproduced exactly. Confirmed, not provisional.**
 
+**RE-VERIFIED 2026-09-11 on current code, and the ambiguity is now closed.**
+`record_recheck.py` re-ran all three cuts. Every figure and every fingerprint
+reproduced again — and this time the run also reports whether the 2026-09-10
+gap-fill scoring fix actually *fired*, which the earlier confirmation could not
+distinguish from a fix that never ran:
+
+| cut | passed gates | gapped fills rejected | = trades | recorded |
+|---|---|---|---|---|
+| 7t/5y | 426 | 8 | 418 | 418 |
+| 12t/5y | 701 | 17 | 684 | 684 |
+| 12t/10y | 1,428 | 42 | 1,386 | 1,386 |
+
+**67 setups rejected across the three cuts — the fix is emphatically not
+latent.** And the arithmetic proves something the re-check was not even asked
+for: the *recorded* trade counts already equal passed-gates minus the
+rejections. Had the 04:21 run on 2026-09-10 failed to pick up the 03:23 scoring
+fixes, this record would read 426 / 701 / 1,428. It reads 418 / 684 / 1,386.
+
+So the record was produced by code that already carried the fixes, the survivors
+still score identically on today's code, and every conclusion resting on this
+document stands.
+
 > ### ✅ RE-RUN AND CONFIRMED — the alignment bug was latent here, 2026-09-10
 >
 > `backtest.run()` re-attached each bar's `Open` and `Date` with
