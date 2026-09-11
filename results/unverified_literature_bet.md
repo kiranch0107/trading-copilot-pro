@@ -138,9 +138,15 @@ published, freely available observable.
 - **The mechanism broken** looks like: the spread compressing to historical lows
   and staying there. If value is no longer cheap relative to growth, there is
   nothing left to be compensated for, regardless of what the backtests said.
-- **Threshold — FILL IN**: the spread percentile and the persistence required
-  (e.g. "below the Nth percentile of its own history for M consecutive
-  quarters"). Choose it before entering, not after a bad quarter.
+- **Threshold — SET 2026-09-11: the 15th percentile.** The mechanism is
+  declared broken when the value spread sits **below the 15th percentile of its
+  own history**. Chosen before entering, which is the only time it counts.
+- **Persistence — STILL OPEN.** A percentile alone is not a rule. A spread can
+  touch the 15th percentile for one noisy quarter and rebound. Without a
+  persistence requirement the trigger fires on noise, which is the failure this
+  section was written to prevent. **FILL IN — how many consecutive quarterly
+  readings below the 15th percentile constitute "broken". Two is a reasonable
+  floor; one is not a rule.**
 - **Cadence**: quarterly. Frequent enough to notice a regime change, infrequent
   enough that quarter-to-quarter noise cannot trigger it.
 
@@ -151,7 +157,42 @@ Performance, in either direction. §4 stands: at Sharpe 0.40 your own P&L needs
 control** — it caps loss — but it is not evidence, and it must never be
 recorded here as the thesis having failed.
 
-**FILL IN — the drawdown limit, labelled as a risk control.**
+### The drawdown limit: −50%, and what it does and does not measure
+
+**SET 2026-09-11: −50%.** Recorded with the analysis that qualifies it, because
+the number means two very different things depending on what it is measured
+against, and the choice has not been made.
+
+A long-only value ETF is roughly 100% market beta plus a small tilt. Its
+**absolute** drawdown is therefore almost entirely the market's drawdown — in a
+35% market fall, ~33–35 points of the loss is market and the factor tilt
+contributes single digits.
+
+**Reading A — absolute drawdown of the position, limit −50%.**
+Fires only in a 2008-scale event (S&P peak-to-trough: 2020 ≈ −34%, 2022 ≈ −25%,
+2008 ≈ −55%). So in twenty years it fires roughly once, and when it does it
+fires **because the market fell, not because value failed.** That is a
+market-timing rule wearing a risk-control label, and selling after a 50% market
+decline is close to the worst version of one.
+
+**Reading B — drawdown relative to the market, limit −50%.**
+This is the factor-specific measure and the more honest one: it asks how far
+value fell *behind* growth, which is the bet actually taken. But value's relative
+drawdown ran deep and long through roughly 2007–2020. A −50% relative limit would
+plausibly have fired **near the bottom — immediately before value's 2021–22
+recovery.**
+
+**Neither reading is a test of the thesis.** Reading A fires on market risk.
+Reading B fires when the bet is most stretched, which for a mean-reverting
+premium is when it is most likely to pay. That is not an argument for having no
+limit — it is precisely why the limit is a **risk control** and must never be
+recorded here as the mechanism having failed. §4 stands: at Sharpe 0.40 a live
+track record needs 49 years to be evidence.
+
+**FILL IN — which reading, A or B.** If unstated, the file defaults to reading A
+(absolute), because that is what "down 50%" ordinarily means and defaulting
+silently to the more sophisticated reading would be putting words in the owner's
+mouth.
 
 ## 6. Size it as what it is
 
