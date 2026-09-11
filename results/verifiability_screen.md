@@ -24,9 +24,23 @@ entire filter.**
 **With ~20 years of retail-accessible data, only strategies with Sharpe above
 0.63 are verifiable. With 10 years, 0.89.**
 
+> Note the convention, because it is easy to quote a weaker bar by accident.
+> `z = 2.802` is **α 0.05 AND power 0.80** — the Sharpe at which a real effect is
+> reliably *detected*, not merely the one at which it reaches significance.
+> Using `z = 1.96` (significance only) gives 0.44 at 20 years and 0.62 at 10, and
+> a strategy clearing that bar still fails to detect its own effect four times in
+> ten. **0.63 / 0.89 are this project's bar.**
+
 ## Applying it
 
-| candidate | Sharpe | years | verifiable? | and if so, harvestable? |
+> **AUDITED 2026-09-11 — the Sharpe column is UNSOURCED.** Every figure below is
+> a recalled literature estimate. None is cited, none was measured here, and
+> `grep -i sharpe *.py` returns nothing: **no module in this repo computes a
+> Sharpe ratio at all.** They are order-of-magnitude inputs to a screen, and the
+> screen's conclusions are robust to them being off by ±0.1 — but they must not
+> be quoted as findings. Two rows were wrong enough to correct in place.
+
+| candidate | Sharpe (unsourced) | years | verifiable? | and if so, harvestable? |
 |---|---|---|---|---|
 | value (HML) | 0.30 | 87 | no | — |
 | quality, low-volatility | 0.40 | 49 | no | — |
@@ -34,7 +48,26 @@ entire filter.**
 | time-series trend (CTA) | 0.50 | 31 | no | — |
 | short-term reversal | 0.80 | 12 | **yes** | **no — see below** |
 | VRP, delta-hedged | 0.90 | 10 | yes | needs daily hedging |
-| VRP, as measured here | 1.30 | 5 | **yes, and it was** | **no — beta, not premium** |
+| ~~VRP, as measured here~~ | ~~1.30~~ | ~~5~~ | ~~**yes, and it was**~~ | see correction |
+
+**The struck row claimed a measurement this project never made.** `vrp_check.py`
+measures a premium in **vol points** — VIX against SPY's forward 21-session
+realised vol. It produces no return series, so it has no Sharpe, and 1.30 cannot
+be derived from anything it reports. What the project *did* measure is the Sharpe
+of a tradeable implementation of being short that premium, and
+`results/spread_backtest_run2.md` puts it at **0.21** — below every row in this
+table, not above them.
+
+Both numbers can be right: a premium can be thick in vol points and still be
+unharvestable, which is this document's whole thesis. But the row as written said
+the opposite of the measured result and cited its own project as the source.
+
+**"beta, not premium" is now UNRESOLVED, not established.** It rested on the
+opportunity-cost argument in `spread_backtest_run1.md`, which run 2 withdrew: the
+`hold%` column — the direct test of whether beta or premium paid you — shows
+three of four put-spread arms *beating* their own capital-matched beta benchmark.
+The margins are 5–25× below what the design can detect, so this refutes nothing
+either. The honest status is that the question was never settled.
 
 The entire classic factor literature sits below the bar. That is not a criticism
 of those factors — it is why their papers use 40–90 year samples.

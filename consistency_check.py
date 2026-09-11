@@ -1539,6 +1539,52 @@ def check_unsettled_bar_single_source() -> None:
           "keeps it) and pre-open covered")
 
 
+def check_duplicated_constants_agree() -> None:
+    """
+    A CONSTANT defined in more than one module must hold the same value.
+
+    This repo has already paid for this once: the option bid-ask ceiling had five
+    copies that disagreed, and the measured option win rate had two. Those were
+    found by hand, then single-sourced. Nothing stops the next one.
+
+    Four constants are currently duplicated and all four agree:
+
+        MIN_RHO       adx_retest, pead_study          the dose-response floor
+        ALPHA         adx_retest, atr_stop_test, pead_study
+        RISK_FREE     option_backtest, spread_backtest
+        TRADING_DAYS  option_backtest, spread_backtest, vrp_check
+
+    Duplication is not itself the failure — a study module pinning its own
+    pre-registered alpha is reasonable, and forcing them into one file would
+    couple modules that should stay independent. The failure is duplication that
+    DRIFTS, so this checks agreement rather than forbidding the copies.
+    """
+    import re
+    import pathlib
+    seen: dict[str, list[tuple[str, str]]] = {}
+    for f in sorted(pathlib.Path(".").glob("*.py")):
+        if f.name == "consistency_check.py":
+            continue
+        for m in re.finditer(r"^([A-Z][A-Z0-9_]{2,})\s*=\s*([-+]?\d+\.?\d*)\s*$",
+                             f.read_text(), re.M):
+            seen.setdefault(m.group(1), []).append((f.name, m.group(2)))
+
+    dupes = {k: v for k, v in seen.items() if len(v) > 1}
+    assert dupes, (
+        "no duplicated numeric constants found at all — either every copy was "
+        "single-sourced (say so here) or this check's regex stopped matching")
+
+    for name, where in sorted(dupes.items()):
+        values = {val for _, val in where}
+        assert len(values) == 1, (
+            f"{name} disagrees across modules: "
+            + ", ".join(f"{f}={v}" for f, v in where)
+            + " — a constant with two values is the bug this check exists for")
+
+    total = sum(len(v) for v in dupes.values())
+    print(f"  {len(dupes)} constants duplicated across {total} definitions, all agreeing")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -1563,6 +1609,7 @@ CHECKS = [
     ("unsettled-bar decision has one source",      check_unsettled_bar_single_source),
     ("no spent tranche claims to be held-out",     check_no_stale_tranche_notes),
     ("BACKLOG coverage table is current",          check_backlog_coverage_table_current),
+    ("duplicated constants agree",                 check_duplicated_constants_agree),
     ("every production module imports",            check_modules_import),
 ]
 
