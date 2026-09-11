@@ -62,7 +62,21 @@ Add the 2027 NYSE holidays and 1:00pm early closes to all five. `app.py` and
 
 ---
 
-## 2. `source` back-fill — needs the user, and will not answer the question alone
+## 2. ~~`source` back-fill~~ — DONE 2026-09-11
+
+**Resolved by owner attestation: every historical trade came from a signal
+alert.** All 8 journal rows and all 15 skipped-signal rows set to
+`source: "signal"`.
+
+**They are marked as reconstructed, not captured.** Each back-filled row carries
+`source_backfilled: true`, a timestamp, and a note saying the value came from
+recollection rather than from the trade. That distinction matters: a back-filled
+provenance field that looks identical to a captured one would let a future
+session treat owner memory as evidence. Anything analysing `source` can now
+exclude reconstructed rows.
+
+The live position (opened 2026-09-11) has `source: "signal"` captured at entry,
+so the app records it going forward and no further back-fill will be needed.
 
 The mechanical signal is settled. Whether **operator discretion** adds anything
 is not, and `skipped_signals.json` is the control group for the setups actually
@@ -87,7 +101,13 @@ or it will be another discovery-set result.
 
 ---
 
-## 3. M-2 — trade state JSONs tracked in a public repo
+## 3. M-2 — trade state JSONs tracked in a public repo — DEFERRED by owner 2026-09-11
+
+**Owner has judged this low priority for now (2026-09-11).** Recorded rather
+than closed: the exposure is unchanged — `trade_journal.json` carries `pnl_usd`
+and `contracts`, and `open_positions.json` carries a live position's strike,
+expiry and entry premium, all in a public repository. Revisit if the account
+grows or the repo audience widens.
 
 `kiranch0107/trading-copilot-pro` is **public** (verified 2026-09-10). These are
 committed to it:
@@ -132,7 +152,7 @@ pre-registered test, not an adjustment. Write the rule down before running it.
 
 ---
 
-## 5. Three money-affecting modules have no tests
+## 5. ~~Three money-affecting modules have no tests~~ — CLOSED 2026-09-11
 
 Found 2026-09-10 while auditing coverage. `tests.yml` carried a comment naming
 `scanner.py`, `exit_monitor.py`, `option_chain.py`, `journal_store.py` and
@@ -141,15 +161,24 @@ the five were ever given tests.
 
 | module | what it decides | selftest | run by CI |
 |---|---|---|---|
-| `exit_monitor.py` | when to close a **live** position; runs unattended on a schedule | **added 2026-09-10** | **yes** |
-| `option_chain.py` | which contract to actually buy | none | no |
-| `option_backtest.py` | `OPT_WIN_RATE`, the input the live spread gate is derived from | none | no |
-| `liquidity_check.py` | — | none | no |
-| `universe_backtest.py` | — | none | no |
-| `rate_limit.py` | — | none | no |
+| `exit_monitor.py` | when to close a **live** position; runs unattended on a schedule | **yes** | **yes** |
+| `option_chain.py` | which contract you actually buy | **yes** | **yes** |
+| `option_backtest.py` | `OPT_WIN_RATE`, the input the live spread gate derives from | **yes** | **yes** |
+| `liquidity_check.py` | a standalone spread/liquidity report | none | no |
+| `universe_backtest.py` | compares universe-selection arms | none | no |
+| `rate_limit.py` | throttles provider calls | none | no |
 
-All are covered only by `consistency_check.py`'s import check, which proves they
-parse, not that they are right.
+**All three money-affecting modules are now tested and wired into CI**, which
+closes the item as written. The three that remain untested are not in the live
+money path: `liquidity_check.py` is a standalone report, `universe_backtest.py`
+is a research comparison, and `rate_limit.py` throttles provider calls. They are
+covered only by `consistency_check.py`'s import check, which proves they parse,
+not that they are right — worth doing, but not the hazard this item named.
+
+Verified by measurement on 2026-09-11, not by reading the table: the previous
+version of this table still listed `option_chain.py` and `option_backtest.py` as
+untested three weeks after they were given tests, which is the same stale-prose
+failure as the reservation lock's `note` field.
 
 Deliberately **not** stubbed: a shallow test on live-money code that passes
 regardless is worse than a visible gap, and the falsification pass has already
@@ -242,7 +271,7 @@ will not provide it and this project has no such source, so it is recorded rathe
 than carried silently. Treat any dynamic-beats-static result as a hypothesis
 needing survivorship-free data, not a measurement.
 
-## 9. The universe snapshot now ignores what time it ran
+## 9. ~~The universe snapshot ignores what time it ran~~ — FIXED 2026-09-10
 
 Fixed 2026-09-10, noted because it changes snapshots. `universe.fetch_history()`
 kept today's bar, whose Close is the live price and whose Volume is partial — and
@@ -274,9 +303,9 @@ contract, that `bid > 0` and `volume > 0` are enforced (a mid can pass with
 bid=0), that the theta penalty prefers a longer-dated contract when DTE is
 short, and that the tie-break is deterministic.
 
-`option_backtest.py` and `universe_backtest.py` are the other two with none.
-`option_backtest.py` matters most of the three because it produces
-`OPT_WIN_RATE` (see item 7).
+~~`option_backtest.py` and `universe_backtest.py` are the other two with none.~~
+**Stale as of 2026-09-11**: `option_backtest.py` gained a coverage-guard selftest
+and is wired into CI. Only `universe_backtest.py` still has none — see item 5.
 
 ## 11. Live weekly trend and backtested weekly trend are different rules
 
