@@ -15,9 +15,24 @@ Ordered by forcing function, not by interest.
 
 ---
 
-## 1. Market calendar runs out — CI fails 2026-11-10
+## 1. ~~Market calendar runs out — CI fails 2026-11-10~~ — DONE 2026-09-11
 
-**The only item here with a deadline.**
+**Closed with 60 days to spare.** 2027 added to all five copies; the calendar
+now ends **2027-12-24**, giving 469 days of runway. The next forcing date is
+**2027-11-09**, when runway drops under the 45-day minimum.
+
+Two edge cases the derivation caught that copying a typical year would have got
+wrong — both were computed, not recalled:
+
+- **Juneteenth 2027 falls on a Saturday** → observed Friday **2027-06-18**
+- **Christmas 2027 falls on a Saturday** → observed Friday **2027-12-24**, which
+  makes Dec 24 the *holiday itself*, so there is **no** Christmas Eve half-day
+  in 2027. A pattern-copied calendar would have listed one and marked the market
+  open-but-early on a day it is closed.
+
+2027 is therefore 10 holidays and exactly **one** half-day (2027-11-26, the day
+after Thanksgiving). July 3 is a Saturday, so no early close there either.
+
 
 `MARKET_HOLIDAYS` ends at `2026-12-25`. `consistency_check.py` sets
 `CALENDAR_MIN_RUNWAY_DAYS = 45`, so `check_calendar_runway()` starts failing
