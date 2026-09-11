@@ -193,9 +193,16 @@ def _result(reason, entry_prem, exit_prem, held, dte_left, pnl_pct,
     remedies. option_decompose.py is the consumer; keyword-only and defaulted so
     every existing caller and fixture keeps working.
     """
-    return {"reason": reason, "entry_prem": round(entry_prem, 2),
-            "exit_prem": round(exit_prem, 2), "held": held,
-            "dte_left": dte_left, "pnl_pct": round(pnl_pct, 1),
+    # NOT ROUNDED. These used to be round(entry_prem, 2) and round(pnl_pct, 1),
+    # which is a display concern stored in the record. It cost precision that a
+    # consumer cannot recover: option_decompose recomputes the P&L exactly from
+    # the entry state, and reconciling that against a 1dp pnl_pct left a 0.05%
+    # gap across 1398 trades on the first real run — a module whose whole claim
+    # is exact reconciliation, drifting on real data while reconciling perfectly
+    # on fixtures. Every reader formats with a specifier anyway.
+    return {"reason": reason, "entry_prem": entry_prem,
+            "exit_prem": exit_prem, "held": held,
+            "dte_left": dte_left, "pnl_pct": pnl_pct,
             "spot0": spot0, "spot_exit": spot_exit, "strike": strike,
             "iv": iv, "right": right, "dte0": dte0}
 
