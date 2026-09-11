@@ -16,8 +16,11 @@
     "pnl_usd": 94.0,
     "notes": "Actual",
     "mode": "live",
-    "source": "unknown",
-    "traded_at": null
+    "source": "signal",
+    "traded_at": null,
+    "source_backfilled": true,
+    "source_backfilled_at": "2026-09-11T18:52:46+00:00",
+    "source_backfill_note": "back-filled 2026-09-11 from the account owner's attestation that all historical trades came from signal alerts; NOT captured at trade time"
   },
   {
     "id": "OPT_SPY_1786725022",
@@ -36,8 +39,11 @@
     "pnl_usd": 143.0,
     "notes": "Closed on 8/13. Actual",
     "mode": "live",
-    "source": "unknown",
-    "traded_at": null
+    "source": "signal",
+    "traded_at": null,
+    "source_backfilled": true,
+    "source_backfilled_at": "2026-09-11T18:52:46+00:00",
+    "source_backfill_note": "back-filled 2026-09-11 from the account owner's attestation that all historical trades came from signal alerts; NOT captured at trade time"
   },
   {
     "id": "OPT_NVDA_1787164500",
@@ -56,8 +62,11 @@
     "pnl_usd": 11.0,
     "notes": "Sold on 8/4. Actual",
     "mode": "live",
-    "source": "unknown",
-    "traded_at": null
+    "source": "signal",
+    "traded_at": null,
+    "source_backfilled": true,
+    "source_backfilled_at": "2026-09-11T18:52:46+00:00",
+    "source_backfill_note": "back-filled 2026-09-11 from the account owner's attestation that all historical trades came from signal alerts; NOT captured at trade time"
   },
   {
     "id": "OPT_SPY_1787239810",
@@ -76,8 +85,11 @@
     "pnl_usd": -52.0,
     "notes": "Bought on 8/20. Actual",
     "mode": "live",
-    "source": "unknown",
-    "traded_at": null
+    "source": "signal",
+    "traded_at": null,
+    "source_backfilled": true,
+    "source_backfilled_at": "2026-09-11T18:52:46+00:00",
+    "source_backfill_note": "back-filled 2026-09-11 from the account owner's attestation that all historical trades came from signal alerts; NOT captured at trade time"
   },
   {
     "id": "OPT_TGT_1787687485",
@@ -111,8 +123,11 @@
     },
     "notes": "Manual on 8/27. Actual",
     "mode": "live",
-    "source": "unknown",
-    "traded_at": null
+    "source": "signal",
+    "traded_at": null,
+    "source_backfilled": true,
+    "source_backfilled_at": "2026-09-11T18:52:46+00:00",
+    "source_backfill_note": "back-filled 2026-09-11 from the account owner's attestation that all historical trades came from signal alerts; NOT captured at trade time"
   },
   {
     "id": "OPT_AAPL_1788447584",
@@ -146,15 +161,18 @@
     },
     "notes": "Paper trade, closed on trigger on 9/8",
     "mode": "paper",
-    "source": "unknown",
-    "traded_at": null
+    "source": "signal",
+    "traded_at": null,
+    "source_backfilled": true,
+    "source_backfilled_at": "2026-09-11T18:52:46+00:00",
+    "source_backfill_note": "back-filled 2026-09-11 from the account owner's attestation that all historical trades came from signal alerts; NOT captured at trade time"
   },
   {
     "id": "OPT_NVDA_1788879668",
     "date": "2026-09-08 11:01 ET",
     "closed": "2026-09-10 09:57 ET",
     "mode": "live",
-    "source": "unknown",
+    "source": "signal",
     "traded_at": null,
     "closed_at": "2026-09-10 09:57 ET",
     "ticker": "NVDA 2026-09-25 240C",
@@ -183,14 +201,17 @@
       "regime": "Bull",
       "captured": "2026-09-08 11:01 ET"
     },
-    "notes": "exit trigger on 9/10"
+    "notes": "exit trigger on 9/10",
+    "source_backfilled": true,
+    "source_backfilled_at": "2026-09-11T18:52:46+00:00",
+    "source_backfill_note": "back-filled 2026-09-11 from the account owner's attestation that all historical trades came from signal alerts; NOT captured at trade time"
   },
   {
     "id": "OPT_NKE_1788373742",
     "date": "2026-09-02 14:29 ET",
     "closed": "2026-09-11 11:59 ET",
     "mode": "paper",
-    "source": "unknown",
+    "source": "signal",
     "traded_at": null,
     "closed_at": "2026-09-11 11:59 ET",
     "ticker": "NKE 2026-09-18 40P",
@@ -205,6 +226,9 @@
     "contracts": 1.0,
     "pnl_usd": 83.0,
     "entry_features": {},
-    "notes": "Exit signal"
+    "notes": "Exit signal",
+    "source_backfilled": true,
+    "source_backfilled_at": "2026-09-11T18:52:46+00:00",
+    "source_backfill_note": "back-filled 2026-09-11 from the account owner's attestation that all historical trades came from signal alerts; NOT captured at trade time"
   }
 ]
