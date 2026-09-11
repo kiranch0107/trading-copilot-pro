@@ -79,19 +79,79 @@ So the abandonment condition **must not be performance-based.** A drawdown limit
 is still worth having, but it is a *risk control*, not evidence: it caps the
 loss, it does not tell you the premise was wrong.
 
-## 5. Valid stopping conditions — not about your returns
+## 5. Stopping condition: MECHANISM-BASED — chosen 2026-09-11
 
-- **The literature moves.** A credible failed replication of the specific premia
-  relied on, or a well-documented post-publication decay measured by others.
-- **The implementation degrades.** Fund fees rise, tracking error widens, the
-  vehicle changes mandate, or the spreads you pay materially increase.
-- **The premise changes.** The mechanism you named in §1 stops being plausible —
-  e.g. the structural reason the premium existed is arbitraged or regulated away.
-- **A pre-committed review date**, at which the above are re-examined on their
-  own merits rather than on how the position happened to perform.
+Selected over literature-watching and cost-watching. It is the right choice in
+principle and the **hardest to operationalise**, so it is specified here rather
+than left as a sentiment.
 
-**FILL IN — review cadence, and a drawdown limit stated explicitly as a risk
-control rather than as a test of the thesis.**
+### The failure mode this must avoid
+
+Mechanisms decay silently. Nobody issues a notice. **If you cannot name
+something you can actually watch, "mechanism-based" collapses into "never
+stop"** — which is worse than a performance rule, because it feels principled
+while being unfalsifiable. A mechanism-based rule is only valid if it comes with
+an observable and a threshold.
+
+### Grading the candidates by whether their mechanism is watchable
+
+| premium | mechanism | observable | suitability |
+|---|---|---|---|
+| **value** | distress-risk compensation; overextrapolation of growth | **the value spread itself** — the cheapness gap between value and growth (P/B, P/E). Published, monthly, free. | **HIGH** |
+| low-volatility | leverage constraints — investors wanting return who cannot lever bid up high-beta names | access to leverage: leveraged ETFs, 0DTE options, margin availability | MEDIUM — observable but fuzzy, and arguably **already loosened** |
+| momentum | underreaction; slow diffusion of news | speed of price adjustment to news — **which is post-earnings drift** | **MECHANISM IMPAIRED — see below** |
+| quality / profitability | contested; mispricing or a risk story | no agreed observable | LOW — cannot monitor |
+| trend / CTA | risk transfer from hedgers; behavioural | none at retail reach | LOW — cannot monitor |
+
+### Momentum is disqualified by this repo's own measurement
+
+This is the consequential finding and it came free.
+
+**Momentum and post-earnings drift rest on the same mechanism**: information
+diffuses into prices slowly, so past moves predict future moves. That is one
+claim, not two.
+
+`results/pead_run1.md` tested it at the single most information-dense event a
+stock has — an earnings surprise — across 953 events, and found **no diffusion
+at all**. The grading was scrambled (ρ = −0.30); the worst surprises earned the
+best subsequent returns.
+
+Under a mechanism-based rule, that is **direct evidence against momentum's
+premise**, measured here rather than assumed. A momentum bet would be taken
+while holding a measurement that its mechanism is not operating in reachable
+data. That is exactly the incoherence this document exists to prevent.
+
+It does not prove momentum is dead — one 5-year large-cap window is not the
+world. But a mechanism-based rule cannot ignore the one mechanism test this
+project actually ran.
+
+### The rule, stated so it can fire
+
+**Watched premium: value.** It is the only candidate whose mechanism has a
+published, freely available observable.
+
+- **Observable**: the value spread — the valuation gap between value and growth
+  (price/book or price/earnings ratio of a value index versus a growth index).
+- **The mechanism holding** looks like: a persistent, wide gap. Value is cheap
+  relative to growth because it is genuinely distressed or unloved, which is the
+  raw material the premium is paid out of.
+- **The mechanism broken** looks like: the spread compressing to historical lows
+  and staying there. If value is no longer cheap relative to growth, there is
+  nothing left to be compensated for, regardless of what the backtests said.
+- **Threshold — FILL IN**: the spread percentile and the persistence required
+  (e.g. "below the Nth percentile of its own history for M consecutive
+  quarters"). Choose it before entering, not after a bad quarter.
+- **Cadence**: quarterly. Frequent enough to notice a regime change, infrequent
+  enough that quarter-to-quarter noise cannot trigger it.
+
+### What is explicitly NOT a stopping trigger
+
+Performance, in either direction. §4 stands: at Sharpe 0.40 your own P&L needs
+49 years to say anything. A drawdown limit remains worth having as a **risk
+control** — it caps loss — but it is not evidence, and it must never be
+recorded here as the thesis having failed.
+
+**FILL IN — the drawdown limit, labelled as a risk control.**
 
 ## 6. Size it as what it is
 
