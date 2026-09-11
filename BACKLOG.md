@@ -247,7 +247,7 @@ ranked partly on unsettled bars.
 
 ---
 
-## 10. `option_chain.py` still has no test — and it picks the contract
+## 10. ~~`option_chain.py` has no test~~ — CLOSED 2026-09-11
 
 The module that decides **which contract you buy** has no selftest. Its scoring
 blends liquidity, a volume weight and a quadratic theta penalty, and
@@ -398,6 +398,29 @@ And the lesson that mode exists to deliver: **sampling more often buys no
 power.** Over a fixed span the t-statistic is identical at monthly, weekly or
 daily rebalancing. Only more calendar time, lower volatility, or a bigger effect
 moves it.
+
+---
+
+## 14. The verifiability screen — read before proposing another hypothesis
+
+`results/verifiability_screen.md`. Years needed collapses to `(z / Sharpe)^2`,
+so **Sharpe is the entire filter**. With ~20 years of reachable data the minimum
+verifiable Sharpe is **0.63**; with 10 years, 0.89.
+
+The whole classic factor literature sits below it — value 0.30, quality and
+low-vol 0.40, momentum 0.45, trend 0.50. Diversifying five of them clears the
+bar in principle (0.79 at rho 0.1), but the retail-implementable version (long-
+only factor ETFs) falls back under it: long-only captures about half the premium
+and the ETFs run rho 0.5-0.7 with each other *because they all hold the market*.
+
+**This is a stopping rule, not a menu.** Anything from the public factor
+literature fails on Sharpe before a line is written. Generating candidate #6, #7
+and #8 without a new source of edge is motion, not progress.
+
+What would genuinely reopen it: materially more capital (~$100k+, where shorting
+and long-short implementations become reachable), a different cost structure,
+data that is not free and universal, or an explicit decision to trade unverified
+literature — made openly, not smuggled in via an underpowered backtest.
 
 ---
 
