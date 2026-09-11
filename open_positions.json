@@ -29,5 +29,45 @@
     "exit_premium": 3.17,
     "exit_pnl_pct": 36.6,
     "exit_detected": "2026-09-11 11:01 ET"
+  },
+  {
+    "id": "OPT_NKE_1789142211",
+    "ticker": "NKE",
+    "right": "PUT",
+    "strike": 35.0,
+    "expiry": "2026-10-02",
+    "contracts": 1.0,
+    "entry_premium": 0.94,
+    "rules": {
+      "tp_pct": 200,
+      "sl_pct": 50,
+      "dte_exit": 7,
+      "max_hold_bars": 30,
+      "invalidate_ema": true
+    },
+    "entry_features": {
+      "adx": 23.345,
+      "rsi": 33.6839,
+      "atr": 1.0406,
+      "close": 36.62,
+      "ema20": 38.884,
+      "ema50": 40.4952,
+      "volume": 29844900.0,
+      "vol_avg20": 29111430.0,
+      "rvol": 1.025,
+      "ext_atr": -2.176,
+      "rs_20d": -0.0706,
+      "regime": "Bull",
+      "captured": "2026-09-11 11:56 ET"
+    },
+    "notes": "Actual, bought on 9/11",
+    "opened": "2026-09-11 11:56 ET",
+    "opened_epoch": 1789142211.8484905,
+    "mode": "live",
+    "source": "signal",
+    "traded_at": "2026-09-11 11:56 ET",
+    "last_check_epoch": 1789142211.8484905,
+    "status": "OPEN",
+    "exit_alerted": false
   }
 ]
