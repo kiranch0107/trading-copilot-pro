@@ -154,6 +154,9 @@ jobs:
       - name: feature_sweep.py — Holm across features, dose-response, no lookahead
         run: python feature_sweep.py --selftest
 
+      - name: conditional_test.py — stratified, two named claims, the CI clause
+        run: python conditional_test.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 
