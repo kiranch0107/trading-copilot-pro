@@ -151,6 +151,9 @@ jobs:
       - name: thesis_test.py — paired arms, confinement, and the KEEP default
         run: python thesis_test.py --selftest
 
+      - name: feature_sweep.py — Holm across features, dose-response, no lookahead
+        run: python feature_sweep.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 
