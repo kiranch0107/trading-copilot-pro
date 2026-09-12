@@ -119,6 +119,8 @@ def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
 
     spot0 = float(df["Open"].iloc[entry_i]) if "Open" in df.columns \
         else float(df["Close"].iloc[signal_i])
+    entry_date = (str(df["Date"].iloc[entry_i]) if "Date" in df.columns
+                  else f"i{entry_i}")
     right = "CALL" if trend == "Bullish" else "PUT"
 
     # IV proxy: trailing realised vol x a risk premium. Options systematically
@@ -151,17 +153,17 @@ def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
         if cfg["sl"] and pnl_pct <= -abs(cfg["sl"]):
             return _result("STOP", entry_prem, mid, held, dte_left, pnl_pct,
                            spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
-                           right=right, dte0=dte0)
+                           right=right, dte0=dte0, entry_date=entry_date)
         # 2. TARGET
         if cfg["tp"] and pnl_pct >= abs(cfg["tp"]):
             return _result("TARGET", entry_prem, mid, held, dte_left, pnl_pct,
                            spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
-                           right=right, dte0=dte0)
+                           right=right, dte0=dte0, entry_date=entry_date)
         # 3. TIME
         if cfg["dte_exit"] and dte_left <= cfg["dte_exit"]:
             return _result("TIME", entry_prem, mid, held, dte_left, pnl_pct,
                            spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
-                           right=right, dte0=dte0)
+                           right=right, dte0=dte0, entry_date=entry_date)
         # 4. THESIS — underlying closed the wrong side of EMA20
         if cfg["use_thesis"] and "EMA20" in df.columns:
             ema20 = float(df["EMA20"].iloc[j])
@@ -169,7 +171,7 @@ def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
             if broke:
                 return _result("THESIS", entry_prem, mid, held, dte_left, pnl_pct,
                                spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
-                               right=right, dte0=dte0)
+                               right=right, dte0=dte0, entry_date=entry_date)
 
     # Ran out of data or reached expiry — mark to intrinsic
     j = min(entry_i + dte0, n - 1)
@@ -178,12 +180,12 @@ def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
     pnl_pct = (mid - entry_prem) / entry_prem * 100
     return _result("EXPIRY", entry_prem, mid, j - entry_i, 0, pnl_pct,
                    spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
-                   right=right, dte0=dte0)
+                   right=right, dte0=dte0, entry_date=entry_date)
 
 
 def _result(reason, entry_prem, exit_prem, held, dte_left, pnl_pct,
             *, spot0=None, spot_exit=None, strike=None, iv=None,
-            right=None, dte0=None) -> dict:
+            right=None, dte0=None, entry_date=None) -> dict:
     """
     One option trade.
 
@@ -204,7 +206,12 @@ def _result(reason, entry_prem, exit_prem, held, dte_left, pnl_pct,
             "exit_prem": exit_prem, "held": held,
             "dte_left": dte_left, "pnl_pct": pnl_pct,
             "spot0": spot0, "spot_exit": spot_exit, "strike": strike,
-            "iv": iv, "right": right, "dte0": dte0}
+            "iv": iv, "right": right, "dte0": dte0,
+            # The identity of the SIGNAL, so consumers can pair trades across
+            # arms. thesis_test keyed on (ticker, spot0) because this field did
+            # not exist and its .get() fallback was never checked — two trades
+            # sharing an entry spot collided and one was silently dropped.
+            "entry_date": entry_date}
 
 
 # ══════════════════════════════════════════════════════════════════

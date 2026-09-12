@@ -1229,7 +1229,16 @@ def selftest() -> int:
     # never called it at all — so two fetches four minutes apart returned
     # identical row counts and different content for all 13 series.
     _today = datetime.now(_ET).date()
-    _idx = pd.bdate_range(end=pd.Timestamp(_today), periods=6)
+    # CALENDAR days, not business days. pd.bdate_range(end=<a Saturday>) ends on
+    # the FRIDAY, so on any weekend the fixture contained no today-dated bar and
+    # the assertion below fired — this selftest failed every Saturday and Sunday
+    # and nobody noticed, because CI only ever ran on weekdays. Caught 2026-09-12,
+    # a Saturday.
+    #
+    # _drop_todays_bar() compares dates against today and does not care whether
+    # the earlier rows are trading days, so calendar spacing tests exactly what
+    # this claims to test, on every day of the week.
+    _idx = pd.date_range(end=pd.Timestamp(_today), periods=6)
     _c = np.linspace(100, 105, len(_idx))
     _raw = pd.DataFrame({"Date": _idx, "Open": _c, "High": _c, "Low": _c,
                          "Close": _c, "Volume": np.full(len(_idx), 1e6)})
