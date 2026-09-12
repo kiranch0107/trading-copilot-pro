@@ -89,7 +89,17 @@ def arm(tickers: list[str], years: int, use_thesis: bool,
         for t in trades:
             if t.get("pnl_pct") is None:
                 continue
-            by_signal[(tk, str(t.get("entry_date", t.get("spot0"))))] = t
+            # Key on the SIGNAL's identity. This used to be
+            #     t.get("entry_date", t.get("spot0"))
+            # and option_backtest had no entry_date at all, so the fallback ran
+            # every time and two trades sharing an entry spot collided — one was
+            # silently dropped (1397 pairs against the decomposition's 1398).
+            # A .get() default is a guess unless the key is known to exist.
+            key = (tk, t["entry_date"])
+            assert key not in by_signal, (
+                f"two trades on the same signal {key} — the key is not unique "
+                f"and pairing would silently drop one")
+            by_signal[key] = t
     return {"use_thesis": use_thesis, "by_signal": by_signal,
             "n": len(by_signal)}
 
@@ -229,6 +239,17 @@ def selftest() -> int:
 
     def mk(reason, pnl):
         return {"reason": reason, "pnl_pct": pnl}
+
+    # The field arm() keys on must actually exist upstream. It did not: the old
+    # key used a .get() fallback that ran on every trade because the record had
+    # no entry_date, and nothing noticed until a trade count came back one short.
+    probe = ob._result("TIME", 3.0, 2.0, 4, 26, -33.3, spot0=100.0,
+                       spot_exit=101.0, strike=100.0, iv=0.2, right="CALL",
+                       dte0=30, entry_date="2024-01-05")
+    assert probe.get("entry_date") == "2024-01-05", (
+        "option_backtest._result must carry entry_date; arm() keys pairs on it "
+        "and a missing field silently collapses trades that share an entry spot")
+    print("signal identity  : _result carries entry_date, so pairs key on the signal")
 
     def arms(pairs):
         """pairs: {key: (on_reason, on_pnl, off_pnl)}"""
