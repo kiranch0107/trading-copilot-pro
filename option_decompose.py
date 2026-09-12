@@ -212,15 +212,24 @@ def selftest() -> int:
     sp = 5.0
 
     def mk(S0, Se, held, right="CALL", K=100.0, iv=0.20, dte0=30):
+        """
+        A fixture built by the PRODUCTION record builder, not by hand.
+
+        The first version assembled the dict literally, so it carried full
+        precision while ob._result was rounding pnl_pct to 1dp and entry_prem to
+        2dp. Reconciliation therefore passed on every fixture and drifted by
+        0.05% on 1398 real trades. A fixture that is more precise than the thing
+        it stands in for is not a fixture. Route it through _result so any
+        transform applied to real records is applied here too.
+        """
         t0, t1 = dte0 / ob.TRADING_DAYS, (dte0 - held) / ob.TRADING_DAYS
         mid0 = ob.bs_price(S0, K, t0, iv, right)
         entry = mid0 * (1 + sp / 200)
         exitp = ob.bs_price(Se, K, t1, iv, right) * (1 - sp / 200)
-        return {"reason": "TIME", "entry_prem": entry, "exit_prem": exitp,
-                "held": held, "dte_left": dte0 - held,
-                "pnl_pct": (exitp - entry) / entry * 100.0,
-                "spot0": S0, "spot_exit": Se, "strike": K, "iv": iv,
-                "right": right, "dte0": dte0}
+        return ob._result("TIME", entry, exitp, held, dte0 - held,
+                          (exitp - entry) / entry * 100.0,
+                          spot0=S0, spot_exit=Se, strike=K, iv=iv,
+                          right=right, dte0=dte0)
 
     # ── THE GUARD: the parts must add up to the whole ──
     cases = [(100.0, 100.0, 10), (100.0, 103.0, 10), (100.0, 97.0, 5),

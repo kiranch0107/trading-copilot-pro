@@ -148,6 +148,9 @@ jobs:
       - name: option_decompose.py — exact P&L split and the convexity null
         run: python option_decompose.py --selftest
 
+      - name: thesis_test.py — paired arms, confinement, and the KEEP default
+        run: python thesis_test.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 
