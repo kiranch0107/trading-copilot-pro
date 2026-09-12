@@ -138,6 +138,8 @@ def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
 
     # Entry cost: pay half the spread
     entry_prem = prem0 * (1 + cfg["spread_pct"] / 200)
+    feats = entry_features(df, signal_i, rv=rv, prem0=prem0, spot0=spot0,
+                           right=right)
 
     for j in range(entry_i + 1, min(entry_i + dte0 + 1, n)):
         held = j - entry_i
@@ -153,17 +155,17 @@ def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
         if cfg["sl"] and pnl_pct <= -abs(cfg["sl"]):
             return _result("STOP", entry_prem, mid, held, dte_left, pnl_pct,
                            spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
-                           right=right, dte0=dte0, entry_date=entry_date)
+                           right=right, dte0=dte0, entry_date=entry_date, features=feats)
         # 2. TARGET
         if cfg["tp"] and pnl_pct >= abs(cfg["tp"]):
             return _result("TARGET", entry_prem, mid, held, dte_left, pnl_pct,
                            spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
-                           right=right, dte0=dte0, entry_date=entry_date)
+                           right=right, dte0=dte0, entry_date=entry_date, features=feats)
         # 3. TIME
         if cfg["dte_exit"] and dte_left <= cfg["dte_exit"]:
             return _result("TIME", entry_prem, mid, held, dte_left, pnl_pct,
                            spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
-                           right=right, dte0=dte0, entry_date=entry_date)
+                           right=right, dte0=dte0, entry_date=entry_date, features=feats)
         # 4. THESIS — underlying closed the wrong side of EMA20
         if cfg["use_thesis"] and "EMA20" in df.columns:
             ema20 = float(df["EMA20"].iloc[j])
@@ -171,7 +173,7 @@ def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
             if broke:
                 return _result("THESIS", entry_prem, mid, held, dte_left, pnl_pct,
                                spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
-                               right=right, dte0=dte0, entry_date=entry_date)
+                               right=right, dte0=dte0, entry_date=entry_date, features=feats)
 
     # Ran out of data or reached expiry — mark to intrinsic
     j = min(entry_i + dte0, n - 1)
@@ -180,12 +182,55 @@ def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
     pnl_pct = (mid - entry_prem) / entry_prem * 100
     return _result("EXPIRY", entry_prem, mid, j - entry_i, 0, pnl_pct,
                    spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
-                   right=right, dte0=dte0, entry_date=entry_date)
+                   right=right, dte0=dte0, entry_date=entry_date, features=feats)
+
+
+def entry_features(df: "pd.DataFrame", signal_i: int, *, rv: float,
+                   prem0: float, spot0: float, right: str) -> dict:
+    """
+    Everything observable AT THE SIGNAL BAR, for after-the-fact analysis.
+
+    Read at `signal_i`, never at `entry_i` or later: the entry fills on the NEXT
+    bar's open, so anything read past signal_i is information the decision could
+    not have had. That is the single lookahead chokepoint for this record, kept
+    in one function so it can be checked in one place.
+
+    Consumed by feature_sweep.py. Values are NaN when a column is missing rather
+    than defaulted, because a default is indistinguishable from a measurement.
+    """
+    def at(col):
+        # A MISSING COLUMN is a missing measurement -> NaN, and the consumer
+        # drops the trade. An OUT-OF-RANGE signal_i is a bug and must raise.
+        #
+        # The first version wrapped this in `except Exception: return nan`,
+        # which turned an IndexError into a silent NaN — bt.compute() drops the
+        # indicator warmup and returns a SHORTER frame than it was handed, so a
+        # stale index would have quietly emptied every bucket instead of failing.
+        if col not in df.columns:
+            return float("nan")
+        return float(df[col].iloc[signal_i])
+
+    close = at("Close")
+    atr, ema20, ema50 = at("ATR"), at("EMA20"), at("EMA50")
+    vol, vavg = at("Volume"), at("VOL_AVG20")
+    macd, sig = at("MACD"), at("Signal")
+    return {
+        "side": 1.0 if right == "CALL" else 0.0,
+        "adx": at("ADX"),
+        "rsi": at("RSI"),
+        "atr_pct": (atr / close * 100.0) if close else float("nan"),
+        "rvol": (vol / vavg) if vavg else float("nan"),
+        "ema20_dist": ((close - ema20) / atr) if atr else float("nan"),
+        "ema_spread": ((ema20 - ema50) / close * 100.0) if close else float("nan"),
+        "macd_hist": ((macd - sig) / close * 100.0) if close else float("nan"),
+        "rv": rv * 100.0,
+        "prem_pct": (prem0 / spot0 * 100.0) if spot0 else float("nan"),
+    }
 
 
 def _result(reason, entry_prem, exit_prem, held, dte_left, pnl_pct,
             *, spot0=None, spot_exit=None, strike=None, iv=None,
-            right=None, dte0=None, entry_date=None) -> dict:
+            right=None, dte0=None, entry_date=None, features=None) -> dict:
     """
     One option trade.
 
@@ -211,7 +256,11 @@ def _result(reason, entry_prem, exit_prem, held, dte_left, pnl_pct,
             # arms. thesis_test keyed on (ticker, spot0) because this field did
             # not exist and its .get() fallback was never checked — two trades
             # sharing an entry spot collided and one was silently dropped.
-            "entry_date": entry_date}
+            "entry_date": entry_date,
+            # Entry-time observables, read at the SIGNAL bar. feature_sweep.py
+            # consumes these; empty rather than None so a consumer that forgets
+            # to check does not crash on a missing key mid-loop.
+            "features": features or {}}
 
 
 # ══════════════════════════════════════════════════════════════════
