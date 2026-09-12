@@ -315,6 +315,31 @@ def selftest() -> int:
     assert ok_b, f"a top tercile whose CI clears zero must pass: {why_b}"
     print("bar liveness     : a top tercile at +15% with CI clear of zero PASSES")
 
+    # ── clause 4's CI must read the FAVOURED end too, not always the top ──
+    # Fixing top_vs_rest left the CI still reading bk[-1], and no test caught it:
+    # every liveness fixture was high-is-good, so both ends agreed. This one is
+    # low-is-good, and reverting the CI to always-top flips the verdict.
+    lowgood = []
+    for q, target in enumerate((15.0, -10.0, -30.0)):
+        vals = rng.normal(0.0, 70.0, 300)
+        vals = vals - vals.mean() + target
+        for v in vals:
+            lowgood.append(mk(1.0, 0.0, float(q), float(v)))
+    cl = analyse(lowgood, 1.0)
+    rl = next(x for x in cl["rows"] if x["feature"] == "atr_pct")
+    assert rl["rho"] == -1.0, rl["rho"]
+    assert rl["holm"], f"fixture must clear Holm to reach clause 4, p={rl['p']:.2e}"
+    assert abs(rl["top_exp"] - 15.0) < 1.0, (
+        f"the favoured end is the BOTTOM tercile at +15, got {rl['top_exp']:+.1f}")
+    assert rl["ci"] is not None and rl["ci"][0] > 0, (
+        f"and the CI must be read on that SAME end; got {rl['ci']} — reading "
+        f"bk[-1] here returns the -30 group and fails clause 4 on a feature "
+        f"that should pass")
+    ok_l, why_l = verdict(cl)
+    assert ok_l, f"a low-is-good feature whose favoured end clears zero must pass: {why_l}"
+    print(f"clause 4 end     : low-is-good passes on its BOTTOM tercile "
+          f"{rl['top_exp']:+.1f}%, CI [{rl['ci'][0]:+.1f}, {rl['ci'][1]:+.1f}]")
+
     # ── clause 3: with 3 terciles, |rho| >= 0.6 means EXACTLY +/-1.0 ──
     assert ar.spearman([0, 1, 2], [-30.0, -10.0, 3.0]) == 1.0
     assert abs(ar.spearman([0, 1, 2], [-30.0, 3.0, -10.0])) == 0.5, \
