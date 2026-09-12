@@ -389,6 +389,13 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
                  else None),
         "hold": exit_i - entry_i,
         "entry_date": df["Date"].iloc[entry_i] if "Date" in df.columns else entry_i,
+        "exit_date": df["Date"].iloc[exit_i] if "Date" in df.columns else exit_i,
+        # FILL PRICE AND STOP, so a consumer can compute what the position was
+        # WORTH, not just what it risked. R-multiples say nothing about capital
+        # deployed: 1% risk behind a 2% stop is a 50% position, and an account
+        # cannot hold three of those. longs_only.py needs this to tell an
+        # idealised backtest apart from one a $5,000 account could actually run.
+        "entry": float(entry), "stop": float(stop),
     }
 
 

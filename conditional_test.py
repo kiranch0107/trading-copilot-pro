@@ -75,20 +75,33 @@ def terciles(rows: list[tuple[float, float]]) -> list[dict]:
     return out
 
 
-def top_vs_rest(bk: list[dict]) -> dict:
+def top_vs_rest(bk: list[dict], rho: float = 1.0) -> dict:
     """
-    Top tercile against the OTHER TWO COMBINED — not against the bottom.
+    The favoured END tercile against the OTHER TWO COMBINED.
 
-    Run 1 compared top against bottom, which is the widest possible contrast and
-    flatters any feature. The filter a trader would actually run keeps the top
-    group and discards everything else, so that is the comparison judged here.
+    WHICH end is chosen by the sign of the dose-response, not by which group
+    looks best. rho > 0 means high values are favoured, so the top tercile is
+    tested; rho < 0 means low values are, so the bottom is. That is determined by
+    the gradient across all three groups, never by picking the better number.
+
+    The first version always tested bk[-1]. atr_pct is a LOW-is-good feature
+    (rho -1.00), so run 1 of this module compared its WORST group against the
+    rest and asked whether it won. Recomputing the correct tail by hand gave
+    t 1.01, p 0.3126 — the same verdict, but arrived at by luck rather than by
+    design. Found after the run and fixed here.
+
+    Against the OTHER TWO COMBINED, not against the opposite end: the widest
+    contrast flatters any feature, and the filter a trader would actually run
+    keeps one group and discards everything else.
     """
     if len(bk) < 2:
         return {"t": float("nan"), "p": 1.0, "n_top": 0, "n_rest": 0}
-    top = bk[-1]
-    n_rest = sum(b["n"] for b in bk[:-1])
-    mean_rest = sum(b["expectancy"] * b["n"] for b in bk[:-1]) / n_rest
-    var_rest = sum((b["sd"] ** 2) * (b["n"] - 1) for b in bk[:-1]) / (n_rest - len(bk[:-1]))
+    high_is_good = not (rho == rho) or rho >= 0
+    top = bk[-1] if high_is_good else bk[0]
+    others = bk[:-1] if high_is_good else bk[1:]
+    n_rest = sum(b["n"] for b in others)
+    mean_rest = sum(b["expectancy"] * b["n"] for b in others) / n_rest
+    var_rest = sum((b["sd"] ** 2) * (b["n"] - 1) for b in others) / (n_rest - len(others))
     se = math.sqrt(top["sd"] ** 2 / top["n"] + var_rest / n_rest)
     if not (se > 0):
         return {"t": float("nan"), "p": 1.0, "n_top": top["n"], "n_rest": n_rest}
@@ -108,15 +121,17 @@ def analyse(trades: list[dict], side_value: float) -> dict:
                 for t in stratum if t.get("features")]
         usable = [(v, p) for v, p in vals if v == v]
         bk = terciles(usable) if len(usable) >= N_TERCILES else []
-        cmp_ = top_vs_rest(bk)
+        # rho FIRST: it decides which end the comparison and the CI read.
         rho = (ar.spearman([b["i"] for b in bk], [b["expectancy"] for b in bk])
                if len(bk) >= 2 else float("nan"))
-        # CI on the TOP group alone — clause 4's quantity.
+        cmp_ = top_vs_rest(bk, rho)
+        # CI on the FAVOURED group alone — clause 4's quantity, same end.
         ci = None
-        if bk and bk[-1]["n"] > 1 and bk[-1]["sd"] == bk[-1]["sd"]:
-            se = bk[-1]["sd"] / math.sqrt(bk[-1]["n"])
-            ci = (bk[-1]["expectancy"] - 1.96 * se,
-                  bk[-1]["expectancy"] + 1.96 * se)
+        if bk:
+            end = bk[-1] if (not (rho == rho) or rho >= 0) else bk[0]
+            if end["n"] > 1 and end["sd"] == end["sd"]:
+                se = end["sd"] / math.sqrt(end["n"])
+                ci = (end["expectancy"] - 1.96 * se, end["expectancy"] + 1.96 * se)
         rows.append({"feature": f, "buckets": bk, "rho": rho, "ci": ci, **cmp_})
     for r, s in zip(rows, ar.holm([r["p"] for r in rows], alpha=ALPHA)):
         r["holm"] = bool(s)
@@ -242,6 +257,27 @@ def selftest() -> int:
     print(f"top vs rest      : top {bk[-1]['expectancy']:+.0f} against "
           f"{cmp_['n_rest']} others at {cmp_['rest_exp']:+.0f}, not just the bottom")
 
+    # ── the tested END follows the GRADIENT, not the position in the list ──
+    # atr_pct is low-is-good. Always testing bk[-1] compared its WORST group
+    # against the rest and asked whether that group won. Found after run 1.
+    low_good = [{"i": 0, "n": 100, "expectancy": 0.0, "sd": 70.0},
+                {"i": 1, "n": 100, "expectancy": -20.0, "sd": 70.0},
+                {"i": 2, "n": 100, "expectancy": -30.0, "sd": 70.0}]
+    rho_lo = ar.spearman([b["i"] for b in low_good],
+                         [b["expectancy"] for b in low_good])
+    assert rho_lo == -1.0, rho_lo
+    c_lo = top_vs_rest(low_good, rho_lo)
+    assert abs(c_lo["top_exp"] - 0.0) < 1e-9, (
+        f"with rho {rho_lo:+.1f} the favoured end is the BOTTOM tercile (0.0), "
+        f"got {c_lo['top_exp']:+.1f} — testing the wrong tail asks whether the "
+        f"worst group beats the rest")
+    assert abs(c_lo["rest_exp"] - (-25.0)) < 1e-9, c_lo["rest_exp"]
+    assert c_lo["t"] > 0, "and the favoured end should read as an improvement"
+    c_hi = top_vs_rest(bk, 1.0)
+    assert abs(c_hi["top_exp"] - 0.0) < 1e-9, c_hi["top_exp"]
+    print(f"favoured end     : rho {rho_lo:+.0f} tests the BOTTOM tercile, "
+          f"rho +1 tests the top")
+
     # ── clause 2: pure noise inside the stratum separates nothing ──
     noise = [mk(1.0, float(rng.normal()), float(rng.normal()),
                 float(rng.normal(0, 70))) for _ in range(900)]
@@ -278,6 +314,31 @@ def selftest() -> int:
     ok_b, why_b = verdict(analyse(big, 1.0))
     assert ok_b, f"a top tercile whose CI clears zero must pass: {why_b}"
     print("bar liveness     : a top tercile at +15% with CI clear of zero PASSES")
+
+    # ── clause 4's CI must read the FAVOURED end too, not always the top ──
+    # Fixing top_vs_rest left the CI still reading bk[-1], and no test caught it:
+    # every liveness fixture was high-is-good, so both ends agreed. This one is
+    # low-is-good, and reverting the CI to always-top flips the verdict.
+    lowgood = []
+    for q, target in enumerate((15.0, -10.0, -30.0)):
+        vals = rng.normal(0.0, 70.0, 300)
+        vals = vals - vals.mean() + target
+        for v in vals:
+            lowgood.append(mk(1.0, 0.0, float(q), float(v)))
+    cl = analyse(lowgood, 1.0)
+    rl = next(x for x in cl["rows"] if x["feature"] == "atr_pct")
+    assert rl["rho"] == -1.0, rl["rho"]
+    assert rl["holm"], f"fixture must clear Holm to reach clause 4, p={rl['p']:.2e}"
+    assert abs(rl["top_exp"] - 15.0) < 1.0, (
+        f"the favoured end is the BOTTOM tercile at +15, got {rl['top_exp']:+.1f}")
+    assert rl["ci"] is not None and rl["ci"][0] > 0, (
+        f"and the CI must be read on that SAME end; got {rl['ci']} — reading "
+        f"bk[-1] here returns the -30 group and fails clause 4 on a feature "
+        f"that should pass")
+    ok_l, why_l = verdict(cl)
+    assert ok_l, f"a low-is-good feature whose favoured end clears zero must pass: {why_l}"
+    print(f"clause 4 end     : low-is-good passes on its BOTTOM tercile "
+          f"{rl['top_exp']:+.1f}%, CI [{rl['ci'][0]:+.1f}, {rl['ci'][1]:+.1f}]")
 
     # ── clause 3: with 3 terciles, |rho| >= 0.6 means EXACTLY +/-1.0 ──
     assert ar.spearman([0, 1, 2], [-30.0, -10.0, 3.0]) == 1.0
