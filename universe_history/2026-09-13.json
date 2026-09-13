@@ -1,0 +1,76 @@
+{
+  "as_of": "2026-09-13",
+  "taken_at": "2026-09-13T16:35:25",
+  "tickers": [
+    "MPC",
+    "CRM",
+    "PSX",
+    "ABNB",
+    "NOW",
+    "TMO",
+    "SCHW",
+    "MRK"
+  ],
+  "passed_gates": 64,
+  "pool_size": 90,
+  "sector_mix": {
+    "Energy": 2,
+    "Tech": 2,
+    "ConsDisc": 1,
+    "Health": 2,
+    "Financials": 1
+  },
+  "rs_lookback": 63,
+  "top_n": 8,
+  "max_per_sector": 2,
+  "detail": [
+    {
+      "ticker": "MPC",
+      "rs": 48.21,
+      "price": 395.93,
+      "dollar_vol_m": 883.2
+    },
+    {
+      "ticker": "CRM",
+      "rs": 45.23,
+      "price": 247.72,
+      "dollar_vol_m": 3901.4
+    },
+    {
+      "ticker": "PSX",
+      "rs": 42.09,
+      "price": 259.47,
+      "dollar_vol_m": 678.4
+    },
+    {
+      "ticker": "ABNB",
+      "rs": 26.45,
+      "price": 170.19,
+      "dollar_vol_m": 841.7
+    },
+    {
+      "ticker": "NOW",
+      "rs": 24.97,
+      "price": 132.53,
+      "dollar_vol_m": 2235.2
+    },
+    {
+      "ticker": "TMO",
+      "rs": 24.61,
+      "price": 609.82,
+      "dollar_vol_m": 1029.0
+    },
+    {
+      "ticker": "SCHW",
+      "rs": 17.32,
+      "price": 107.25,
+      "dollar_vol_m": 823.1
+    },
+    {
+      "ticker": "MRK",
+      "rs": 15.59,
+      "price": 143.93,
+      "dollar_vol_m": 1647.9
+    }
+  ]
+}
