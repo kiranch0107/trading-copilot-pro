@@ -113,6 +113,7 @@ def resolve_watchlist() -> list[str]:
 WATCHLIST = resolve_watchlist()
 
 import signal_core as sc
+import forward_log
 import risk_params
 import notify
 
@@ -599,6 +600,29 @@ def analyze(df: pd.DataFrame, ticker: str,
         logger.debug("%s — no signal (%s)", ticker, r.get("block_reason"))
         return None
 
+    # FROM HERE A SIGNAL EXISTS. Every one is recorded, whatever happens to it
+    # next — a log of only the alerts that went out describes what the filters
+    # let through, not what the rules produced, and the gap between those two
+    # is the thing worth measuring. Blocked bars are NOT logged: that is most
+    # bars of most tickers and would bury the signals in noise.
+    _setup = {k: r.get(k) for k in
+              ("price", "entry", "stop", "target", "rr", "rsi", "adx", "atr",
+               "strength", "high_quality", "filters_pass", "filters_total")}
+    _cfg = {"adx_min": PARAMS.adx_min, "min_rr": PARAMS.min_rr,
+            "atr_stop_mult": PARAMS.atr_stop_mult,
+            "atr_tgt_mult": PARAMS.atr_tgt_mult,
+            "weekly_confirm": PARAMS.weekly_confirm,
+            "longs_only": risk_params.LONGS_ONLY}
+
+    def _log(decision: str, reason: str) -> None:
+        # Never let a logging failure lose an alert. The record matters; it
+        # does not matter more than the trade.
+        try:
+            forward_log.record_signal(ticker, r["trend"], _setup, decision,
+                                      reason, _cfg)
+        except Exception as exc:                       # noqa: BLE001
+            logger.warning("%s — forward log write failed: %s", ticker, exc)
+
     # DIRECTION GATE. Shorts measured worse than random entry, so the live
     # system does not send them. See risk_params.LONGS_ONLY for the numbers.
     # Logged at INFO, not debug: a dropped alert should be visible in the
@@ -607,6 +631,7 @@ def analyze(df: pd.DataFrame, ticker: str,
     _dir = risk_params.direction_blocked(r["trend"])
     if _dir:
         logger.info("%s — %s setup suppressed: %s", ticker, r["trend"], _dir)
+        _log("skipped", "direction gate: shorts are switched off")
         return None
 
     # Alerts fire on the high-quality tier only, exactly as app.py defines it.
@@ -614,7 +639,10 @@ def analyze(df: pd.DataFrame, ticker: str,
         logger.debug("%s — signal but not high-quality (rr %.2f, %s, "
                      "filters %d/%d)", ticker, r["rr"], r["strength"],
                      r["filters_pass"], r["filters_total"])
+        _log("skipped", "not high-quality")
         return None
+
+    _log("taken", "")
 
     return {
         "ticker": ticker, "trend": r["trend"], "strength": r["strength"],
@@ -784,6 +812,72 @@ def selftest() -> int:
         globals()["get_weekly_trend"] = _real_wk
         globals()["check_earnings_blackout"] = _real_earn
     print("direction gate          : bearish dropped, bullish still alerts")
+
+    # ── EVERY SIGNAL MUST REACH THE FORWARD LOG, INCLUDING THE SKIPS ──
+    # A log of only the alerts that went out describes what the filters let
+    # through, not what the rules produced. Checking that analyze() MENTIONS
+    # forward_log would test a string; drive all three paths and read the file.
+    import tempfile as _tf, pathlib as _pl
+    _tmp = _pl.Path(_tf.mkdtemp()) / "fl.jsonl"
+    _real_log = forward_log.LOG
+    _real_eval = sc.evaluate
+    _real_wk, _real_earn = get_weekly_trend, check_earnings_blackout
+    try:
+        forward_log.LOG = _tmp
+        globals()["get_weekly_trend"] = lambda t: "Bullish"
+        globals()["check_earnings_blackout"] = lambda t: (True, "n/a")
+        for _trend, _hq in (("Bullish", True), ("Bearish", True),
+                            ("Bullish", False)):
+            _c = dict(_canned(_trend), high_quality=_hq)
+            sc.evaluate = lambda *a, **k: _c
+            analyze(_frame, "ZZ")
+        _rows = forward_log.read_all(_tmp)
+        assert len(_rows) == 3, (
+            f"three signals fired and {len(_rows)} were logged. The ones that "
+            f"never became alerts are exactly the ones that make the record "
+            f"worth having")
+        _by = {(x["trend"], x["decision"]) for x in _rows}
+        assert ("Bullish", "taken") in _by, _by
+        assert ("Bearish", "skipped") in _by, "the direction skip was not logged"
+        assert sum(1 for x in _rows if x["decision"] == "skipped") == 2, _by
+        assert all(x["reason"] for x in _rows if x["decision"] == "skipped"), (
+            "a skip was logged with no reason")
+        assert not forward_log.verify(_tmp), forward_log.verify(_tmp)
+        assert len({x["config"] for x in _rows}) == 1, (
+            "one scan produced two config fingerprints")
+    finally:
+        forward_log.LOG = _real_log
+        sc.evaluate = _real_eval
+        globals()["get_weekly_trend"] = _real_wk
+        globals()["check_earnings_blackout"] = _real_earn
+    print("forward log             : 3 signals, 1 taken 2 skipped with "
+          "reasons, chain intact")
+
+    # ── A BROKEN LOG MUST NOT COST AN ALERT ──
+    # The record matters; it does not matter more than the trade. Nothing
+    # exercised the failure path, so raising instead of warning left the suite
+    # green — and a full disk would then have silenced the scanner.
+    _real_rec = forward_log.record_signal
+    _real_eval = sc.evaluate
+    _real_wk, _real_earn = get_weekly_trend, check_earnings_blackout
+    try:
+        def _boom(*a, **k):
+            raise OSError("disk full")
+        forward_log.record_signal = _boom
+        globals()["get_weekly_trend"] = lambda t: "Bullish"
+        globals()["check_earnings_blackout"] = lambda t: (True, "n/a")
+        sc.evaluate = lambda *a, **k: _canned("Bullish")
+        _got = analyze(_frame, "ZZ")
+        assert _got is not None and _got["trend"] == "Bullish", (
+            "a failed log write killed the alert. The record matters; it does "
+            "not matter more than the trade, and a full disk must not silence "
+            "the scanner")
+    finally:
+        forward_log.record_signal = _real_rec
+        sc.evaluate = _real_eval
+        globals()["get_weekly_trend"] = _real_wk
+        globals()["check_earnings_blackout"] = _real_earn
+    print("log failure             : alert still goes out, warning logged")
 
     wl = ["AAA", "BBB", "CCC"]
 

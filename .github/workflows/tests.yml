@@ -178,6 +178,9 @@ jobs:
       - name: exit_ab.py — paired deltas, arms differ, baseline unpoliced
         run: python exit_ab.py --selftest
 
+      - name: forward_log.py — hash chain, tamper detection, record discipline
+        run: python forward_log.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 

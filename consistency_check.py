@@ -1137,7 +1137,7 @@ IMPORTABLE_MODULES = [
     "rvol_retest", "record_recheck", "atr_stop_test", "option_decompose",
     "thesis_test", "feature_sweep", "conditional_test", "longs_only",
     "setup_cases", "setup_population", "drift_null", "inverted_arm",
-    "outcome_taxonomy", "exit_ab",
+    "outcome_taxonomy", "exit_ab", "forward_log",
 ]
 
 
