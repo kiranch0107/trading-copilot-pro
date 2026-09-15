@@ -947,6 +947,36 @@ def check_backlog_coverage_table_current() -> None:
     print(f"  BACKLOG coverage table matches the repo ({len(rows)} modules)")
 
 
+def check_line_endings_preserved() -> None:
+    """
+    Files that ship CRLF must keep it.
+
+    app.py and scanner.py are CRLF. A ten-line edit made with
+    pathlib.write_text() rewrote both to LF and landed as a 5,906-line diff on
+    app.py alone — every line "changed", git blame destroyed, and the actual
+    change invisible inside the noise. That is how a real mistake gets merged:
+    not hidden deliberately, just buried.
+
+    Pinned rather than normalised, because a repo-wide conversion is its own
+    5,906-line diff and would do the same damage once more.
+    """
+    crlf = {"app.py", "scanner.py"}
+    wrong = []
+    for f in sorted(crlf):
+        path = Path(f)
+        if not path.exists():
+            continue
+        data = path.read_bytes()
+        if b"\r\n" not in data:
+            wrong.append(f)
+    if wrong:
+        raise AssertionError(
+            f"{', '.join(wrong)} shipped CRLF and now has LF line endings.\n"
+            f"  Every line reads as changed, which buries the real edit. Use "
+            f"newline='' or write bytes when editing these files.")
+    print(f"  {len(crlf)} CRLF files keep their line endings")
+
+
 def check_direction_gate_is_live_only() -> None:
     """
     Every LIVE path consults risk_params.direction_blocked(); no research path
@@ -987,7 +1017,7 @@ def check_direction_gate_is_live_only() -> None:
     live = {"scanner.py", "app.py"}
     research = {"backtest.py", "signal_core.py", "setup_population.py",
                 "drift_null.py", "setup_cases.py", "option_backtest.py",
-                "universe_backtest.py", "longs_only.py"}
+                "universe_backtest.py", "longs_only.py", "inverted_arm.py"}
     missing, leaked = [], []
     for f in sorted(live):
         if not _calls_gate(Path(f)):
@@ -1059,7 +1089,7 @@ IMPORTABLE_MODULES = [
     "spread_backtest", "power_check", "adx_retest", "pead_study",
     "rvol_retest", "record_recheck", "atr_stop_test", "option_decompose",
     "thesis_test", "feature_sweep", "conditional_test", "longs_only",
-    "setup_cases", "setup_population", "drift_null",
+    "setup_cases", "setup_population", "drift_null", "inverted_arm",
 ]
 
 
@@ -1698,6 +1728,7 @@ CHECKS = [
     ("app.py defaults derive from signal_core",    check_app_defaults_derived),
     ("backtest.evaluate_signal callers correct",   check_backtest_callers),
     ("weekly trend + SPY regime are one rule",     check_market_context_shared),
+    ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),
     ("every --selftest module runs in CI",        check_selftests_run_in_ci),
     ("live universe spends no reserved data",     check_universe_not_spending_reserved),
