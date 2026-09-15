@@ -252,6 +252,53 @@ def measured_option_edge(tp_pct: float) -> dict | None:
 # TO ACTUALLY SETTLE IT: run `option_backtest.py --sweep` and record the win
 # rate at the TP you intend to trade, then re-derive against THAT. Comparing
 # across bases is the error this block exists to prevent.
+# ---------------------------------------------------------------------------
+# DIRECTION — the live system takes longs only
+# ---------------------------------------------------------------------------
+#
+# MEASURED, not a preference. drift_null.py entered at 200 sets of uniformly
+# random bars on the same twenty tickers, same stop, same target, same exit
+# engine and the same costs, and compared them against the real signal:
+#
+#   LONGS   real excess +4.2pp vs a random null of +5.2pp [+2.8, +7.2]
+#           -> SIGNAL ADDS NOTHING. The edge was market drift.
+#   SHORTS  real excess -9.5pp vs a random null of -4.6pp [-7.0, -1.8]
+#           -> SIGNAL IS NEGATIVE. All 200 random draws beat it.
+#           Real mean R -0.341 against the null's -0.210.
+#
+# Random shorting loses money because it fights drift. The signal loses MORE,
+# because of what it selects: RSI under 40, price under both EMAs, MACD
+# bearish — in a decade-long bull market that is a pullback inside an uptrend,
+# which is the worst available moment to be short.
+#
+# So short alerts are not neutral-but-useless. They are worse than throwing
+# darts, by -4.9pp of hit rate and -0.131 R per trade, and the live scanner was
+# still sending them.
+#
+# THIS GATE IS LIVE-ONLY BY DESIGN. backtest.py and every research module must
+# keep seeing both sides, or ten years of recorded results silently change
+# meaning and no past number can be compared with a new one. The short side is
+# still measured; it is just not traded.
+# consistency_check.check_direction_gate_is_live_only() pins both halves.
+LONGS_ONLY = True
+
+DIRECTION_REASON = (
+    "short setups are switched off: measured worse than random entry "
+    "(drift_null run 1 — excess -9.5pp vs a -4.6pp random null, all 200 "
+    "draws better; mean R -0.341 vs -0.210)")
+
+
+def direction_blocked(trend: str | None) -> str | None:
+    """The reason this direction is not tradeable live, or None if it is.
+
+    Returns the REASON rather than a bool so every caller logs the same
+    sentence and a silent drop is impossible to write by accident.
+    """
+    if LONGS_ONLY and trend == "Bearish":
+        return DIRECTION_REASON
+    return None
+
+
 MAX_OPTION_SPREAD_PCT = 8.0
 
 
@@ -368,7 +415,31 @@ def check_option_cost(entry_premium: float, contracts: float,
                         f"your {bpct:g}% premium budget.")}
 
 
+def _selftest_direction() -> None:
+    """The gate blocks shorts, passes longs, and never blocks silently."""
+    assert LONGS_ONLY is True, "the live system is longs-only; see drift_null"
+    r = direction_blocked("Bearish")
+    assert r, "a short must be blocked live"
+    assert isinstance(r, str) and len(r) > 40, (
+        f"the gate must return a REASON, not a bare flag — every caller logs "
+        f"it, and a one-word reason is how a suppressed alert becomes "
+        f"indistinguishable from a quiet market. Got {r!r}")
+    for word in ("random", "drift_null"):
+        assert word in r, (
+            f"the reason must name the measurement that justifies it; {word!r} "
+            f"missing from {r!r}")
+    assert direction_blocked("Bullish") is None, "longs must pass"
+    assert direction_blocked(None) is None, (
+        "an absent trend is not a short; blocking it would silently drop every "
+        "result whose trend key is missing for an unrelated reason")
+    assert direction_blocked("bearish") is None, (
+        "the gate matches signal_core's exact casing. If that ever changes, "
+        "this must fail loudly rather than start passing shorts through")
+    print("direction gate  : shorts blocked with a reason, longs pass")
+
+
 def selftest() -> int:
+    _selftest_direction()
     assert DEFAULT_ACCOUNT_SIZE > 0
     assert 0 < DEFAULT_RISK_PCT <= 10, \
         "position risk outside 0-10% is almost certainly a typo"

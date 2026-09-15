@@ -947,6 +947,77 @@ def check_backlog_coverage_table_current() -> None:
     print(f"  BACKLOG coverage table matches the repo ({len(rows)} modules)")
 
 
+def check_direction_gate_is_live_only() -> None:
+    """
+    Every LIVE path consults risk_params.direction_blocked(); no research path
+    does.
+
+    BOTH HALVES MATTER AND FAIL DIFFERENTLY.
+
+    If a live path stops consulting it, the scanner resumes sending short
+    alerts that drift_null measured as worse than random entry — all 200 random
+    draws beat the real short signal, at -0.131 R per trade. That is money.
+
+    If a RESEARCH path starts consulting it, every historical number in
+    results/ silently changes meaning: 2,360 trades become 1,457, the recorded
+    mean R stops being the mean R that was recorded, and no new run can be
+    compared with an old one. The short side is still measured. It is just not
+    traded. That is the whole design, and a gate that leaked into backtest.py
+    would look like a tidy-up in the diff.
+    """
+    # AST, NOT GREP. A text search for "direction_blocked(" matches the call
+    # sitting inside a comment, so commenting the gate out — the single most
+    # likely way it gets disabled, in a hurry, to chase a short — left the
+    # check green. Falsification caught exactly that. A commented call is not
+    # in the tree.
+    import ast as _ast
+
+    def _calls_gate(path: Path) -> bool:
+        tree = _ast.parse(path.read_text())
+        for node in _ast.walk(tree):
+            if not isinstance(node, _ast.Call):
+                continue
+            fn = node.func
+            name = (fn.attr if isinstance(fn, _ast.Attribute)
+                    else fn.id if isinstance(fn, _ast.Name) else None)
+            if name == "direction_blocked":
+                return True
+        return False
+
+    live = {"scanner.py", "app.py"}
+    research = {"backtest.py", "signal_core.py", "setup_population.py",
+                "drift_null.py", "setup_cases.py", "option_backtest.py",
+                "universe_backtest.py", "longs_only.py"}
+    missing, leaked = [], []
+    for f in sorted(live):
+        if not _calls_gate(Path(f)):
+            missing.append(f)
+    for f in sorted(research):
+        path = Path(f)
+        if path.exists() and _calls_gate(path):
+            leaked.append(f)
+    if missing:
+        raise AssertionError(
+            f"live path(s) no longer consult the direction gate: "
+            f"{', '.join(missing)}.\n"
+            f"  Short setups measured WORSE THAN RANDOM entry (drift_null: all "
+            f"200 random draws beat the real signal, -0.131 R per trade). "
+            f"Without this call the scanner sends them again.")
+    if leaked:
+        raise AssertionError(
+            f"research module(s) now apply the LIVE direction gate: "
+            f"{', '.join(leaked)}.\n"
+            f"  Every recorded result changes meaning — 2,360 trades become "
+            f"1,457 and no past number stays comparable. The short side is "
+            f"measured, not traded.")
+    import risk_params as _rp
+    assert _rp.direction_blocked("Bearish"), "the gate must block shorts"
+    assert _rp.direction_blocked("Bullish") is None, "longs must pass"
+    assert _rp.direction_blocked(None) is None, "an absent trend is not a short"
+    print(f"  direction gate: {len(live)} live paths apply it, "
+          f"{len(research)} research paths do not")
+
+
 def check_selftests_run_in_ci() -> None:
     """
     Every module with a --selftest flag must be invoked by tests.yml.
@@ -1627,6 +1698,7 @@ CHECKS = [
     ("app.py defaults derive from signal_core",    check_app_defaults_derived),
     ("backtest.evaluate_signal callers correct",   check_backtest_callers),
     ("weekly trend + SPY regime are one rule",     check_market_context_shared),
+    ("direction gate is live-only",              check_direction_gate_is_live_only),
     ("every --selftest module runs in CI",        check_selftests_run_in_ci),
     ("live universe spends no reserved data",     check_universe_not_spending_reserved),
     ("scan failures are surfaced, not swallowed",  check_scan_failures_surfaced),
