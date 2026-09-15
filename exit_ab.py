@@ -36,6 +36,8 @@ file existed.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import sys
 
 import numpy as np
@@ -115,7 +117,7 @@ def movement(base: list[dict], arm: list[dict]) -> dict[tuple, int]:
 
 
 def report(name: str, blurb: str, st: dict, moves: dict, holm: bool,
-           base_mean: float) -> str:
+           base_mean: float, tested: bool = True) -> str:
     print(f"\n{'='*92}")
     print(f"{name} — {blurb}")
     print("=" * 92)
@@ -133,7 +135,13 @@ def report(name: str, blurb: str, st: dict, moves: dict, holm: bool,
         for (bucket, direction), cnt in sorted(
                 moves.items(), key=lambda kv: -kv[1]):
             print(f"    {bucket:<16} {direction:<7} {cnt:>5}")
-    if holm and st["mean"] > 0:
+    if not tested:
+        # In confirm mode every other arm is printed for context and cannot
+        # carry a verdict. If the named hypothesis fails and a bystander arm
+        # happens to clear alpha, that is the best of three — which is the
+        # move a single-hypothesis confirmation exists to refuse.
+        v = "CONTEXT ONLY — NOT TESTED"
+    elif holm and st["mean"] > 0:
         v = "PASSES"
     elif holm and st["mean"] < 0:
         v = "HARMFUL"
@@ -171,7 +179,54 @@ def refuse_unspent(tickers: list[str]) -> None:
         f"--purpose \"<what this tests>\"")
 
 
-def run(tickers: list[str], years: int) -> int:
+def decide(stats: dict, confirm: str | None) -> tuple[list, list, str]:
+    """
+    Which arms carry a verdict, and against which bar.
+
+    Extracted so a test can reach it. It lived inline in run(), where the only
+    way to exercise it was a full network run — so four separate breaks to this
+    logic left the suite green, including the one that silently restored Holm
+    to a confirmation.
+
+    Returns (keep, tested, banner).
+    """
+    names = [n for n, _, _ in ARMS]
+    if confirm is None:
+        keep = ar.holm([stats[n]["p"] for n in names], ar.ALPHA)
+        return keep, [True] * len(names), (
+            f"EXPLORATION: three hypotheses, Holm across them "
+            f"(bar {ar.ALPHA/len(ARMS):.4f}).")
+    # ONE pre-specified hypothesis, alpha uncorrected. Correcting here would
+    # make the test stricter than its own pre-registration; not correcting the
+    # exploration above would make it the best of three.
+    keep = [n == confirm and stats[n]["p"] < ar.ALPHA for n in names]
+    return keep, [n == confirm for n in names], (
+        f"CONFIRMATION of {confirm} alone, alpha {ar.ALPHA}, NO Holm. "
+        f"One pre-specified hypothesis; the other arms carry no verdict.")
+
+
+def run(tickers: list[str], years: int, confirm: str | None = None) -> int:
+    """
+    confirm: the ONE arm under test, or None for the three-arm exploration.
+
+    THE TWO PROTOCOLS ARE DIFFERENT AND MUST NOT BE CONFLATED.
+
+      exploration  three hypotheses, Holm across them, used to SELECT a rule.
+      confirmation one pre-specified hypothesis, alpha uncorrected, used to
+                   TEST the rule that selection produced.
+
+    Correcting a confirmation for arms nobody is testing makes it stricter than
+    its own pre-registration; not correcting an exploration makes it the best
+    of three. This module printed a Holm verdict on a tranche C run whose
+    pre-registration specified a single hypothesis, and the document and the
+    output disagreed. See results/tranche_c_confirmation_run1.md.
+    """
+    if confirm is not None:
+        names = [n for n, _, _ in ARMS]
+        if confirm not in names:
+            raise SystemExit(
+                f"--confirm {confirm!r} is not an arm. Known: "
+                f"{', '.join(names)}")
     refuse_unspent(tickers)
     cfg = dict(bt.DEFAULTS, tickers=tickers, years=years)
     params = bt.build_signal_params(cfg)
@@ -212,11 +267,13 @@ def run(tickers: list[str], years: int) -> int:
     print(f"  Same entries and fills in every arm. Only the exit differs.")
 
     stats = {n: paired(base, arms[n]) for n, _, _ in ARMS}
-    keep = ar.holm([stats[n]["p"] for n, _, _ in ARMS], ar.ALPHA)
+    keep, tested, banner = decide(stats, confirm)
+    print(f"  {banner}")
     verdicts = {}
-    for (name, pol, blurb), k in zip(ARMS, keep):
+    for (name, pol, blurb), k, tst in zip(ARMS, keep, tested):
         verdicts[name] = report(name, blurb, stats[name],
-                                movement(base, arms[name]), k, base_mean)
+                                movement(base, arms[name]), k, base_mean,
+                                tested=tst)
 
     print(f"\n{'='*92}")
     print("SUMMARY")
@@ -328,6 +385,106 @@ def selftest() -> int:
                - bt.simulate_trade(rt, 0, tr, rc, policy=None)["r"]) < 1e-12
     print("baseline         : policy=None is the unpoliced engine")
 
+    # ── CONFIRMATION AND EXPLORATION ARE DIFFERENT BARS ──
+    # The tranche C run printed a Holm verdict while its pre-registration
+    # specified one hypothesis at alpha. Both readings must now be reachable,
+    # and neither may quietly become the other.
+    #
+    # Reproduce that exact case: break-even at p 0.0304 — above Holm's 0.0167,
+    # below alpha 0.05.
+    import adx_retest as _ar
+    _p = 0.0304
+    assert _ar.ALPHA / len(ARMS) < _p < _ar.ALPHA, (
+        f"the fixture must sit between Holm's bar and alpha or it cannot tell "
+        f"the two protocols apart: {_p}")
+    assert not _ar.holm([_p, 0.0620, 0.0444], _ar.ALPHA)[0], (
+        "under the three-arm exploration this p must FAIL")
+    assert _p < _ar.ALPHA, (
+        "under the single-hypothesis confirmation this p must PASS")
+    print(f"two protocols    : p {_p} fails Holm ({_ar.ALPHA/len(ARMS):.4f}) "
+          f"and passes alpha ({_ar.ALPHA}) — both reachable")
+
+    # ── AND decide() MUST APPLY THE RIGHT ONE ──
+    # This is run 1's exact shape: break-even 0.0304, trail 0.0620, partial
+    # 0.0444. Under exploration nothing passes. Under confirmation of
+    # break-even, break-even passes and the other two carry no verdict.
+    _stats = {"BREAK-EVEN": {"p": 0.0304}, "TRAIL": {"p": 0.0620},
+              "PARTIAL": {"p": 0.0444}}
+    _k, _t, _b = decide(_stats, None)
+    assert not any(_k), f"exploration must fail all three at 0.0167: {_k}"
+    assert all(_t) and "EXPLORATION" in _b, (_t, _b)
+    _k, _t, _b = decide(_stats, "BREAK-EVEN")
+    assert _k == [True, False, False], (
+        f"confirmation must pass break-even at alpha 0.05 and give the others "
+        f"nothing: {_k}")
+    assert _t == [True, False, False], _t
+    assert "CONFIRMATION" in _b and "NO Holm" in _b, _b
+    # a confirmation of an arm that genuinely fails must still fail
+    _k2, _, _ = decide(_stats, "TRAIL")
+    assert _k2 == [False, False, False], (
+        f"TRAIL at p 0.0620 must fail even as the named hypothesis: {_k2}")
+    print("decide()         : same p-values, exploration fails all, "
+          "confirmation passes only the named arm")
+
+    # ── AND run() MUST ACTUALLY CALL decide() ──
+    # Testing decide() proves the rule is right, not that anything uses it.
+    # Four breaks to this logic previously left the suite green because the
+    # only way to reach run() was a network fetch. Feed it a synthetic frame
+    # instead and read the banner it prints.
+    _real_dl, _real_cp = bt.download, bt.compute
+    try:
+        bt.download = lambda tk, yrs, *a, **k: bt._synthetic_ohlc(up=True, adx=40.0)
+        bt.compute = lambda df: df
+        for _cf, _want, _nope in ((None, "EXPLORATION", "CONFIRMATION"),
+                                  ("BREAK-EVEN", "CONFIRMATION", "EXPLORATION")):
+            _b = io.StringIO()
+            with contextlib.redirect_stdout(_b):
+                run(["AAA"], 1, confirm=_cf)
+            _out = _b.getvalue()
+            assert _want in _out, (
+                f"run(confirm={_cf!r}) never printed the {_want} banner — it "
+                f"is not calling decide()")
+            assert _nope not in _out, f"both banners printed for {_cf!r}"
+            if _cf:
+                assert "CONTEXT ONLY" in _out, (
+                    "the untested arms printed no CONTEXT ONLY marker; a "
+                    "reader cannot tell which hypothesis was actually tested")
+    finally:
+        bt.download, bt.compute = _real_dl, _real_cp
+    print("run() wiring     : prints the exploration banner, or the "
+          "confirmation banner plus CONTEXT ONLY")
+
+    # ── AN UNKNOWN ARM MUST BE REFUSED, NOT SILENTLY IGNORED ──
+    # A typo that ran the three-arm exploration under a confirmation banner
+    # would report the stricter bar while the document promised the looser one,
+    # which is the failure this mode exists to end.
+    _bad = False
+    try:
+        run(["NVDA"], 1, confirm="BREAKEVEN")     # real arm is "BREAK-EVEN"
+    except SystemExit as e:
+        _bad = "is not an arm" in str(e)
+    assert _bad, (
+        "--confirm accepted an arm name that does not exist. It would fall "
+        "through to the exploration bar under a confirmation banner")
+    print("unknown arm      : refused before any data is touched")
+
+    # ── A BYSTANDER ARM CANNOT PASS IN CONFIRM MODE ──
+    _st = {"mean": 0.05, "p": 0.001, "n": 10, "helped": 5, "hurt": 1,
+           "same": 4, "gain": 1.0, "loss": -0.2, "best": 1.0, "worst": -0.2}
+    import io as _io, contextlib as _ctx
+    _buf = _io.StringIO()
+    with _ctx.redirect_stdout(_buf):
+        _v = report("TRAIL", "x", _st, {}, True, 0.0, tested=False)
+    assert _v.startswith("CONTEXT ONLY"), (
+        f"an untested arm with p 0.001 returned {_v!r}. If the named "
+        f"hypothesis fails and a bystander clears alpha, reporting that as a "
+        f"pass is the best of three")
+    _buf = _io.StringIO()
+    with _ctx.redirect_stdout(_buf):
+        _v2 = report("TRAIL", "x", _st, {}, True, 0.0, tested=True)
+    assert _v2 == "PASSES", _v2
+    print("bystander arms   : p 0.001 reads CONTEXT ONLY when not the one tested")
+
     # ── AN UNSPENT TRANCHE MUST STOP THE RUN ──
     # "One shot" is a promise until something enforces it. Fetching tranche C
     # without recording the spend burns it silently: looked at, still marked
@@ -381,12 +538,15 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tickers", default=scs.DEFAULT_TICKERS)
     ap.add_argument("--years", type=int, default=10)
+    ap.add_argument("--confirm", default=None, metavar="ARM",
+                    help="test ONE named arm at alpha, no Holm (confirmation); "
+                         "omit for the three-arm Holm exploration")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
         return selftest()
     tickers = [t.strip().upper() for t in a.tickers.split(",") if t.strip()]
-    return run(tickers, a.years)
+    return run(tickers, a.years, confirm=a.confirm)
 
 
 if __name__ == "__main__":
