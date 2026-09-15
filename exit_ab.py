@@ -143,7 +143,36 @@ def report(name: str, blurb: str, st: dict, moves: dict, holm: bool,
     return v
 
 
+def refuse_unspent(tickers: list[str]) -> None:
+    """
+    Refuse to touch a reserved tranche that has not been claimed.
+
+    "One shot" is a promise until something enforces it. Fetching tranche C
+    without recording the spend would burn it silently: the names would have
+    been looked at, the lock would still say `available`, and a later run would
+    believe it had clean data.
+
+    Contaminated and already-spent names pass. They are burned, so looking
+    costs nothing — the in-sample runs deliberately use them.
+    """
+    import data_reservation as dr
+    r = dr.check_clean(tickers)
+    unspent = {t for v in r.get("reserved", {}).values() for t in v}
+    if not unspent:
+        return
+    tranches = ", ".join(sorted(r.get("reserved", {})))
+    raise SystemExit(
+        f"REFUSING TO RUN. {len(unspent)} ticker(s) belong to reserved, "
+        f"UNSPENT tranche {tranches}:\n  {', '.join(sorted(unspent))}\n\n"
+        f"Running would look at them and leave the lock saying they are still "
+        f"clean, so a later test would believe it had out-of-sample data it "
+        f"does not have.\n\nClaim the tranche first, with the hypothesis "
+        f"written down:\n  python data_reservation.py --spend {tranches} "
+        f"--purpose \"<what this tests>\"")
+
+
 def run(tickers: list[str], years: int) -> int:
+    refuse_unspent(tickers)
     cfg = dict(bt.DEFAULTS, tickers=tickers, years=years)
     params = bt.build_signal_params(cfg)
     base: list[dict] = []
@@ -298,6 +327,48 @@ def selftest() -> int:
     assert abs(bt.simulate_trade(rt, 0, tr, rc)["r"]
                - bt.simulate_trade(rt, 0, tr, rc, policy=None)["r"]) < 1e-12
     print("baseline         : policy=None is the unpoliced engine")
+
+    # ── AN UNSPENT TRANCHE MUST STOP THE RUN ──
+    # "One shot" is a promise until something enforces it. Fetching tranche C
+    # without recording the spend burns it silently: looked at, still marked
+    # available, and a later test believes it has clean data.
+    import data_reservation as dr
+    _res = {t for name, tr in (dr.load_lock() or {}).get("reserved", {}).items()
+            if not tr.get("spent") for t in tr.get("tickers", [])}
+    if _res:
+        _probe = sorted(_res)[:2]
+        raised = False
+        try:
+            refuse_unspent(_probe)
+        except SystemExit as e:
+            raised = "REFUSING TO RUN" in str(e) and "--spend" in str(e)
+        assert raised, (
+            f"exit_ab ran on unspent reserved names {_probe} without "
+            f"refusing. They would be burned with the lock still calling them "
+            f"clean")
+
+        # AND run() ITSELF MUST REFUSE, not merely have a helper that would.
+        # Asserting on refuse_unspent() tests the producer while the break --
+        # deleting the call from run() -- sits in the consumer. That is the
+        # fifth time this exact shape has slipped through in this project.
+        # refuse_unspent() is run()'s first statement, so this raises before
+        # any download is attempted and the test needs no network.
+        ran = False
+        try:
+            run(_probe, 10)
+        except SystemExit as e:
+            ran = "REFUSING TO RUN" in str(e)
+        assert ran, (
+            f"run() proceeded past unspent reserved names {_probe}. The guard "
+            f"exists but nothing calls it, which is worse than not having it")
+        print(f"unspent tranche  : run() itself refuses ({', '.join(_probe)}), "
+              f"with instructions to claim it")
+    else:
+        print("unspent tranche  : no unspent tranche to probe (all claimed)")
+
+    # burned names must still pass, or no in-sample run could happen at all
+    refuse_unspent(["NVDA", "META"])
+    print("burned names     : contaminated tickers still run — looking is free")
 
     print("=" * 72)
     print("All self-tests passed.")
