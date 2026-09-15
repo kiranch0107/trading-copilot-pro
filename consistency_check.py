@@ -945,6 +945,53 @@ def check_backlog_coverage_table_current() -> None:
     print(f"  BACKLOG coverage table matches the repo ({len(rows)} modules)")
 
 
+def check_forward_log_has_no_test_data() -> None:
+    """
+    The committed forward log must contain no fixture rows.
+
+    THE BUG THIS PINS. scanner.analyze() writes to forward_log.LOG, and the
+    scanner's own selftest drove analyze() before redirecting that path — so
+    every run appended two fabricated "ZZ" rows to the real log. Twenty two
+    reached a commit, and CI would have added more on every push.
+
+    A research record that quietly accumulates test fixtures is worse than no
+    record: it looks like evidence. This is cheap and catches the whole family
+    — any fixture ticker, from any module, however it got there.
+    """
+    import json
+    import os
+    path = "forward_log.jsonl"
+    if not os.path.exists(path):
+        print("  forward log not started yet — nothing to check")
+        return
+    fixtures = {"ZZ", "AAA", "BBB", "CCC", "XXX", "TEST", "BT"}
+    bad = []
+    for i, line in enumerate(open(path, encoding="utf-8"), start=1):
+        line = line.strip()
+        if not line:
+            continue
+        tk = (json.loads(line).get("ticker") or "").upper()
+        if tk in fixtures:
+            bad.append((i, tk))
+    if bad:
+        raise AssertionError(
+            f"{len(bad)} fixture row(s) in the committed forward log: "
+            f"{', '.join(f'row {i} {t}' for i, t in bad[:5])}"
+            f"{' ...' if len(bad) > 5 else ''}.\n"
+            f"  A selftest is writing to the production log. Redirect "
+            f"forward_log.LOG for the WHOLE test, not the one block that "
+            f"mentions it — anything driving analyze() writes as a side "
+            f"effect.")
+    import forward_log as _fl
+    problems = _fl.verify()
+    if problems:
+        raise AssertionError(
+            f"the forward log chain is broken:\n    " +
+            "\n    ".join(problems[:4]))
+    n = len(_fl.read_all())
+    print(f"  forward log: {n} rows, no fixtures, chain intact")
+
+
 def check_taxonomy_never_gates() -> None:
     """
     The outcome buckets annotate. They never decide whether a trade is taken.
@@ -1776,6 +1823,7 @@ CHECKS = [
     ("app.py defaults derive from signal_core",    check_app_defaults_derived),
     ("backtest.evaluate_signal callers correct",   check_backtest_callers),
     ("weekly trend + SPY regime are one rule",     check_market_context_shared),
+    ("forward log carries no test data",         check_forward_log_has_no_test_data),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),
