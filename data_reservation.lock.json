@@ -1,5 +1,5 @@
 {
-  "reservation_hash": "6e4580c94f5ad703",
+  "reservation_hash": "aa62ba32686f9938",
   "created": "2026-08-24T22:50:05+00:00",
   "contaminated": {
     "TSLA": "Aug 2026 parameter sweep (~60 configurations)",
@@ -24,7 +24,7 @@
   },
   "reserved": {
     "A": {
-      "note": "SPENT 2026-09-11. No longer out-of-sample \u2014 see spent_on. (Previous note, now false: \"First held-out set. Spend on the next completed hypothesis.\")",
+      "note": "SPENT 2026-09-11 on the RVOL confirmation. Originally the first held-out set; the ledger records the claim. These sixteen names are no longer out-of-sample.",
       "tickers": [
         "TXN",
         "INTC",
@@ -53,7 +53,7 @@
       "spent_at": "2026-09-11T05:18:35+00:00"
     },
     "B": {
-      "note": "SPENT 2026-09-02. No longer out-of-sample \u2014 see spent_on. (Previous note, now false: \"Second held-out set. Do not touch until A is spent and the result written down.\")",
+      "note": "SPENT 2026-09-02 de facto by live trading, not by a test \u2014 universe.py kept selecting these names and the scanner alerted on them, so their outcomes were observed. Originally the second held-out set; recorded honestly rather than left looking pristine.",
       "tickers": [
         "TGT",
         "WMT",
@@ -93,7 +93,7 @@
       "spent_at": "2026-09-02T04:49:13+00:00"
     },
     "C": {
-      "note": "Third held-out set, reserved 2026-09-15 BEFORE the setup-case buckets were defined. Every earlier tranche was spent, so nothing this project found could be confirmed anywhere. This exists so the bucket rules coming out of setup_cases.py can be scored on ground that was never used to find them. Do not look at these names for any purpose until the buckets are written down and fixed.",
+      "note": "SPENT 2026-09-15 on the break-even exit confirmation. Reserved before the setup-case buckets were defined and claimed for one pre-specified hypothesis; the result and the process failure behind its verdict are in results/tranche_c_confirmation_run1.md. These twenty names have been looked at and are no longer out-of-sample for any purpose. This project has no clean data remaining.",
       "tickers": [
         "MRVL",
         "NXPI",

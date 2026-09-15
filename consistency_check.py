@@ -866,16 +866,14 @@ def check_no_stale_tranche_notes() -> None:
         print("  no reservation lock — nothing to check")
         return
     lock = json.load(open(path, encoding="utf-8"))
-    claims = ("held-out", "held out", "do not touch", "unspent", "pristine")
+    # ONE implementation of the rule, imported rather than copied. Two rules
+    # describing one fact are free to disagree, which is the defect this very
+    # check exists to catch — and amend_note() enforcing a stricter rule than
+    # this one would refuse to sync a note the check considers fine.
+    import data_reservation as _dr
     bad = []
     for name, tr in lock.get("reserved", {}).items():
-        if not tr.get("spent"):
-            continue
-        note = (tr.get("note") or "").lower()
-        # A corrected note may QUOTE the old claim; the marker is what counts.
-        if "spent" in note.split(".")[0]:
-            continue
-        if any(c in note for c in claims):
+        if _dr.note_claims_held_out(tr.get("note"), bool(tr.get("spent"))):
             bad.append((name, tr.get("note")))
     if bad:
         raise AssertionError(

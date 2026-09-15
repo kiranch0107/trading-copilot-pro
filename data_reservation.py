@@ -81,27 +81,26 @@ CONTAMINATED = {
 # instead of being half a sector each.
 RESERVED = {
     "A": {
-        "note": "First held-out set. Spend on the next completed hypothesis.",
+        "note": "SPENT 2026-09-11 on the RVOL confirmation. Originally the first held-out set; the ledger records the claim. These sixteen names are no longer out-of-sample.",
         "tickers": ["TXN", "INTC", "AMAT", "KLAC", "SNPS", "CDNS",
                     "INTU", "IBM", "CSCO", "DIS", "HD", "LOW",
                     "NKE", "SBUX", "MCD", "COST"],
     },
     "B": {
-        "note": "Second held-out set. Do not touch until A is spent and the "
-                "result written down.",
+        "note": "SPENT 2026-09-02 de facto by live trading, not by a test — universe.py kept selecting these names and the scanner alerted on them, so their outcomes were observed. Originally the second held-out set; recorded honestly rather than left looking pristine.",
         "tickers": ["TGT", "WMT", "PG", "KO", "PEP", "JPM", "BAC", "GS",
                     "MS", "V", "MA", "AXP", "BLK", "CAT", "DE", "HON",
                     "GE", "BA", "UNP", "UPS", "UNH", "JNJ", "LLY", "ABBV",
                     "MRK", "PFE", "TMO", "ABT", "XOM", "CVX", "COP", "SLB"],
     },
     "C": {
-        "note": "Third held-out set, reserved 2026-09-15 BEFORE the setup-case "
-                "buckets were defined. Every earlier tranche was spent, so "
-                "nothing this project found could be confirmed anywhere. This "
-                "exists so the bucket rules coming out of setup_cases.py can be "
-                "scored on ground that was never used to find them. Do not "
-                "look at these names for any purpose until the buckets are "
-                "written down and fixed.",
+        "note": "SPENT 2026-09-15 on the break-even exit confirmation. "
+                "Reserved before the setup-case buckets were defined and "
+                "claimed for one pre-specified hypothesis; the result and the "
+                "process failure behind its verdict are in "
+                "results/tranche_c_confirmation_run1.md. These twenty names "
+                "have been looked at and are no longer out-of-sample for any "
+                "purpose. This project has no clean data remaining.",
         # ABNB, AMGN and SCHW were in the first draft of this list and were
         # dropped: universe_history shows the live weekly scan selected them on
         # 2026-09-06 and 2026-09-13, so their charts had already been looked at.
@@ -430,6 +429,66 @@ def add_tranche(name: str, tickers: list[str], note: str) -> bool:
     return True
 
 
+# The one rule for "this note contradicts the flag". consistency_check imports
+# it rather than carrying its own copy: two rules describing one fact are free
+# to disagree, which is the exact defect the check itself exists to catch.
+STALE_CLAIMS = ("held-out", "held out", "do not touch", "unspent", "pristine")
+
+
+def note_claims_held_out(note: str | None, spent: bool) -> bool:
+    """True if a SPENT tranche's prose still calls itself held-out.
+
+    A corrected note may QUOTE the old claim while explaining it — so a first
+    sentence that marks the tranche spent is the exempting marker, not the
+    absence of the words.
+    """
+    if not spent:
+        return False
+    text = (note or "").lower()
+    if "spent" in text.split(".")[0]:
+        return False
+    return any(c in text for c in STALE_CLAIMS)
+
+
+def amend_note(tranche: str) -> bool:
+    """
+    Sync a tranche's stored note from RESERVED, and refresh the definition hash.
+
+    Notes go stale the moment a tranche is spent: tranche C's said "do not look
+    at these names for any purpose" while the ledger recorded it claimed.
+    consistency_check.check_no_stale_tranche_notes() catches that, because
+    reading the prose instead of the flag is how a confirmation once got
+    planned on 32 contaminated tickers.
+
+    Only the note moves. The spend flag, the timestamps and the ledger are
+    untouched, so this cannot launder a spend.
+    """
+    lock = load_lock()
+    if lock is None:
+        print("no lock file")
+        return False
+    tranche = tranche.upper()
+    if tranche not in lock.get("reserved", {}):
+        print(f"no tranche {tranche} in the lock")
+        return False
+    defn = RESERVED.get(tranche)
+    if defn is None:
+        print(f"tranche {tranche} is not defined in RESERVED")
+        return False
+    tr = lock["reserved"][tranche]
+    new = defn.get("note", "")
+    if note_claims_held_out(new, bool(tr.get("spent"))):
+        print(f"refusing: {tranche} is SPENT and the new note still claims to "
+              f"be held out. The flag is the truth; the prose must match it.")
+        return False
+    before = tr.get("note", "")
+    tr["note"] = new
+    lock["reservation_hash"] = reservation_hash()
+    save_lock(lock)
+    print(f"tranche {tranche} note updated ({len(before)} -> {len(new)} chars)")
+    return True
+
+
 def spend(tranche: str, purpose: str) -> bool:
     lock = load_lock() or init_lock()
     tranche = tranche.upper()
@@ -715,6 +774,62 @@ def selftest() -> int:
         assert annul("ZZ", "no such tranche") is False
         print("annul guards     : reason required, spent tranche refused")
 
+        # ── amend_note SYNCS PROSE AND TOUCHES NOTHING ELSE ──
+        # Notes go stale the moment a tranche is spent. Tranche C's said "do
+        # not look at these names for any purpose" while the ledger recorded it
+        # claimed — and reading prose instead of the flag is how a confirmation
+        # once got planned on 32 contaminated tickers.
+        _lk = load_lock()
+        _lk["reserved"]["A"]["note"] = "stale prose"
+        # Stale the stored hash too. Leaving it current made the "hash
+        # refreshed" assertion below pass with the refresh deleted — the same
+        # hole that appeared in add_tranche's first draft.
+        _lk["reservation_hash"] = "staleh4sh00000000"
+        save_lock(_lk)
+        _before = load_lock()
+        assert _before["reserved"]["A"]["spent"] is True, "A must be spent here"
+        assert amend_note("A") is True
+        _after = load_lock()
+        assert _after["reserved"]["A"]["note"] == RESERVED["A"]["note"], (
+            "the note was not synced from RESERVED")
+        for _k in ("spent", "spent_on", "spent_at"):
+            assert _after["reserved"]["A"].get(_k) == _before["reserved"]["A"].get(_k), (
+                f"amend_note changed {_k!r} — it may only move prose, or it "
+                f"becomes a way to launder a spend")
+        assert _after["ledger"] == _before["ledger"], "the ledger moved"
+        assert _after["reservation_hash"] == reservation_hash(), (
+            "the definition hash was not refreshed, so status() will report a "
+            "mismatch for a deliberate change")
+        assert _after["state_hash"] == _before["state_hash"], (
+            "the STATE hash moved on a prose-only edit; it covers spend flags "
+            "and the ledger, neither of which changed")
+        print("amend note       : prose synced, spend flags and ledger untouched")
+
+        # ── AND IT MUST REFUSE TO RE-CLAIM A SPENT TRANCHE AS HELD-OUT ──
+        _keep = RESERVED["A"]["note"]
+        try:
+            RESERVED["A"]["note"] = "this is a held-out set, do not touch"
+            assert amend_note("A") is False, (
+                "a SPENT tranche was allowed to describe itself as held-out "
+                "again. The flag is the truth and the prose must match it")
+            assert load_lock()["reserved"]["A"]["note"] == _keep, (
+                "a refused amend still wrote")
+            # ...but a note that MARKS the spend may quote the old claim, and
+            # this is the exemption consistency_check applies too. If the two
+            # rules ever diverge, amend_note refuses notes the check accepts.
+            RESERVED["A"]["note"] = ("SPENT 2026-09-11. Was the first held-out "
+                                     "set; do not touch no longer applies.")
+            assert amend_note("A") is True, (
+                "a note whose first sentence marks the spend must be allowed "
+                "to quote the old claim — that is the rule the consistency "
+                "check uses, and the two must not disagree")
+        finally:
+            RESERVED["A"]["note"] = _keep
+            amend_note("A")
+        assert amend_note("ZZ") is False, "unknown tranche must be refused"
+        print("amend guards     : a spent tranche cannot re-claim held-out "
+              "status")
+
         # ── add_tranche() must never disturb what is already recorded ──
         # The reason this function exists: init_lock(force=True) rebuilds from
         # RESERVED with spent=False everywhere and an empty ledger, so using it
@@ -829,6 +944,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--init", action="store_true", help="create the lock file")
+    ap.add_argument("--amend-note", metavar="NAME",
+                    help="sync a tranche's stored note from RESERVED")
     ap.add_argument("--add-tranche", metavar="NAME",
                     help="reserve a new tranche defined in RESERVED")
     ap.add_argument("--force", action="store_true",
@@ -855,6 +972,11 @@ def main() -> int:
         print(f"Created {LOCK}")
         status()
         return 0
+    if args.amend_note:
+        ok = amend_note(args.amend_note)
+        if ok:
+            status()
+        return 0 if ok else 1
     if args.add_tranche:
         name = args.add_tranche.upper()
         defn = RESERVED.get(name)
