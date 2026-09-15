@@ -50,6 +50,7 @@ import base64
 import json
 import logging
 import os
+import pathlib
 import time
 from pathlib import Path
 
@@ -374,6 +375,19 @@ def save(path: Path, data: list, *, merge: bool = False) -> list:
             # nothing, and absence in it is not evidence of a deletion.
             data = merge_positions(
                 data, remote, local_complete=not local_read_failed(path))
+            # RE-SAVE LOCALLY so the on-disk cache reflects the MERGED state.
+            #
+            # The _local_save above ran on the pre-merge copy. When the merge
+            # pulls in a change only the remote had — an OPEN -> EXIT_SIGNALLED
+            # flip written by exit_monitor.py is the case that matters — the
+            # cache never learns about it. A later GitHub outage then falls back
+            # to a local copy missing exactly the exit alert this merge just
+            # picked up, and the app shows a position as still open.
+            #
+            # Only reachable on the merge path, which is open_positions.json
+            # alone; every other file here is app-owned and the first save is
+            # already correct.
+            _local_save(path, data)
     err = _gh_put(path.name, data, f"chore: update {path.name} from app")
     st.session_state["_gh_last_error"] = err
     if err:
@@ -470,6 +484,33 @@ def selftest() -> int:
             "resurrecting it would reopen a position the user closed"
         print(f"merge_positions         : EXIT_SIGNALLED beats OPEN, keeps "
               f"new, respects closes")
+
+        # ── THE CACHE MUST HOLD THE MERGED STATE, NOT THE PRE-MERGE COPY ──
+        # merge_positions() was tested in isolation; save() was not, and the
+        # bug lived in save(). The local cache was written BEFORE the merge, so
+        # a remote-only EXIT_SIGNALLED flip never reached disk. On a GitHub
+        # outage the fallback then served a copy missing exactly the exit alert
+        # the merge had just picked up, and the app showed the position open.
+        import json as _json, tempfile as _tmp
+        with _tmp.TemporaryDirectory() as _d:
+            _path = pathlib.Path(_d) / "open_positions.json"
+            _path.write_text(_json.dumps([{"id": "A", "status": "OPEN"}]))
+            remote_payload = _json.dumps([{"id": "A", "status": "EXIT_SIGNALLED"}])
+            merge_get = _R(200, payload={
+                "content": _b64.b64encode(remote_payload.encode()).decode(),
+                "sha": "sha-1"})
+            calls["get"] = calls["put"] = 0
+            globals()["requests"] = _fake([merge_get], [_R(201)])
+            returned = save(_path, [{"id": "A", "status": "OPEN"}], merge=True)
+            assert {p["id"]: p for p in returned}["A"]["status"] == "EXIT_SIGNALLED", \
+                "save() must return the merged state"
+            on_disk = {p["id"]: p for p in _json.loads(_path.read_text())}
+            assert on_disk["A"]["status"] == "EXIT_SIGNALLED", (
+                f"the ON-DISK cache still says {on_disk['A']['status']!r}. The "
+                f"merge pulled in an exit flag and the cache never learned it; "
+                f"a GitHub outage would now serve a position as still OPEN")
+        print(f"cache after merge       : on-disk copy carries the merged "
+              f"EXIT_SIGNALLED, not the stale OPEN")
     finally:
         globals()["requests"] = real_requests
         globals()["_gh_token"] = real_token
