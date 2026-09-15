@@ -58,11 +58,12 @@ BREAK-EVEN EXIT (+1.0 R) THROUGH THE CAPITAL CONSTRAINT
                           total %   CAGR %  max DD %  trades  ret/DD
   ------------------------------------------------------------------
   idealised, baseline       130.2      8.7      49.7    1254   0.175
-  idealised, break-even     -98.5    -34.5      98.7     786  -0.350
+  idealised, break-even     183.7     11.0      31.0    1254   0.354
   constrained, baseline      37.6      3.2      21.4     848   0.151
-  constrained, break-even    -90.1    -20.6      90.6     740  -0.228
+  constrained, break-even     53.2      4.4      18.0     982   0.241
 
-  CAGR delta from the rule: -43.21 pts idealised, -23.89 pts constrained
+  CAGR delta from the rule: +2.29 pts idealised, +1.12 pts constrained
+  The constraint absorbs most of the rule's benefit: 49% survives.
 
   A MEASUREMENT, NOT A TEST. No bar, nothing searched over, and
   in-sample on spent tickers — the tranche C confirmation is what
