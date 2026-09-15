@@ -988,7 +988,7 @@ IMPORTABLE_MODULES = [
     "spread_backtest", "power_check", "adx_retest", "pead_study",
     "rvol_retest", "record_recheck", "atr_stop_test", "option_decompose",
     "thesis_test", "feature_sweep", "conditional_test", "longs_only",
-    "setup_cases", "setup_population",
+    "setup_cases", "setup_population", "drift_null",
 ]
 
 
