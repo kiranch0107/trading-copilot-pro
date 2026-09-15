@@ -166,6 +166,9 @@ jobs:
       - name: setup_population.py — Holm across readings, dose-response, the economic clause
         run: python setup_population.py --selftest
 
+      - name: drift_null.py — excess vs 1/(1+R:R), the null distribution, real exits
+        run: python drift_null.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 
