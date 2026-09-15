@@ -313,6 +313,10 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
     entry = raw_entry + slip if trend == "Bullish" else raw_entry - slip
 
     stop, target = trade["stop"], trade["target"]
+    # THE STOP THE TRADE WAS SIZED ON, kept separately because `stop` is now
+    # mutable: an exit policy moves it, and the recorded value must stay the
+    # one the position was sized against.
+    orig_stop = stop
     risk = abs(entry - stop)
     if risk <= 0:
         return {"filled": False}
@@ -489,7 +493,19 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
         # deployed: 1% risk behind a 2% stop is a 50% position, and an account
         # cannot hold three of those. longs_only.py needs this to tell an
         # idealised backtest apart from one a $5,000 account could actually run.
-        "entry": float(entry), "stop": float(stop),
+        # THE ORIGINAL STOP, not wherever the policy left it.
+        #
+        # THE BUG THIS FIXES. `stop` is mutated by break-even and trailing
+        # policies, and recording the mutated value made |entry - stop| ZERO on
+        # every break-even trade. longs_only sizes positions as
+        # risk_dollars / |entry - stop|, so it divided by zero, and the
+        # portfolio replay reported -98.5% total return and a 98.7% drawdown
+        # from a rule that caps losses and can at worst scratch a winner.
+        #
+        # Every consumer reading trade["stop"] means "what this was sized on":
+        # longs_only's sizing, setup_cases.fill_stats, drift_null's planned-R
+        # basis. The final stop is available as stop_at_exit.
+        "entry": float(entry), "stop": float(orig_stop),
         # THE PATH, not just the verdict. See the excursion block above.
         "mfe_r": float(mfe), "mae_r": float(mae), "bars_to_mfe": int(bars_to_mfe),
         # What the exit policy did, so an A/B can account for it per trade
@@ -1498,6 +1514,40 @@ def selftest() -> int:
             "managed after it is on")
     print(f"policy threading        : {_moved}/{len(_pa)} trades changed, "
           f"every entry identical")
+
+    # ── THE RECORDED STOP IS THE ONE THE TRADE WAS SIZED ON ──
+    #
+    # An exit policy MOVES the stop, and recording the moved value made
+    # |entry - stop| zero on every break-even trade. longs_only sizes as
+    # risk_dollars / |entry - stop|, so it divided by zero and the portfolio
+    # replay reported -98.5% total and a 98.7% drawdown from a rule that caps
+    # losses. The R-multiples were fine throughout, because `risk` is computed
+    # before the loop — only the RECORD was wrong, which is why it survived
+    # every test that looked at r.
+    _sd = pd.DataFrame({
+        "Date": pd.date_range("2024-01-01", periods=3, freq="D"),
+        "Open":  [100.0, 100.0, 103.0], "High": [100.0, 103.0, 103.0],
+        "Low":   [100.0, 100.0,  99.0], "Close": [100.0, 103.0, 99.5]})
+    _sc_cfg = dict(DEFAULTS, max_hold=3, slippage_bps=0.0, commission=0.0)
+    _str = {"trend": "Bullish", "entry": 100.0, "stop": 98.0, "target": 120.0,
+            "rr": 10.0, "atr": 2.0}
+    for _nm, _pl in (("baseline", None),
+                     ("break-even", {"breakeven_at": 1.0}),
+                     ("trail", {"trail_atr": 0.5, "arm_at": 1.0})):
+        _sr = simulate_trade(_sd, 0, _str, _sc_cfg, policy=_pl)
+        assert abs(_sr["stop"] - 98.0) < 1e-9, (
+            f"{_nm}: recorded stop is {_sr['stop']:.2f}, not the 98.00 the "
+            f"trade was sized on. Every position sizer reads this")
+        assert abs(_sr["entry"] - _sr["stop"]) > 1e-9, (
+            f"{_nm}: risk per share is zero — a sizer divides by this")
+    _be = simulate_trade(_sd, 0, _str, _sc_cfg, policy={"breakeven_at": 1.0})
+    assert abs(_be["stop_at_exit"] - 100.0) < 1e-9, (
+        f"the MOVED stop must still be reported, as stop_at_exit: "
+        f"{_be['stop_at_exit']}")
+    assert _be["stop"] != _be["stop_at_exit"], (
+        "the fixture must actually move the stop or it proves nothing")
+    print(f"recorded stop           : 98.00 under every policy; the moved stop "
+          f"is stop_at_exit ({_be['stop_at_exit']:.2f})")
 
     # ── AND run() ITSELF MUST PASS IT DOWN ──
     # The check above drives backtest_ticker, the middle of the chain. run() is
