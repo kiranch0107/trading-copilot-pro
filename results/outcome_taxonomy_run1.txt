@@ -1,0 +1,64 @@
+  collecting ...
+============================================================================================
+OUTCOME TAXONOMY — what happened, against what we predicted
+============================================================================================
+  2360 trades, 20 tickers, 10 years
+  pre-registered: results/outcome_taxonomy_preregistration.md
+  THESE BUCKETS NEVER BLOCK A TRADE. They are a readout.
+
+============================================================================================
+OUTCOME BUCKETS — 2360 trades, classified by what the price actually did
+============================================================================================
+  bucket               n   share   mean R  med MFE  med MAE   held  to MFE   what it means
+  ----------------------------------------------------------------------------------------
+  CLEAN TARGET       467   19.8%   +1.998    +2.15    -0.22      3       3   reached target, never seriously threatened
+  SCARE TARGET       237   10.0%   +2.291    +2.57    -0.74      6       6   got there after going deep against first
+  DEAD WRONG         742   31.4%   -1.008    +0.19    -1.32      1       0   stopped having barely moved our way — the ENTRY was wrong
+  NEAR MISS          356   15.1%   -1.040    +1.82    -1.47      4       2   stopped after getting at least halfway — the EXIT was wrong
+  SHALLOW LOSS       482   20.4%   -1.009    +0.80    -1.37      3       1   moved a little our way, then stopped
+  STALLED RUNNER      66    2.8%   +1.315    +2.61    -0.65     19      14   moved our way, ran out of time
+  CHOP                10    0.4%   +0.152    +0.79    -0.86     19      11   went nowhere either way
+
+============================================================================================
+WHAT THE SHAPE IMPLIES
+  Written into the pre-registration before the counts existed, so
+  they cannot be reinterpreted to suit what came back.
+============================================================================================
+  Of 1580 losses: 47.0% DEAD WRONG, 22.5% NEAR MISS
+
+  NEAR MISS is 23% of losses — the EXIT is implicated.
+  These trades went at least halfway to target and gave it all
+  back. Converting them needs no predictive power: a trailing
+  stop, a partial, or a break-even move acts on what already
+  happened.
+  THE NEXT STEP IS A PRE-REGISTERED A/B OF ONE SPECIFIC EXIT
+  RULE across the whole population. Multiplying this count by a
+  hypothetical payoff is backtesting on the answer sheet.
+
+  DEAD WRONG is 47% of losses — the ENTRY is the
+  problem, which matches everything already measured: the setup
+  readings carry no information at n = 1,457. Exit management
+  cannot fix a trade that never moved our way.
+
+  IN-SAMPLE, twenty spent tickers. A large bucket says what
+  happened. It does not say a change would have helped.
+============================================================================================
+
+============================================================================================
+DOES ANY READING PREDICT *WHICH KIND* OF LOSS?
+  DEAD WRONG n=742   NEAR MISS n=356
+============================================================================================
+  detectable effect at alpha 0.05, power 0.80: d = 0.181
+  reading             near miss  dead wrong     gap      d        p  Holm
+  ------------------------------------------------------------------------
+  planned R:R              2.32        2.42   -0.10  -0.11   0.1078    no
+  RSI                     53.14       53.60   -0.46  -0.03   0.6834    no
+  ADX                     33.86       32.66   +1.20  +0.16   0.0155    no
+  ATR %                    3.46        3.22   +0.24  +0.14   0.0294    no
+  volume x                 1.16        1.10   +0.06  +0.16   0.0161    no
+  price-EMA20 ATR          0.32        0.38   -0.06  -0.03   0.6746    no
+  EMA20-EMA50 ATR          0.44        0.48   -0.04  -0.02   0.7203    no
+
+  NOTHING. The readings cannot tell a trade that will go
+  nowhere from one that will run and give it back, any more
+  than they can tell a winner from a loser.
