@@ -175,6 +175,9 @@ jobs:
       - name: outcome_taxonomy.py — buckets, fixed order, never a gate
         run: python outcome_taxonomy.py --selftest
 
+      - name: exit_ab.py — paired deltas, arms differ, baseline unpoliced
+        run: python exit_ab.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 

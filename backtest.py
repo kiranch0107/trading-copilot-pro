@@ -290,7 +290,8 @@ def evaluate_signal(df: pd.DataFrame, i: int, params: sc.SignalParams,
 # TRADE SIMULATION — enter next open, stop-first fills, timeout m2m
 # ══════════════════════════════════════════════════════════════════════
 def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
-                   cfg: dict, tally: dict | None = None) -> dict:
+                   cfg: dict, tally: dict | None = None,
+                   policy: dict | None = None) -> dict:
     """
     Enter at the OPEN of bar signal_i+1 (no same-bar fill). Walk forward until
     stop or target is hit (stop checked first on ambiguous bars = conservative),
@@ -355,8 +356,35 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
     # because after that we are out and the path is not ours.
     mfe = mae = 0.0
     bars_to_mfe = 0
+    # EXIT POLICY. None reproduces the original behaviour exactly, and
+    # consistency_check.check_exit_policy_baseline_unchanged() pins that: if
+    # the None path ever diverges, every recorded result in results/ silently
+    # changes meaning.
+    #
+    # Written as a parameter rather than a second simulator because a
+    # duplicated engine is the pattern this repo already paid for, when
+    # scanner.py and app.py each carried their own copy of the signal and
+    # disagreed for weeks.
+    pol = policy or {}
+    be_at = pol.get("breakeven_at")        # move stop to entry at +N R
+    trail_atr = pol.get("trail_atr")       # trail this many ATR off the peak
+    arm_at = pol.get("arm_at", 1.0)        # trail only after +N R
+    part_at = pol.get("partial_at")        # take part off at +N R
+    part_frac = pol.get("partial_frac", 0.5)
+    atr_v = float(trade.get("atr") or 0)
+    peak = 0.0                             # high-water mark, in R
+    booked = 0.0                           # R already realised on the partial
+    size = 1.0                             # fraction of the position still on
+    pending_stop = None                    # takes effect NEXT bar, never this one
+
     exit_i = None; exit_px = None; outcome = None
     for j in range(entry_i, min(entry_i + cfg["max_hold"], n)):
+        # A stop moved by a trigger on bar j-1 becomes live now. Applying it on
+        # the SAME bar that triggered it and then testing it against that bar's
+        # low is lookahead: within one bar we cannot know whether the high or
+        # the low came first.
+        if pending_stop is not None:
+            stop, pending_stop = pending_stop, None
         hi = float(df["High"].iloc[j]); lo = float(df["Low"].iloc[j])
         fav = (hi - entry) if trend == "Bullish" else (entry - lo)
         adv = (lo - entry) if trend == "Bullish" else (entry - hi)
@@ -373,6 +401,34 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
                 exit_px, outcome, exit_i = stop, "loss", j; break
             if lo <= target:
                 exit_px, outcome, exit_i = target, "win", j; break
+
+        # ── policy actions, AFTER the exit checks for this bar ──
+        peak = max(peak, fav / risk)
+        if part_at is not None and size > 0.999 and peak >= part_at:
+            # Fills as a limit on the high, like the target, and pays the same
+            # slippage. The stop check above already won this bar if both were
+            # touched, matching the baseline's ordering.
+            px = entry + part_at * risk if trend == "Bullish" \
+                else entry - part_at * risk
+            slip_p = px * cfg["slippage_bps"] / 10_000.0
+            fill_p = px - slip_p if trend == "Bullish" else px + slip_p
+            gain = (fill_p - entry) if trend == "Bullish" else (entry - fill_p)
+            booked += part_frac * gain / risk
+            size -= part_frac
+        if be_at is not None and peak >= be_at:
+            new_stop = entry
+            if (trend == "Bullish" and new_stop > stop) or \
+               (trend == "Bearish" and new_stop < stop):
+                pending_stop = new_stop
+        if trail_atr is not None and atr_v > 0 and peak >= arm_at:
+            hw = entry + peak * risk if trend == "Bullish" \
+                else entry - peak * risk
+            new_stop = hw - trail_atr * atr_v if trend == "Bullish" \
+                else hw + trail_atr * atr_v
+            # A trailing stop never moves against us.
+            if (trend == "Bullish" and new_stop > stop) or \
+               (trend == "Bearish" and new_stop < stop):
+                pending_stop = new_stop
 
     # RIGHT-CENSORING. A trade whose max_hold window extends past the last bar
     # cannot time out on its own terms — it is marked to market at whatever the
@@ -398,7 +454,10 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
     exit_fill = exit_px - exit_slip if trend == "Bullish" else exit_px + exit_slip
 
     pnl = (exit_fill - entry) if trend == "Bullish" else (entry - exit_fill)
-    r_multiple = pnl / risk
+    # `booked` is R already realised on a partial; `size` is what is left to
+    # exit here. With no policy these are 0.0 and 1.0, so this reduces to
+    # pnl / risk exactly and the baseline is untouched.
+    r_multiple = booked + size * (pnl / risk)
 
     # Commission expressed in R (approx: commission / dollar-risk-per-share
     # is negligible for share trades; included for completeness)
@@ -431,6 +490,10 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
         "entry": float(entry), "stop": float(stop),
         # THE PATH, not just the verdict. See the excursion block above.
         "mfe_r": float(mfe), "mae_r": float(mae), "bars_to_mfe": int(bars_to_mfe),
+        # What the exit policy did, so an A/B can account for it per trade
+        # rather than only in aggregate.
+        "booked_r": float(booked), "size_at_exit": float(size),
+        "stop_at_exit": float(stop),
         # THE SETUP AS THE LOGIC SAW IT, carried whole. `trade` is
         # signal_core.evaluate()'s result, less "blocked" and the placeholder
         # ticker: every gate, every indicator reading and the constructed levels
@@ -1337,6 +1400,134 @@ def selftest() -> int:
     assert _hr["bars_to_mfe"] == 0, _hr["bars_to_mfe"]
     print(f"excursion units         : +1.50 R / -0.50 R on a 2-point risk "
           f"(price units would read +3.0 / -1.0)")
+
+    # ── policy=None MUST BE BIT-IDENTICAL TO THE ORIGINAL ENGINE ──
+    # Everything in results/ was produced by the pre-policy simulate_trade. If
+    # threading a policy parameter through changed the default path by even a
+    # rounding step, every recorded number would silently stop meaning what it
+    # says, and nothing would error.
+    _base_cfg = dict(DEFAULTS)
+    _pol_probe = []
+    for _up in (True, False):
+        _d = _synthetic_ohlc(up=_up, adx=40.0)
+        for _i in range(60, len(_d) - 25, 3):
+            _sg = evaluate_signal(_d, _i, params)
+            if not _sg:
+                continue
+            _a = simulate_trade(_d, _i, _sg, _base_cfg)
+            _b = simulate_trade(_d, _i, _sg, _base_cfg, policy=None)
+            _c = simulate_trade(_d, _i, _sg, _base_cfg, policy={})
+            if not _a.get("filled"):
+                continue
+            _pol_probe.append(_a)
+            for _k in ("r", "outcome", "hold", "mfe_r", "mae_r", "entry", "stop"):
+                assert _a[_k] == _b[_k] == _c[_k], (
+                    f"policy=None changed {_k!r}: {_a[_k]} / {_b[_k]} / {_c[_k]}")
+            assert _a["booked_r"] == 0.0 and _a["size_at_exit"] == 1.0, (
+                f"with no policy nothing is booked early and the whole "
+                f"position exits at the end: {_a['booked_r']}, "
+                f"{_a['size_at_exit']}")
+    assert len(_pol_probe) >= 10, f"only {len(_pol_probe)} probes — too few"
+    print(f"policy=None identical   : {len(_pol_probe)} trades, "
+          f"r/outcome/hold/MFE/MAE unchanged")
+
+    # ── each policy must actually CHANGE something ──
+    # A policy that silently no-ops reports a delta of zero in the A/B and
+    # reads as "no effect" — indistinguishable from a rule that genuinely does
+    # nothing. The synthetic trends are useless here: on a smooth uptrend the
+    # break-even stop moves but price never returns to it, so the policy fires
+    # and changes no outcome. Build the round trip by hand.
+    #
+    # entry 100, stop 98, risk 2, target 120.
+    #   bar 1: high 103 = +1.5 R  -> arms every policy
+    #   bar 2: low 97             -> everything exits, at a different price each
+    _rt = pd.DataFrame({
+        "Date": pd.date_range("2024-01-01", periods=3, freq="D"),
+        "Open":  [100.0, 100.0, 103.0],
+        "High":  [100.0, 103.0, 103.0],
+        "Low":   [100.0, 100.0,  97.0],
+        "Close": [100.0, 103.0,  97.0],
+    })
+    _rc = dict(DEFAULTS, max_hold=3, slippage_bps=0.0, commission=0.0)
+    _rtr = {"trend": "Bullish", "entry": 100.0, "stop": 98.0,
+            "target": 120.0, "rr": 10.0, "atr": 2.0}
+    _base = simulate_trade(_rt, 0, _rtr, _rc)
+    assert abs(_base["r"] - (-1.0)) < 1e-9, (
+        f"baseline must stop at 98 for -1.00 R, got {_base['r']}")
+    _want = {
+        "breakeven": ({"breakeven_at": 1.0}, 0.0),      # stop moved to entry
+        "trail":     ({"trail_atr": 1.0, "arm_at": 1.0}, 0.5),   # 103-2 = 101
+        "partial":   ({"partial_at": 1.5, "partial_frac": 0.5}, 0.25),  # .75 - .5
+    }
+    for _nm, (_pl, _exp) in _want.items():
+        _x = simulate_trade(_rt, 0, _rtr, _rc, policy=_pl)
+        assert abs(_x["r"] - _exp) < 1e-9, (
+            f"{_nm} should book {_exp:+.2f} R on this round trip, got "
+            f"{_x['r']:+.4f}. Baseline is {_base['r']:+.2f}")
+        assert abs(_x["r"] - _base["r"]) > 1e-9, (
+            f"the {_nm} policy changed nothing. An arm that silently no-ops "
+            f"reports a delta of zero and reads as 'no effect', which is "
+            f"indistinguishable from a rule that genuinely does nothing")
+    print(f"policies bite           : baseline -1.00 R -> breakeven +0.00, "
+          f"trail +0.50, partial +0.25 on the same bars")
+
+    # ── A TRAILING STOP NEVER MOVES AGAINST US, AND NEVER LOOKS AHEAD ──
+    # Hand-built: entry 100, stop 98, ATR 2. Bar 1 highs 104 (+2 R) which arms
+    # the trail at 104-2 = 102; that stop is live from bar 2, NOT bar 1 — bar 1
+    # also dipped to 99, and stopping there would be reading the low after
+    # seeing the high.
+    _t = pd.DataFrame({
+        "Date": pd.date_range("2024-01-01", periods=4, freq="D"),
+        "Open":  [100.0, 100.0, 103.0, 103.0],
+        "High":  [100.0, 104.0, 103.5, 103.0],
+        "Low":   [100.0,  99.0, 101.0, 100.0],
+        "Close": [100.0, 103.0, 103.0, 101.0],
+    })
+    _tc = dict(DEFAULTS, max_hold=3, slippage_bps=0.0, commission=0.0)
+    _tr = {"trend": "Bullish", "entry": 100.0, "stop": 98.0,
+           "target": 120.0, "rr": 10.0, "atr": 2.0}
+    _nt = simulate_trade(_t, 0, _tr, _tc)
+    assert _nt["outcome"] == "timeout", _nt["outcome"]
+    _wt = simulate_trade(_t, 0, _tr, _tc, policy={"trail_atr": 1.0, "arm_at": 1.0})
+    assert _wt["hold"] >= 1, (
+        f"the trail fired on the bar that armed it — bar 1's low of 99 is "
+        f"below the 102 stop that bar 1's high created. That is lookahead")
+    assert _wt["outcome"] == "loss" and abs(_wt["stop_at_exit"] - 102.0) < 1e-9, (
+        f"bar 2 should stop at the trailed 102, got {_wt['outcome']} at "
+        f"{_wt['stop_at_exit']}")
+    assert _wt["r"] > 0, (
+        f"a trail that exits at 102 from an entry of 100 with 2 of risk is "
+        f"+1 R, not a loss in money: {_wt['r']}")
+    print(f"trail semantics         : armed on bar 1, live from bar 2, "
+          f"exits +{_wt['r']:.2f} R at {_wt['stop_at_exit']:.0f}")
+
+    # ── A TRAIL MUST NEVER WIDEN THE ORIGINAL STOP ──
+    # The ratchet is not what needs guarding: `peak` is a running maximum, so
+    # the trailed level only ever rises. The real case is ARMING. With an ATR
+    # large relative to the trade's own risk, the first trailed level sits
+    # BELOW the original stop — entry 100, stop 98 (risk 2), ATR 5, armed at
+    # +1 R gives 102 - 5 = 97. Without the guard the stop widens from 98 to 97
+    # and the trade risks more than it was sized for.
+    _w = pd.DataFrame({
+        "Date": pd.date_range("2024-01-01", periods=4, freq="D"),
+        "Open":  [100.0, 100.0, 102.0, 100.0],
+        "High":  [100.0, 102.5, 102.0, 100.0],
+        "Low":   [100.0, 100.0,  97.5,  97.5],
+        "Close": [100.0, 102.0,  97.5,  97.5],
+    })
+    _wc = dict(DEFAULTS, max_hold=4, slippage_bps=0.0, commission=0.0)
+    _wtr = {"trend": "Bullish", "entry": 100.0, "stop": 98.0,
+            "target": 130.0, "rr": 15.0, "atr": 5.0}
+    _wr = simulate_trade(_w, 0, _wtr, _wc,
+                         policy={"trail_atr": 1.0, "arm_at": 1.0})
+    assert _wr["stop_at_exit"] >= 98.0 - 1e-9, (
+        f"the trail widened the stop to {_wr['stop_at_exit']:.2f}, below the "
+        f"original 98. A trade would then risk more than it was sized for")
+    assert _wr["outcome"] == "loss" and abs(_wr["r"] + 1.0) < 1e-9, (
+        f"bar 2 breaks 98 and must stop at -1.00 R, got {_wr['outcome']} "
+        f"{_wr['r']:+.4f}")
+    print(f"trail never widens      : ATR 5 on a 2-point risk keeps the stop "
+          f"at {_wr['stop_at_exit']:.0f}, not 97")
 
     # ── the weekly filter must actually GATE, not just get reported ──
     # THE REGRESSION THIS TEST EXISTS TO CATCH: --use-weekly turns on
