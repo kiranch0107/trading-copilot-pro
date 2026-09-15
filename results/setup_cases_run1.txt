@@ -1,0 +1,1790 @@
+  collecting ...
+====================================================================================================
+SETUP CASES — what the logic saw, on trades that worked and failed
+====================================================================================================
+  2360 trades across 20 tickers, 10 years
+  STAGE 1 of 3: this generates candidates. It cannot test them.
+====================================================================================================
+
+====================================================================================================
+GOOGL   121 trades, average -0.148 R
+====================================================================================================
+
+  +++ WIN 1  GOOGL  WORKED   +5.70 R   win   held 2 bars
+      entry 2025-08-01  ->  exit 2025-08-05
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    191.90   stop    187.69   target    196.96   planned R:R  1.20
+        stop is 2.19% of entry
+      STRUCTURE
+        price    191.90   EMA20    187.01   EMA50    179.31
+        price is +1.16 ATR from EMA20; EMA20 is +1.83 ATR from EMA50
+        ATR      4.21  = 2.19% of price
+      MOMENTUM
+        RSI  63.6        ADX  34.3
+      PARTICIPATION
+        volume  1.29x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 34.3 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  GOOGL  WORKED   +4.07 R   win   held 2 bars
+      entry 2026-04-28  ->  exit 2026-04-30
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    350.34   stop    342.26   target    374.59   planned R:R  3.00
+        stop is 2.31% of entry
+      STRUCTURE
+        price    350.34   EMA20    326.97   EMA50    316.85
+        price is +2.89 ATR from EMA20; EMA20 is +1.25 ATR from EMA50
+        ATR      8.08  = 2.31% of price
+      MOMENTUM
+        RSI  71.7        ADX  30.7
+      PARTICIPATION
+        volume  1.12x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 30.7 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  GOOGL  FAILED   -1.05 R   loss   held 1 bars
+      entry 2021-02-22  ->  exit 2021-02-23
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    104.44   stop    102.26   target    106.72   planned R:R  1.05
+        stop is 2.09% of entry
+      STRUCTURE
+        price    104.44   EMA20    100.69   EMA50     94.82
+        price is +1.53 ATR from EMA20; EMA20 is +2.40 ATR from EMA50
+        ATR      2.45  = 2.35% of price
+      MOMENTUM
+        RSI  68.5        ADX  38.1
+      PARTICIPATION
+        volume  0.94x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 38.1 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  GOOGL  FAILED   -1.04 R   loss   held 0 bars
+      entry 2018-06-25  ->  exit 2018-06-25
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry     58.46   stop     57.45   target     59.77   planned R:R  1.30
+        stop is 1.73% of entry
+      STRUCTURE
+        price     58.46   EMA20     57.23   EMA50     55.62
+        price is +1.22 ATR from EMA20; EMA20 is +1.59 ATR from EMA50
+        ATR      1.01  = 1.73% of price
+      MOMENTUM
+        RSI  63.8        ADX  25.1
+      PARTICIPATION
+        volume  0.88x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 25.1 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+AVGO   95 trades, average +0.125 R
+====================================================================================================
+
+  +++ WIN 1  AVGO  WORKED   +18.12 R   win   held 10 bars
+      entry 2025-05-19  ->  exit 2025-06-03
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    228.61   stop    220.12   target    254.09   planned R:R  3.00
+        stop is 3.71% of entry
+      STRUCTURE
+        price    228.61   EMA20    207.21   EMA50    197.65
+        price is +2.52 ATR from EMA20; EMA20 is +1.13 ATR from EMA50
+        ATR      8.49  = 3.71% of price
+      MOMENTUM
+        RSI  71.0        ADX  26.7
+      PARTICIPATION
+        volume  1.13x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 26.7 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  AVGO  WORKED   +6.43 R   win   held 1 bars
+      entry 2021-12-09  ->  exit 2021-12-10
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry     58.86   stop     57.56   target     62.75   planned R:R  2.99
+        stop is 2.21% of entry
+      STRUCTURE
+        price     58.86   EMA20     56.07   EMA50     54.04
+        price is +2.15 ATR from EMA20; EMA20 is +1.56 ATR from EMA50
+        ATR      1.30  = 2.21% of price
+      MOMENTUM
+        RSI  67.7        ADX  31.0
+      PARTICIPATION
+        volume  0.99x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 31.0 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  AVGO  FAILED   -1.08 R   loss   held 0 bars
+      entry 2022-01-26  ->  exit 2022-01-26
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    
+        entry     53.41   stop     55.33   target     51.60   planned R:R  0.94
+        stop is 3.59% of entry
+      STRUCTURE
+        price     53.41   EMA20     59.12   EMA50     59.14
+        price is -2.99 ATR from EMA20; EMA20 is -0.01 ATR from EMA50
+        ATR      1.91  = 3.58% of price
+      MOMENTUM
+        RSI  26.6        ADX  41.7
+      PARTICIPATION
+        volume  1.44x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 41.7 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  AVGO  FAILED   -1.02 R   loss   held 2 bars
+      entry 2024-02-09  ->  exit 2024-02-13
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    127.48   stop    124.15   target    137.45   planned R:R  2.99
+        stop is 2.61% of entry
+      STRUCTURE
+        price    127.48   EMA20    119.81   EMA50    112.02
+        price is +2.31 ATR from EMA20; EMA20 is +2.35 ATR from EMA50
+        ATR      3.32  = 2.60% of price
+      MOMENTUM
+        RSI  68.4        ADX  41.0
+      PARTICIPATION
+        volume  1.07x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 41.0 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+AMD   118 trades, average -0.149 R
+====================================================================================================
+
+  +++ WIN 1  AMD  WORKED   +3.56 R   win   held 8 bars
+      entry 2018-08-02  ->  exit 2018-08-14
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry     18.48   stop     17.64   target     20.08   planned R:R  1.90
+        stop is 4.55% of entry
+      STRUCTURE
+        price     18.48   EMA20     17.17   EMA50     15.80
+        price is +1.56 ATR from EMA20; EMA20 is +1.63 ATR from EMA50
+        ATR      0.84  = 4.55% of price
+      MOMENTUM
+        RSI  63.7        ADX  32.1
+      PARTICIPATION
+        volume  1.04x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 32.1 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  AMD  WORKED   +3.53 R   win   held 6 bars
+      entry 2018-05-23  ->  exit 2018-06-01
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry     12.98   stop     12.58   target     14.18   planned R:R  3.00
+        stop is 3.08% of entry
+      STRUCTURE
+        price     12.98   EMA20     11.96   EMA50     11.41
+        price is +2.55 ATR from EMA20; EMA20 is +1.38 ATR from EMA50
+        ATR      0.40  = 3.08% of price
+      MOMENTUM
+        RSI  74.1        ADX  31.3
+      PARTICIPATION
+        volume  0.79x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 31.3 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  AMD  FAILED   -1.05 R   loss   held 0 bars
+      entry 2020-03-13  ->  exit 2020-03-13
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    HIGH QUALITY
+        entry     39.01   stop     42.35   target     28.99   planned R:R  3.00
+        stop is 8.56% of entry
+      STRUCTURE
+        price     39.01   EMA20     47.41   EMA50     47.55
+        price is -2.51 ATR from EMA20; EMA20 is -0.04 ATR from EMA50
+        ATR      3.34  = 8.56% of price
+      MOMENTUM
+        RSI  33.9        ADX  25.7
+      PARTICIPATION
+        volume  1.20x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 25.7 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  AMD  FAILED   -1.02 R   loss   held 0 bars
+      entry 2024-01-02  ->  exit 2024-01-02
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    147.41   stop    143.16   target    160.17   planned R:R  3.00
+        stop is 2.88% of entry
+      STRUCTURE
+        price    147.41   EMA20    136.53   EMA50    125.73
+        price is +2.56 ATR from EMA20; EMA20 is +2.54 ATR from EMA50
+        ATR      4.25  = 2.88% of price
+      MOMENTUM
+        RSI  73.8        ADX  47.9
+      PARTICIPATION
+        volume  0.97x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 47.9 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+NFLX   116 trades, average -0.061 R
+====================================================================================================
+
+  +++ WIN 1  NFLX  WORKED   +5.27 R   win   held 3 bars
+      entry 2018-01-10  ->  exit 2018-01-16
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry     20.93   stop     20.47   target     22.30   planned R:R  2.98
+        stop is 2.20% of entry
+      STRUCTURE
+        price     20.93   EMA20     19.77   EMA50     19.35
+        price is +2.52 ATR from EMA20; EMA20 is +0.91 ATR from EMA50
+        ATR      0.46  = 2.20% of price
+      MOMENTUM
+        RSI  69.7        ADX  26.8
+      PARTICIPATION
+        volume  0.99x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 26.8 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  NFLX  WORKED   +4.01 R   timeout   held 19 bars
+      entry 2025-12-17  ->  exit 2026-01-15
+      ------------------------------------------------------------------
+      TRADE      Bearish   Normal    
+        entry     94.57   stop     97.93   target     84.50   planned R:R  3.00
+        stop is 3.55% of entry
+      STRUCTURE
+        price     94.57   EMA20    101.17   EMA50    107.73
+        price is -1.96 ATR from EMA20; EMA20 is -1.95 ATR from EMA50
+        ATR      3.36  = 3.55% of price
+      MOMENTUM
+        RSI  32.7        ADX  25.9
+      PARTICIPATION
+        volume  0.70x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 25.9 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  NFLX  FAILED   -1.22 R   loss   held 0 bars
+      entry 2019-12-03  ->  exit 2019-12-03
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry     31.00   stop     30.20   target     33.38   planned R:R  2.98
+        stop is 2.58% of entry
+      STRUCTURE
+        price     31.00   EMA20     30.22   EMA50     29.53
+        price is +0.98 ATR from EMA20; EMA20 is +0.86 ATR from EMA50
+        ATR      0.80  = 2.58% of price
+      MOMENTUM
+        RSI  60.8        ADX  33.9
+      PARTICIPATION
+        volume  1.09x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 33.9 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  NFLX  FAILED   -1.02 R   loss   held 0 bars
+      entry 2020-01-27  ->  exit 2020-01-27
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry     35.32   stop     34.32   target     38.30   planned R:R  2.98
+        stop is 2.83% of entry
+      STRUCTURE
+        price     35.32   EMA20     33.47   EMA50     32.17
+        price is +1.85 ATR from EMA20; EMA20 is +1.30 ATR from EMA50
+        ATR      1.00  = 2.83% of price
+      MOMENTUM
+        RSI  64.9        ADX  29.7
+      PARTICIPATION
+        volume  2.33x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 29.7 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+CRM   113 trades, average -0.136 R
+====================================================================================================
+
+  +++ WIN 1  CRM  WORKED   +3.63 R   win   held 7 bars
+      entry 2018-02-20  ->  exit 2018-03-01
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    112.86   stop    110.08   target    121.19   planned R:R  3.00
+        stop is 2.46% of entry
+      STRUCTURE
+        price    112.86   EMA20    109.94   EMA50    108.11
+        price is +1.05 ATR from EMA20; EMA20 is +0.66 ATR from EMA50
+        ATR      2.78  = 2.46% of price
+      MOMENTUM
+        RSI  57.7        ADX  28.3
+      PARTICIPATION
+        volume  0.92x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 28.3 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  CRM  WORKED   +3.42 R   win   held 6 bars
+      entry 2017-11-10  ->  exit 2017-11-20
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    103.60   stop    101.90   target    108.69   planned R:R  2.99
+        stop is 1.64% of entry
+      STRUCTURE
+        price    103.60   EMA20    100.70   EMA50     97.65
+        price is +1.71 ATR from EMA20; EMA20 is +1.79 ATR from EMA50
+        ATR      1.70  = 1.64% of price
+      MOMENTUM
+        RSI  69.9        ADX  40.1
+      PARTICIPATION
+        volume  1.29x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 40.1 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  CRM  FAILED   -1.04 R   loss   held 0 bars
+      entry 2024-01-31  ->  exit 2024-01-31
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    287.73   stop    282.51   target    303.38   planned R:R  3.00
+        stop is 1.81% of entry
+      STRUCTURE
+        price    287.73   EMA20    273.28   EMA50    257.97
+        price is +2.77 ATR from EMA20; EMA20 is +2.93 ATR from EMA50
+        ATR      5.22  = 1.81% of price
+      MOMENTUM
+        RSI  75.0        ADX  36.7
+      PARTICIPATION
+        volume  0.87x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 36.7 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  CRM  FAILED   -1.03 R   loss   held 0 bars
+      entry 2020-03-10  ->  exit 2020-03-10
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    HIGH QUALITY
+        entry    151.21   stop    158.33   target    129.84   planned R:R  3.00
+        stop is 4.71% of entry
+      STRUCTURE
+        price    151.21   EMA20    175.62   EMA50    176.37
+        price is -3.43 ATR from EMA20; EMA20 is -0.11 ATR from EMA50
+        ATR      7.12  = 4.71% of price
+      MOMENTUM
+        RSI  26.8        ADX  32.4
+      PARTICIPATION
+        volume  1.36x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 32.4 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+ADBE   135 trades, average -0.177 R
+====================================================================================================
+
+  +++ WIN 1  ADBE  WORKED   +6.01 R   win   held 7 bars
+      entry 2019-12-31  ->  exit 2020-01-10
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    328.34   stop    323.64   target    342.45   planned R:R  3.00
+        stop is 1.43% of entry
+      STRUCTURE
+        price    328.34   EMA20    318.85   EMA50    305.22
+        price is +2.02 ATR from EMA20; EMA20 is +2.90 ATR from EMA50
+        ATR      4.70  = 1.43% of price
+      MOMENTUM
+        RSI  73.4        ADX  43.0
+      PARTICIPATION
+        volume  0.77x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 43.0 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  ADBE  WORKED   +4.15 R   timeout   held 19 bars
+      entry 2023-11-13  ->  exit 2023-12-11
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    597.22   stop    581.67   target    643.87   planned R:R  3.00
+        stop is 2.60% of entry
+      STRUCTURE
+        price    597.22   EMA20    556.22   EMA50    540.84
+        price is +2.64 ATR from EMA20; EMA20 is +0.99 ATR from EMA50
+        ATR     15.55  = 2.60% of price
+      MOMENTUM
+        RSI  69.7        ADX  25.4
+      PARTICIPATION
+        volume  1.16x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 25.4 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  ADBE  FAILED   -1.10 R   loss   held 0 bars
+      entry 2019-12-03  ->  exit 2019-12-03
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    302.75   stop    297.69   target    308.45   planned R:R  1.13
+        stop is 1.67% of entry
+      STRUCTURE
+        price    302.75   EMA20    296.95   EMA50    288.82
+        price is +1.15 ATR from EMA20; EMA20 is +1.61 ATR from EMA50
+        ATR      5.06  = 1.67% of price
+      MOMENTUM
+        RSI  63.0        ADX  41.3
+      PARTICIPATION
+        volume  1.29x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 41.3 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  ADBE  FAILED   -1.03 R   loss   held 0 bars
+      entry 2021-11-23  ->  exit 2021-11-23
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    673.57   stop    658.67   target    696.04   planned R:R  1.51
+        stop is 2.21% of entry
+      STRUCTURE
+        price    673.57   EMA20    657.56   EMA50    640.37
+        price is +1.07 ATR from EMA20; EMA20 is +1.15 ATR from EMA50
+        ATR     14.90  = 2.21% of price
+      MOMENTUM
+        RSI  59.8        ADX  36.5
+      PARTICIPATION
+        volume  1.25x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 36.5 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+QCOM   100 trades, average -0.009 R
+====================================================================================================
+
+  +++ WIN 1  QCOM  WORKED   +11.52 R   win   held 5 bars
+      entry 2024-05-08  ->  exit 2024-05-15
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    180.15   stop    175.18   target    195.06   planned R:R  3.00
+        stop is 2.76% of entry
+      STRUCTURE
+        price    180.15   EMA20    170.75   EMA50    166.09
+        price is +1.89 ATR from EMA20; EMA20 is +0.94 ATR from EMA50
+        ATR      4.97  = 2.76% of price
+      MOMENTUM
+        RSI  63.1        ADX  25.4
+      PARTICIPATION
+        volume  0.93x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 25.4 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  QCOM  WORKED   +7.37 R   win   held 9 bars
+      entry 2018-10-29  ->  exit 2018-11-09
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    HIGH QUALITY
+        entry     62.48   stop     64.41   target     56.68   planned R:R  3.01
+        stop is 3.09% of entry
+      STRUCTURE
+        price     62.48   EMA20     66.53   EMA50     67.42
+        price is -2.10 ATR from EMA20; EMA20 is -0.46 ATR from EMA50
+        ATR      1.93  = 3.09% of price
+      MOMENTUM
+        RSI  31.1        ADX  36.9
+      PARTICIPATION
+        volume  1.16x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 36.9 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  QCOM  FAILED   -1.04 R   loss   held 0 bars
+      entry 2024-02-13  ->  exit 2024-02-13
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    153.10   stop    149.36   target    157.19   planned R:R  1.09
+        stop is 2.44% of entry
+      STRUCTURE
+        price    153.10   EMA20    146.73   EMA50    141.23
+        price is +1.70 ATR from EMA20; EMA20 is +1.47 ATR from EMA50
+        ATR      3.74  = 2.44% of price
+      MOMENTUM
+        RSI  63.6        ADX  26.2
+      PARTICIPATION
+        volume  1.10x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 26.2 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  QCOM  FAILED   -1.03 R   loss   held 0 bars
+      entry 2017-04-25  ->  exit 2017-04-25
+      ------------------------------------------------------------------
+      TRADE      Bearish   Normal    
+        entry     52.81   stop     53.49   target     51.66   planned R:R  1.69
+        stop is 1.29% of entry
+      STRUCTURE
+        price     52.81   EMA20     54.55   EMA50     56.31
+        price is -1.89 ATR from EMA20; EMA20 is -1.91 ATR from EMA50
+        ATR      0.92  = 1.74% of price
+      MOMENTUM
+        RSI  27.6        ADX  28.6
+      PARTICIPATION
+        volume  0.99x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 28.6 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+MU   120 trades, average +0.218 R
+====================================================================================================
+
+  +++ WIN 1  MU  WORKED   +12.52 R   win   held 4 bars
+      entry 2020-03-10  ->  exit 2020-03-16
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    HIGH QUALITY
+        entry     45.97   stop     49.05   target     36.74   planned R:R  3.00
+        stop is 6.70% of entry
+      STRUCTURE
+        price     45.97   EMA20     53.79   EMA50     54.24
+        price is -2.54 ATR from EMA20; EMA20 is -0.15 ATR from EMA50
+        ATR      3.08  = 6.70% of price
+      MOMENTUM
+        RSI  33.6        ADX  25.3
+      PARTICIPATION
+        volume  1.05x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 25.3 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  MU  WORKED   +11.51 R   win   held 8 bars
+      entry 2025-10-14  ->  exit 2025-10-24
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    192.77   stop    184.29   target    218.20   planned R:R  3.00
+        stop is 4.40% of entry
+      STRUCTURE
+        price    192.77   EMA20    174.01   EMA50    152.48
+        price is +2.21 ATR from EMA20; EMA20 is +2.54 ATR from EMA50
+        ATR      8.48  = 4.40% of price
+      MOMENTUM
+        RSI  67.5        ADX  44.9
+      PARTICIPATION
+        volume  0.72x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 44.9 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  MU  FAILED   -1.02 R   loss   held 0 bars
+      entry 2026-06-05  ->  exit 2026-06-05
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    996.00   stop    935.30   target   1083.84   planned R:R  1.45
+        stop is 6.09% of entry
+      STRUCTURE
+        price    996.00   EMA20    851.78   EMA50    680.41
+        price is +2.38 ATR from EMA20; EMA20 is +2.82 ATR from EMA50
+        ATR     60.70  = 6.09% of price
+      MOMENTUM
+        RSI  69.7        ADX  42.4
+      PARTICIPATION
+        volume  1.00x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 42.4 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  MU  FAILED   -1.02 R   loss   held 0 bars
+      entry 2025-09-25  ->  exit 2025-09-25
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    161.71   stop    155.70   target    169.60   planned R:R  1.31
+        stop is 3.72% of entry
+      STRUCTURE
+        price    161.71   EMA20    147.99   EMA50    132.64
+        price is +2.28 ATR from EMA20; EMA20 is +2.55 ATR from EMA50
+        ATR      6.01  = 3.72% of price
+      MOMENTUM
+        RSI  70.4        ADX  42.0
+      PARTICIPATION
+        volume  2.18x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 42.0 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+ORCL   137 trades, average -0.045 R
+====================================================================================================
+
+  +++ WIN 1  ORCL  WORKED   +15.83 R   win   held 3 bars
+      entry 2026-02-02  ->  exit 2026-02-05
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    HIGH QUALITY
+        entry    164.58   stop    172.85   target    139.77   planned R:R  3.00
+        stop is 5.02% of entry
+      STRUCTURE
+        price    164.58   EMA20    182.98   EMA50    199.15
+        price is -2.22 ATR from EMA20; EMA20 is -1.96 ATR from EMA50
+        ATR      8.27  = 5.02% of price
+      MOMENTUM
+        RSI  31.2        ADX  25.1
+      PARTICIPATION
+        volume  1.16x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 25.1 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  ORCL  WORKED   +6.67 R   win   held 18 bars
+      entry 2026-06-29  ->  exit 2026-07-24
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    HIGH QUALITY
+        entry    148.53   stop    159.76   target    114.84   planned R:R  3.00
+        stop is 7.56% of entry
+      STRUCTURE
+        price    148.53   EMA20    182.23   EMA50    184.46
+        price is -3.00 ATR from EMA20; EMA20 is -0.20 ATR from EMA50
+        ATR     11.23  = 7.56% of price
+      MOMENTUM
+        RSI  29.6        ADX  25.5
+      PARTICIPATION
+        volume  1.16x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 25.5 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  ORCL  FAILED   -1.26 R   loss   held 0 bars
+      entry 2025-11-26  ->  exit 2025-11-26
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    HIGH QUALITY
+        entry    197.03   stop    209.62   target    159.27   planned R:R  3.00
+        stop is 6.39% of entry
+      STRUCTURE
+        price    197.03   EMA20    229.97   EMA50    249.67
+        price is -2.62 ATR from EMA20; EMA20 is -1.56 ATR from EMA50
+        ATR     12.59  = 6.39% of price
+      MOMENTUM
+        RSI  25.2        ADX  38.1
+      PARTICIPATION
+        volume  1.26x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 38.1 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  ORCL  FAILED   -1.19 R   loss   held 0 bars
+      entry 2020-11-04  ->  exit 2020-11-04
+      ------------------------------------------------------------------
+      TRADE      Bearish   Normal    
+        entry     56.80   stop     58.05   target     55.42   planned R:R  1.10
+        stop is 2.20% of entry
+      STRUCTURE
+        price     56.80   EMA20     58.18   EMA50     58.23
+        price is -1.10 ATR from EMA20; EMA20 is -0.04 ATR from EMA50
+        ATR      1.25  = 2.20% of price
+      MOMENTUM
+        RSI  38.4        ADX  30.3
+      PARTICIPATION
+        volume  0.90x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 30.3 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+NOW   91 trades, average +0.156 R
+====================================================================================================
+
+  +++ WIN 1  NOW  WORKED   +5.29 R   win   held 5 bars
+      entry 2017-05-18  ->  exit 2017-05-25
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry     19.71   stop     19.35   target     20.80   planned R:R  3.03
+        stop is 1.83% of entry
+      STRUCTURE
+        price     19.71   EMA20     19.01   EMA50     18.30
+        price is +1.94 ATR from EMA20; EMA20 is +1.97 ATR from EMA50
+        ATR      0.36  = 1.83% of price
+      MOMENTUM
+        RSI  68.7        ADX  41.7
+      PARTICIPATION
+        volume  1.98x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 41.7 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  NOW  WORKED   +5.00 R   win   held 4 bars
+      entry 2026-02-02  ->  exit 2026-02-06
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    HIGH QUALITY
+        entry    117.01   stop    122.30   target    101.14   planned R:R  3.00
+        stop is 4.52% of entry
+      STRUCTURE
+        price    117.01   EMA20    134.24   EMA50    148.01
+        price is -3.26 ATR from EMA20; EMA20 is -2.60 ATR from EMA50
+        ATR      5.29  = 4.52% of price
+      MOMENTUM
+        RSI  25.3        ADX  43.3
+      PARTICIPATION
+        volume  1.73x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 43.3 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  NOW  FAILED   -1.03 R   loss   held 0 bars
+      entry 2018-02-06  ->  exit 2018-02-06
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry     29.48   stop     28.77   target     31.24   planned R:R  2.48
+        stop is 2.41% of entry
+      STRUCTURE
+        price     29.48   EMA20     28.74   EMA50     27.23
+        price is +1.04 ATR from EMA20; EMA20 is +2.13 ATR from EMA50
+        ATR      0.71  = 2.41% of price
+      MOMENTUM
+        RSI  63.5        ADX  50.3
+      PARTICIPATION
+        volume  1.87x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 50.3 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  NOW  FAILED   -1.02 R   loss   held 1 bars
+      entry 2019-08-22  ->  exit 2019-08-23
+      ------------------------------------------------------------------
+      TRADE      Bearish   Normal    
+        entry     53.16   stop     53.76   target     50.29   planned R:R  4.78
+        stop is 1.13% of entry
+      STRUCTURE
+        price     53.16   EMA20     53.18   EMA50     54.33
+        price is -0.01 ATR from EMA20; EMA20 is -0.72 ATR from EMA50
+        ATR      1.60  = 3.01% of price
+      MOMENTUM
+        RSI  47.4        ADX  38.9
+      PARTICIPATION
+        volume  0.95x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 38.9 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+PANW   112 trades, average -0.043 R
+====================================================================================================
+
+  +++ WIN 1  PANW  WORKED   +8.00 R   win   held 14 bars
+      entry 2019-01-28  ->  exit 2019-02-15
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry     34.95   stop     34.03   target     37.73   planned R:R  3.02
+        stop is 2.63% of entry
+      STRUCTURE
+        price     34.95   EMA20     32.82   EMA50     31.89
+        price is +2.29 ATR from EMA20; EMA20 is +1.00 ATR from EMA50
+        ATR      0.93  = 2.66% of price
+      MOMENTUM
+        RSI  71.8        ADX  35.6
+      PARTICIPATION
+        volume  1.00x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 35.6 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  PANW  WORKED   +6.78 R   win   held 10 bars
+      entry 2019-02-08  ->  exit 2019-02-25
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry     36.58   stop     35.74   target     39.07   planned R:R  2.96
+        stop is 2.30% of entry
+      STRUCTURE
+        price     36.58   EMA20     34.79   EMA50     33.14
+        price is +2.16 ATR from EMA20; EMA20 is +1.99 ATR from EMA50
+        ATR      0.83  = 2.27% of price
+      MOMENTUM
+        RSI  72.5        ADX  42.4
+      PARTICIPATION
+        volume  1.19x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 42.4 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  PANW  FAILED   -1.06 R   loss   held 0 bars
+      entry 2026-01-05  ->  exit 2026-01-05
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    HIGH QUALITY
+        entry    179.37   stop    183.57   target    166.76   planned R:R  3.00
+        stop is 2.34% of entry
+      STRUCTURE
+        price    179.37   EMA20    188.33   EMA50    194.07
+        price is -2.13 ATR from EMA20; EMA20 is -1.37 ATR from EMA50
+        ATR      4.20  = 2.34% of price
+      MOMENTUM
+        RSI  32.7        ADX  30.4
+      PARTICIPATION
+        volume  1.32x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 30.4 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  PANW  FAILED   -1.03 R   loss   held 0 bars
+      entry 2024-11-21  ->  exit 2024-11-21
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    196.45   stop    191.79   target    203.24   planned R:R  1.46
+        stop is 2.37% of entry
+      STRUCTURE
+        price    196.45   EMA20    191.03   EMA50    183.74
+        price is +1.17 ATR from EMA20; EMA20 is +1.57 ATR from EMA50
+        ATR      4.65  = 2.37% of price
+      MOMENTUM
+        RSI  62.5        ADX  32.2
+      PARTICIPATION
+        volume  2.57x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 32.2 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+LRCX   128 trades, average -0.201 R
+====================================================================================================
+
+  +++ WIN 1  LRCX  WORKED   +8.17 R   win   held 7 bars
+      entry 2024-01-31  ->  exit 2024-02-09
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry     83.58   stop     81.32   target     89.56   planned R:R  2.65
+        stop is 2.70% of entry
+      STRUCTURE
+        price     83.58   EMA20     80.32   EMA50     76.02
+        price is +1.45 ATR from EMA20; EMA20 is +1.91 ATR from EMA50
+        ATR      2.25  = 2.69% of price
+      MOMENTUM
+        RSI  63.2        ADX  29.7
+      PARTICIPATION
+        volume  0.91x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 29.7 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  LRCX  WORKED   +5.54 R   win   held 8 bars
+      entry 2026-01-14  ->  exit 2026-01-27
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    214.38   stop    206.13   target    239.14   planned R:R  3.00
+        stop is 3.85% of entry
+      STRUCTURE
+        price    214.38   EMA20    189.82   EMA50    171.17
+        price is +2.98 ATR from EMA20; EMA20 is +2.26 ATR from EMA50
+        ATR      8.25  = 3.85% of price
+      MOMENTUM
+        RSI  71.3        ADX  29.3
+      PARTICIPATION
+        volume  1.05x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 29.3 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  LRCX  FAILED   -7.95 R   loss   held 0 bars
+      entry 2020-01-03  ->  exit 2020-01-03
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry     29.79   stop     29.21   target     31.54   planned R:R  3.02
+        stop is 1.95% of entry
+      STRUCTURE
+        price     29.79   EMA20     28.67   EMA50     27.32
+        price is +1.93 ATR from EMA20; EMA20 is +2.33 ATR from EMA50
+        ATR      0.58  = 1.95% of price
+      MOMENTUM
+        RSI  67.7        ADX  29.1
+      PARTICIPATION
+        volume  1.10x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 29.1 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  LRCX  FAILED   -1.51 R   loss   held 0 bars
+      entry 2020-10-15  ->  exit 2020-10-15
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry     37.42   stop     36.27   target     40.87   planned R:R  3.00
+        stop is 3.07% of entry
+      STRUCTURE
+        price     37.42   EMA20     34.61   EMA50     33.93
+        price is +2.44 ATR from EMA20; EMA20 is +0.59 ATR from EMA50
+        ATR      1.15  = 3.07% of price
+      MOMENTUM
+        RSI  69.5        ADX  26.6
+      PARTICIPATION
+        volume  0.86x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 26.6 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+TSLA   126 trades, average -0.097 R
+====================================================================================================
+
+  +++ WIN 1  TSLA  WORKED   +10.15 R   win   held 8 bars
+      entry 2020-02-06  ->  exit 2020-02-19
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry     48.98   stop     45.38   target     59.78   planned R:R  3.00
+        stop is 7.35% of entry
+      STRUCTURE
+        price     48.98   EMA20     40.46   EMA50     33.18
+        price is +2.37 ATR from EMA20; EMA20 is +2.02 ATR from EMA50
+        ATR      3.60  = 7.35% of price
+      MOMENTUM
+        RSI  66.4        ADX  60.4
+      PARTICIPATION
+        volume  1.91x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 60.4 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  TSLA  WORKED   +5.16 R   win   held 14 bars
+      entry 2020-12-11  ->  exit 2021-01-04
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    209.02   stop    197.69   target    243.01   planned R:R  3.00
+        stop is 5.42% of entry
+      STRUCTURE
+        price    209.02   EMA20    185.51   EMA50    163.37
+        price is +2.08 ATR from EMA20; EMA20 is +1.95 ATR from EMA50
+        ATR     11.33  = 5.42% of price
+      MOMENTUM
+        RSI  68.2        ADX  31.6
+      PARTICIPATION
+        volume  1.38x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 31.6 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  TSLA  FAILED   -1.03 R   loss   held 0 bars
+      entry 2019-12-31  ->  exit 2019-12-31
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry     27.65   stop     26.85   target     28.88   planned R:R  1.54
+        stop is 2.89% of entry
+      STRUCTURE
+        price     27.65   EMA20     25.74   EMA50     23.15
+        price is +2.39 ATR from EMA20; EMA20 is +3.24 ATR from EMA50
+        ATR      0.80  = 2.89% of price
+      MOMENTUM
+        RSI  71.4        ADX  49.2
+      PARTICIPATION
+        volume  1.28x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 49.2 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  TSLA  FAILED   -1.03 R   loss   held 0 bars
+      entry 2023-06-22  ->  exit 2023-06-22
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    259.46   stop    249.14   target    275.61   planned R:R  1.56
+        stop is 3.98% of entry
+      STRUCTURE
+        price    259.46   EMA20    232.38   EMA50    207.16
+        price is +2.62 ATR from EMA20; EMA20 is +2.44 ATR from EMA50
+        ATR     10.32  = 3.98% of price
+      MOMENTUM
+        RSI  72.9        ADX  51.5
+      PARTICIPATION
+        volume  1.33x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 51.5 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+NVDA   124 trades, average +0.076 R
+====================================================================================================
+
+  +++ WIN 1  NVDA  WORKED   +6.67 R   timeout   held 19 bars
+      entry 2025-05-23  ->  exit 2025-06-23
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    132.83   stop    127.91   target    147.60   planned R:R  3.00
+        stop is 3.70% of entry
+      STRUCTURE
+        price    132.83   EMA20    124.19   EMA50    119.33
+        price is +1.76 ATR from EMA20; EMA20 is +0.99 ATR from EMA50
+        ATR      4.92  = 3.70% of price
+      MOMENTUM
+        RSI  66.8        ADX  26.1
+      PARTICIPATION
+        volume  0.89x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 26.1 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  NVDA  WORKED   +6.22 R   win   held 7 bars
+      entry 2023-01-24  ->  exit 2023-02-02
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry     19.19   stop     18.38   target     21.64   planned R:R  3.02
+        stop is 4.22% of entry
+      STRUCTURE
+        price     19.19   EMA20     16.52   EMA50     15.89
+        price is +3.26 ATR from EMA20; EMA20 is +0.77 ATR from EMA50
+        ATR      0.82  = 4.27% of price
+      MOMENTUM
+        RSI  69.5        ADX  25.5
+      PARTICIPATION
+        volume  1.47x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 25.5 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  NVDA  FAILED   -1.08 R   loss   held 0 bars
+      entry 2017-11-09  ->  exit 2017-11-09
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry      5.23   stop      5.12   target      5.55   planned R:R  2.91
+        stop is 2.10% of entry
+      STRUCTURE
+        price      5.23   EMA20      5.02   EMA50      4.72
+        price is +1.91 ATR from EMA20; EMA20 is +2.73 ATR from EMA50
+        ATR      0.11  = 2.10% of price
+      MOMENTUM
+        RSI  70.4        ADX  35.4
+      PARTICIPATION
+        volume  1.07x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 35.4 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  NVDA  FAILED   -1.03 R   loss   held 0 bars
+      entry 2021-03-09  ->  exit 2021-03-09
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    HIGH QUALITY
+        entry     11.59   stop     12.22   target      9.71   planned R:R  2.98
+        stop is 5.44% of entry
+      STRUCTURE
+        price     11.59   EMA20     13.46   EMA50     13.57
+        price is -2.97 ATR from EMA20; EMA20 is -0.17 ATR from EMA50
+        ATR      0.63  = 5.44% of price
+      MOMENTUM
+        RSI  30.6        ADX  25.9
+      PARTICIPATION
+        volume  1.31x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 25.9 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+META   124 trades, average +0.076 R
+====================================================================================================
+
+  +++ WIN 1  META  WORKED   +5.39 R   win   held 2 bars
+      entry 2017-07-25  ->  exit 2017-07-27
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    166.00   stop    163.46   target    173.61   planned R:R  3.00
+        stop is 1.53% of entry
+      STRUCTURE
+        price    166.00   EMA20    158.33   EMA50    153.72
+        price is +3.02 ATR from EMA20; EMA20 is +1.81 ATR from EMA50
+        ATR      2.54  = 1.53% of price
+      MOMENTUM
+        RSI  74.5        ADX  26.2
+      PARTICIPATION
+        volume  1.00x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 26.2 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  META  WORKED   +5.08 R   win   held 13 bars
+      entry 2023-06-22  ->  exit 2023-07-12
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    281.64   stop    274.34   target    303.55   planned R:R  3.00
+        stop is 2.59% of entry
+      STRUCTURE
+        price    281.64   EMA20    267.80   EMA50    246.98
+        price is +1.90 ATR from EMA20; EMA20 is +2.85 ATR from EMA50
+        ATR      7.30  = 2.59% of price
+      MOMENTUM
+        RSI  74.3        ADX  46.1
+      PARTICIPATION
+        volume  0.93x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 46.1 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  META  FAILED   -2.00 R   loss   held 0 bars
+      entry 2018-04-05  ->  exit 2018-04-05
+      ------------------------------------------------------------------
+      TRADE      Bearish   Normal    
+        entry    155.10   stop    161.56   target    135.72   planned R:R  3.00
+        stop is 4.17% of entry
+      STRUCTURE
+        price    155.10   EMA20    165.81   EMA50    173.12
+        price is -1.66 ATR from EMA20; EMA20 is -1.13 ATR from EMA50
+        ATR      6.46  = 4.17% of price
+      MOMENTUM
+        RSI  33.8        ADX  28.7
+      PARTICIPATION
+        volume  0.95x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 28.7 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  META  FAILED   -1.03 R   loss   held 0 bars
+      entry 2021-07-08  ->  exit 2021-07-08
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    350.49   stop    343.48   target    357.00   planned R:R  0.93
+        stop is 2.00% of entry
+      STRUCTURE
+        price    350.49   EMA20    342.93   EMA50    329.35
+        price is +1.08 ATR from EMA20; EMA20 is +1.94 ATR from EMA50
+        ATR      7.01  = 2.00% of price
+      MOMENTUM
+        RSI  60.9        ADX  28.6
+      PARTICIPATION
+        volume  0.90x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 28.6 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+INTC   113 trades, average -0.000 R
+====================================================================================================
+
+  +++ WIN 1  INTC  WORKED   +9.12 R   win   held 6 bars
+      entry 2026-01-12  ->  exit 2026-01-21
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry     45.55   stop     43.40   target     52.00   planned R:R  3.00
+        stop is 4.72% of entry
+      STRUCTURE
+        price     45.55   EMA20     39.32   EMA50     37.81
+        price is +2.90 ATR from EMA20; EMA20 is +0.70 ATR from EMA50
+        ATR      2.15  = 4.72% of price
+      MOMENTUM
+        RSI  71.3        ADX  25.5
+      PARTICIPATION
+        volume  2.41x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 25.5 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  INTC  WORKED   +7.12 R   win   held 2 bars
+      entry 2024-04-24  ->  exit 2024-04-26
+      ------------------------------------------------------------------
+      TRADE      Bearish   Normal    
+        entry     34.28   stop     35.41   target     30.88   planned R:R  3.01
+        stop is 3.30% of entry
+      STRUCTURE
+        price     34.28   EMA20     37.67   EMA50     40.43
+        price is -3.00 ATR from EMA20; EMA20 is -2.44 ATR from EMA50
+        ATR      1.13  = 3.30% of price
+      MOMENTUM
+        RSI  26.8        ADX  33.5
+      PARTICIPATION
+        volume  0.90x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 33.5 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  INTC  FAILED   -1.09 R   loss   held 0 bars
+      entry 2020-11-09  ->  exit 2020-11-09
+      ------------------------------------------------------------------
+      TRADE      Bearish   Normal    
+        entry     45.39   stop     46.73   target     43.83   planned R:R  1.16
+        stop is 2.95% of entry
+      STRUCTURE
+        price     45.39   EMA20     47.78   EMA50     49.76
+        price is -1.78 ATR from EMA20; EMA20 is -1.48 ATR from EMA50
+        ATR      1.34  = 2.95% of price
+      MOMENTUM
+        RSI  33.5        ADX  30.3
+      PARTICIPATION
+        volume  0.97x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 30.3 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  INTC  FAILED   -1.05 R   loss   held 1 bars
+      entry 2018-09-13  ->  exit 2018-09-14
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    HIGH QUALITY
+        entry     44.93   stop     45.85   target     42.18   planned R:R  2.99
+        stop is 2.05% of entry
+      STRUCTURE
+        price     44.93   EMA20     47.34   EMA50     48.87
+        price is -2.62 ATR from EMA20; EMA20 is -1.66 ATR from EMA50
+        ATR      0.92  = 2.05% of price
+      MOMENTUM
+        RSI  27.9        ADX  25.7
+      PARTICIPATION
+        volume  1.36x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 25.7 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+IBM   136 trades, average -0.082 R
+====================================================================================================
+
+  +++ WIN 1  IBM  WORKED   +7.19 R   win   held 2 bars
+      entry 2019-02-08  ->  exit 2019-02-12
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    127.33   stop    126.07   target    129.99   planned R:R  2.11
+        stop is 0.99% of entry
+      STRUCTURE
+        price    127.33   EMA20    124.31   EMA50    120.75
+        price is +1.23 ATR from EMA20; EMA20 is +1.45 ATR from EMA50
+        ATR      2.45  = 1.92% of price
+      MOMENTUM
+        RSI  63.5        ADX  40.5
+      PARTICIPATION
+        volume  0.74x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 40.5 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  IBM  WORKED   +3.62 R   win   held 5 bars
+      entry 2018-10-22  ->  exit 2018-10-29
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    HIGH QUALITY
+        entry    123.42   stop    126.59   target    113.93   planned R:R  2.99
+        stop is 2.57% of entry
+      STRUCTURE
+        price    123.42   EMA20    136.31   EMA50    138.78
+        price is -4.08 ATR from EMA20; EMA20 is -0.78 ATR from EMA50
+        ATR      3.16  = 2.56% of price
+      MOMENTUM
+        RSI  25.4        ADX  29.6
+      PARTICIPATION
+        volume  1.29x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 29.6 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  IBM  FAILED   -1.38 R   loss   held 0 bars
+      entry 2021-11-08  ->  exit 2021-11-08
+      ------------------------------------------------------------------
+      TRADE      Bearish   Normal    
+        entry    123.61   stop    124.03   target    118.99   planned R:R 11.00
+        stop is 0.34% of entry
+      STRUCTURE
+        price    123.61   EMA20    125.44   EMA50    129.36
+        price is -0.70 ATR from EMA20; EMA20 is -1.50 ATR from EMA50
+        ATR      2.61  = 2.11% of price
+      MOMENTUM
+        RSI  41.4        ADX  35.7
+      PARTICIPATION
+        volume  0.93x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 35.7 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  IBM  FAILED   -1.05 R   loss   held 0 bars
+      entry 2025-06-20  ->  exit 2025-06-20
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    283.21   stop    278.14   target    298.42   planned R:R  3.00
+        stop is 1.79% of entry
+      STRUCTURE
+        price    283.21   EMA20    271.38   EMA50    260.77
+        price is +2.33 ATR from EMA20; EMA20 is +2.09 ATR from EMA50
+        ATR      5.07  = 1.79% of price
+      MOMENTUM
+        RSI  71.4        ADX  25.7
+      PARTICIPATION
+        volume  0.99x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 25.7 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+DIS   118 trades, average +0.047 R
+====================================================================================================
+
+  +++ WIN 1  DIS  WORKED   +4.28 R   win   held 5 bars
+      entry 2022-04-21  ->  exit 2022-04-28
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    HIGH QUALITY
+        entry    124.57   stop    128.45   target    112.92   planned R:R  3.00
+        stop is 3.11% of entry
+      STRUCTURE
+        price    124.57   EMA20    133.26   EMA50    138.30
+        price is -2.24 ATR from EMA20; EMA20 is -1.30 ATR from EMA50
+        ATR      3.88  = 3.11% of price
+      MOMENTUM
+        RSI  33.6        ADX  25.9
+      PARTICIPATION
+        volume  3.50x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 25.9 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  DIS  WORKED   +3.67 R   win   held 4 bars
+      entry 2020-12-21  ->  exit 2020-12-28
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    172.89   stop    167.84   target    178.55   planned R:R  1.12
+        stop is 2.92% of entry
+      STRUCTURE
+        price    172.89   EMA20    159.15   EMA50    146.37
+        price is +2.72 ATR from EMA20; EMA20 is +2.53 ATR from EMA50
+        ATR      5.05  = 2.92% of price
+      MOMENTUM
+        RSI  73.2        ADX  54.2
+      PARTICIPATION
+        volume  1.37x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 54.2 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  DIS  FAILED   -1.30 R   loss   held 0 bars
+      entry 2019-12-03  ->  exit 2019-12-03
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    150.62   stop    147.67   target    159.46   planned R:R  3.00
+        stop is 1.96% of entry
+      STRUCTURE
+        price    150.62   EMA20    144.89   EMA50    139.51
+        price is +1.94 ATR from EMA20; EMA20 is +1.82 ATR from EMA50
+        ATR      2.95  = 1.96% of price
+      MOMENTUM
+        RSI  70.1        ADX  43.0
+      PARTICIPATION
+        volume  0.71x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 43.0 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  DIS  FAILED   -1.02 R   loss   held 0 bars
+      entry 2026-01-12  ->  exit 2026-01-12
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    115.88   stop    113.71   target    122.40   planned R:R  3.00
+        stop is 1.87% of entry
+      STRUCTURE
+        price    115.88   EMA20    112.65   EMA50    111.36
+        price is +1.49 ATR from EMA20; EMA20 is +0.59 ATR from EMA50
+        ATR      2.17  = 1.87% of price
+      MOMENTUM
+        RSI  61.7        ADX  26.4
+      PARTICIPATION
+        volume  0.87x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 26.4 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+COST   121 trades, average +0.166 R
+====================================================================================================
+
+  +++ WIN 1  COST  WORKED   +5.64 R   win   held 3 bars
+      entry 2022-05-13  ->  exit 2022-05-18
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    HIGH QUALITY
+        entry    486.18   stop    503.33   target    434.74   planned R:R  3.00
+        stop is 3.53% of entry
+      STRUCTURE
+        price    486.18   EMA20    531.96   EMA50    543.33
+        price is -2.67 ATR from EMA20; EMA20 is -0.66 ATR from EMA50
+        ATR     17.15  = 3.53% of price
+      MOMENTUM
+        RSI  28.4        ADX  33.8
+      PARTICIPATION
+        volume  1.06x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 33.8 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  COST  WORKED   +5.14 R   win   held 3 bars
+      entry 2024-03-01  ->  exit 2024-03-06
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    743.89   stop    734.49   target    772.10   planned R:R  3.00
+        stop is 1.26% of entry
+      STRUCTURE
+        price    743.89   EMA20    725.21   EMA50    693.88
+        price is +1.99 ATR from EMA20; EMA20 is +3.33 ATR from EMA50
+        ATR      9.40  = 1.26% of price
+      MOMENTUM
+        RSI  72.4        ADX  43.4
+      PARTICIPATION
+        volume  1.81x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 43.4 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  COST  FAILED   -1.07 R   loss   held 0 bars
+      entry 2018-09-14  ->  exit 2018-09-14
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    
+        entry    241.27   stop    238.37   target    243.93   planned R:R  0.92
+        stop is 1.20% of entry
+      STRUCTURE
+        price    241.27   EMA20    234.34   EMA50    225.31
+        price is +2.39 ATR from EMA20; EMA20 is +3.11 ATR from EMA50
+        ATR      2.90  = 1.20% of price
+      MOMENTUM
+        RSI  74.3        ADX  41.6
+      PARTICIPATION
+        volume  1.10x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 41.6 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  COST  FAILED   -1.05 R   loss   held 0 bars
+      entry 2017-06-15  ->  exit 2017-06-15
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    181.67   stop    179.77   target    187.37   planned R:R  3.00
+        stop is 1.05% of entry
+      STRUCTURE
+        price    181.67   EMA20    178.62   EMA50    175.32
+        price is +1.61 ATR from EMA20; EMA20 is +1.74 ATR from EMA50
+        ATR      1.90  = 1.05% of price
+      MOMENTUM
+        RSI  65.0        ADX  31.5
+      PARTICIPATION
+        volume  0.70x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 31.5 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+MCD   112 trades, average +0.048 R
+====================================================================================================
+
+  +++ WIN 1  MCD  WORKED   +8.11 R   win   held 12 bars
+      entry 2024-10-02  ->  exit 2024-10-18
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    302.98   stop    298.82   target    315.46   planned R:R  3.00
+        stop is 1.37% of entry
+      STRUCTURE
+        price    302.98   EMA20    296.20   EMA50    285.86
+        price is +1.63 ATR from EMA20; EMA20 is +2.49 ATR from EMA50
+        ATR      4.16  = 1.37% of price
+      MOMENTUM
+        RSI  70.9        ADX  37.8
+      PARTICIPATION
+        volume  1.10x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 37.8 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  +++ WIN 2  MCD  WORKED   +4.24 R   win   held 3 bars
+      entry 2022-03-02  ->  exit 2022-03-07
+      ------------------------------------------------------------------
+      TRADE      Bearish   Strong    HIGH QUALITY
+        entry    239.63   stop    244.55   target    224.87   planned R:R  3.00
+        stop is 2.05% of entry
+      STRUCTURE
+        price    239.63   EMA20    251.42   EMA50    254.65
+        price is -2.40 ATR from EMA20; EMA20 is -0.66 ATR from EMA50
+        ATR      4.92  = 2.05% of price
+      MOMENTUM
+        RSI  29.2        ADX  28.5
+      PARTICIPATION
+        volume  1.26x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 28.5 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 1  MCD  FAILED   -1.15 R   loss   held 0 bars
+      entry 2017-09-12  ->  exit 2017-09-12
+      ------------------------------------------------------------------
+      TRADE      Bullish   Normal    
+        entry    161.53   stop    160.03   target    166.02   planned R:R  2.99
+        stop is 0.93% of entry
+      STRUCTURE
+        price    161.53   EMA20    158.86   EMA50    156.32
+        price is +1.78 ATR from EMA20; EMA20 is +1.69 ATR from EMA50
+        ATR      1.50  = 0.93% of price
+      MOMENTUM
+        RSI  64.9        ADX  29.7
+      PARTICIPATION
+        volume  0.89x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 29.7 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+  --- LOSS 2  MCD  FAILED   -1.05 R   loss   held 0 bars
+      entry 2020-09-21  ->  exit 2020-09-21
+      ------------------------------------------------------------------
+      TRADE      Bullish   Strong    HIGH QUALITY
+        entry    220.27   stop    216.36   target    225.59   planned R:R  1.36
+        stop is 1.78% of entry
+      STRUCTURE
+        price    220.27   EMA20    216.01   EMA50    207.70
+        price is +1.09 ATR from EMA20; EMA20 is +2.13 ATR from EMA50
+        ATR      3.91  = 1.78% of price
+      MOMENTUM
+        RSI  63.8        ADX  50.2
+      PARTICIPATION
+        volume  1.21x its 20-day average
+      GATES  (4/4 passed, ALL PASS)
+        PASS  ADX Trend Strength     ADX 50.2 >= 25 threshold
+        PASS  Multi-TF Alignment     Weekly confirmation disabled
+        PASS  Earnings Blackout      Earnings check not supplied
+        PASS  Macro Regime           Regime filter disabled
+
+====================================================================================================
+CROSS-CASE MATRIX — the same readings, every case, for eyeballing
+====================================================================================================
+  case                  R    RR   RSI   ADX   ATR%  vol x  px-E20  E20-E50  stop%  gates  qual
+  --------------------------------------------------------------------------------------------
+  GOOGL win1        +5.70  1.20  63.6  34.3   2.19   1.29   +1.16    +1.83   2.19    4/4    HQ
+  GOOGL win2        +4.07  3.00  71.7  30.7   2.31   1.12   +2.89    +1.25   2.31    4/4    HQ
+  GOOGL loss1       -1.05  1.05  68.5  38.1   2.35   0.94   +1.53    +2.40   2.09    4/4     -
+  GOOGL loss2       -1.04  1.30  63.8  25.1   1.73   0.88   +1.22    +1.59   1.73    4/4     -
+  AVGO win1        +18.12  3.00  71.0  26.7   3.71   1.13   +2.52    +1.13   3.71    4/4    HQ
+  AVGO win2         +6.43  2.99  67.7  31.0   2.21   0.99   +2.15    +1.56   2.21    4/4     -
+  AVGO loss1        -1.08  0.94  26.6  41.7   3.58   1.44   -2.99    -0.01   3.59    4/4     -
+  AVGO loss2        -1.02  2.99  68.4  41.0   2.60   1.07   +2.31    +2.35   2.61    4/4    HQ
+  AMD win1          +3.56  1.90  63.7  32.1   4.55   1.04   +1.56    +1.63   4.55    4/4    HQ
+  AMD win2          +3.53  3.00  74.1  31.3   3.08   0.79   +2.55    +1.38   3.08    4/4     -
+  AMD loss1         -1.05  3.00  33.9  25.7   8.56   1.20   -2.51    -0.04   8.56    4/4    HQ
+  AMD loss2         -1.02  3.00  73.8  47.9   2.88   0.97   +2.56    +2.54   2.88    4/4     -
+  NFLX win1         +5.27  2.98  69.7  26.8   2.20   0.99   +2.52    +0.91   2.20    4/4     -
+  NFLX win2         +4.01  3.00  32.7  25.9   3.55   0.70   -1.96    -1.95   3.55    4/4     -
+  NFLX loss1        -1.22  2.98  60.8  33.9   2.58   1.09   +0.98    +0.86   2.58    4/4    HQ
+  NFLX loss2        -1.02  2.98  64.9  29.7   2.83   2.33   +1.85    +1.30   2.83    4/4    HQ
+  CRM win1          +3.63  3.00  57.7  28.3   2.46   0.92   +1.05    +0.66   2.46    4/4     -
+  CRM win2          +3.42  2.99  69.9  40.1   1.64   1.29   +1.71    +1.79   1.64    4/4    HQ
+  CRM loss1         -1.04  3.00  75.0  36.7   1.81   0.87   +2.77    +2.93   1.81    4/4     -
+  CRM loss2         -1.03  3.00  26.8  32.4   4.71   1.36   -3.43    -0.11   4.71    4/4    HQ
+  ADBE win1         +6.01  3.00  73.4  43.0   1.43   0.77   +2.02    +2.90   1.43    4/4     -
+  ADBE win2         +4.15  3.00  69.7  25.4   2.60   1.16   +2.64    +0.99   2.60    4/4    HQ
+  ADBE loss1        -1.10  1.13  63.0  41.3   1.67   1.29   +1.15    +1.61   1.67    4/4    HQ
+  ADBE loss2        -1.03  1.51  59.8  36.5   2.21   1.25   +1.07    +1.15   2.21    4/4     -
+  QCOM win1        +11.52  3.00  63.1  25.4   2.76   0.93   +1.89    +0.94   2.76    4/4     -
+  QCOM win2         +7.37  3.01  31.1  36.9   3.09   1.16   -2.10    -0.46   3.09    4/4    HQ
+  QCOM loss1        -1.04  1.09  63.6  26.2   2.44   1.10   +1.70    +1.47   2.44    4/4    HQ
+  QCOM loss2        -1.03  1.69  27.6  28.6   1.74   0.99   -1.89    -1.91   1.29    4/4     -
+  MU win1          +12.52  3.00  33.6  25.3   6.70   1.05   -2.54    -0.15   6.70    4/4    HQ
+  MU win2          +11.51  3.00  67.5  44.9   4.40   0.72   +2.21    +2.54   4.40    4/4     -
+  MU loss1          -1.02  1.45  69.7  42.4   6.09   1.00   +2.38    +2.82   6.09    4/4     -
+  MU loss2          -1.02  1.31  70.4  42.0   3.72   2.18   +2.28    +2.55   3.72    4/4    HQ
+  ORCL win1        +15.83  3.00  31.2  25.1   5.02   1.16   -2.22    -1.96   5.02    4/4    HQ
+  ORCL win2         +6.67  3.00  29.6  25.5   7.56   1.16   -3.00    -0.20   7.56    4/4    HQ
+  ORCL loss1        -1.26  3.00  25.2  38.1   6.39   1.26   -2.62    -1.56   6.39    4/4    HQ
+  ORCL loss2        -1.19  1.10  38.4  30.3   2.20   0.90   -1.10    -0.04   2.20    4/4     -
+  NOW win1          +5.29  3.03  68.7  41.7   1.83   1.98   +1.94    +1.97   1.83    4/4    HQ
+  NOW win2          +5.00  3.00  25.3  43.3   4.52   1.73   -3.26    -2.60   4.52    4/4    HQ
+  NOW loss1         -1.03  2.48  63.5  50.3   2.41   1.87   +1.04    +2.13   2.41    4/4    HQ
+  NOW loss2         -1.02  4.78  47.4  38.9   3.01   0.95   -0.01    -0.72   1.13    4/4     -
+  PANW win1         +8.00  3.02  71.8  35.6   2.66   1.00   +2.29    +1.00   2.63    4/4     -
+  PANW win2         +6.78  2.96  72.5  42.4   2.27   1.19   +2.16    +1.99   2.30    4/4    HQ
+  PANW loss1        -1.06  3.00  32.7  30.4   2.34   1.32   -2.13    -1.37   2.34    4/4    HQ
+  PANW loss2        -1.03  1.46  62.5  32.2   2.37   2.57   +1.17    +1.57   2.37    4/4    HQ
+  LRCX win1         +8.17  2.65  63.2  29.7   2.69   0.91   +1.45    +1.91   2.70    4/4     -
+  LRCX win2         +5.54  3.00  71.3  29.3   3.85   1.05   +2.98    +2.26   3.85    4/4    HQ
+  LRCX loss1        -7.95  3.02  67.7  29.1   1.95   1.10   +1.93    +2.33   1.95    4/4    HQ
+  LRCX loss2        -1.51  3.00  69.5  26.6   3.07   0.86   +2.44    +0.59   3.07    4/4     -
+  TSLA win1        +10.15  3.00  66.4  60.4   7.35   1.91   +2.37    +2.02   7.35    4/4    HQ
+  TSLA win2         +5.16  3.00  68.2  31.6   5.42   1.38   +2.08    +1.95   5.42    4/4    HQ
+  TSLA loss1        -1.03  1.54  71.4  49.2   2.89   1.28   +2.39    +3.24   2.89    4/4    HQ
+  TSLA loss2        -1.03  1.56  72.9  51.5   3.98   1.33   +2.62    +2.44   3.98    4/4    HQ
+  NVDA win1         +6.67  3.00  66.8  26.1   3.70   0.89   +1.76    +0.99   3.70    4/4     -
+  NVDA win2         +6.22  3.02  69.5  25.5   4.27   1.47   +3.26    +0.77   4.22    4/4    HQ
+  NVDA loss1        -1.08  2.91  70.4  35.4   2.10   1.07   +1.91    +2.73   2.10    4/4    HQ
+  NVDA loss2        -1.03  2.98  30.6  25.9   5.44   1.31   -2.97    -0.17   5.44    4/4    HQ
+  META win1         +5.39  3.00  74.5  26.2   1.53   1.00   +3.02    +1.81   1.53    4/4    HQ
+  META win2         +5.08  3.00  74.3  46.1   2.59   0.93   +1.90    +2.85   2.59    4/4     -
+  META loss1        -2.00  3.00  33.8  28.7   4.17   0.95   -1.66    -1.13   4.17    4/4     -
+  META loss2        -1.03  0.93  60.9  28.6   2.00   0.90   +1.08    +1.94   2.00    4/4     -
+  INTC win1         +9.12  3.00  71.3  25.5   4.72   2.41   +2.90    +0.70   4.72    4/4    HQ
+  INTC win2         +7.12  3.01  26.8  33.5   3.30   0.90   -3.00    -2.44   3.30    4/4     -
+  INTC loss1        -1.09  1.16  33.5  30.3   2.95   0.97   -1.78    -1.48   2.95    4/4     -
+  INTC loss2        -1.05  2.99  27.9  25.7   2.05   1.36   -2.62    -1.66   2.05    4/4    HQ
+  IBM win1          +7.19  2.11  63.5  40.5   1.92   0.74   +1.23    +1.45   0.99    4/4     -
+  IBM win2          +3.62  2.99  25.4  29.6   2.56   1.29   -4.08    -0.78   2.57    4/4    HQ
+  IBM loss1         -1.38 11.00  41.4  35.7   2.11   0.93   -0.70    -1.50   0.34    4/4     -
+  IBM loss2         -1.05  3.00  71.4  25.7   1.79   0.99   +2.33    +2.09   1.79    4/4     -
+  DIS win1          +4.28  3.00  33.6  25.9   3.11   3.50   -2.24    -1.30   3.11    4/4    HQ
+  DIS win2          +3.67  1.12  73.2  54.2   2.92   1.37   +2.72    +2.53   2.92    4/4    HQ
+  DIS loss1         -1.30  3.00  70.1  43.0   1.96   0.71   +1.94    +1.82   1.96    4/4     -
+  DIS loss2         -1.02  3.00  61.7  26.4   1.87   0.87   +1.49    +0.59   1.87    4/4     -
+  COST win1         +5.64  3.00  28.4  33.8   3.53   1.06   -2.67    -0.66   3.53    4/4    HQ
+  COST win2         +5.14  3.00  72.4  43.4   1.26   1.81   +1.99    +3.33   1.26    4/4    HQ
+  COST loss1        -1.07  0.92  74.3  41.6   1.20   1.10   +2.39    +3.11   1.20    4/4     -
+  COST loss2        -1.05  3.00  65.0  31.5   1.05   0.70   +1.61    +1.74   1.05    4/4     -
+  MCD win1          +8.11  3.00  70.9  37.8   1.37   1.10   +1.63    +2.49   1.37    4/4    HQ
+  MCD win2          +4.24  3.00  29.2  28.5   2.05   1.26   -2.40    -0.66   2.05    4/4    HQ
+  MCD loss1         -1.15  2.99  64.9  29.7   0.93   0.89   +1.78    +1.69   0.93    4/4     -
+  MCD loss2         -1.05  1.36  63.8  50.2   1.78   1.21   +1.09    +2.13   1.78    4/4    HQ
+
+  WINNERS vs LOSERS — mean of each reading
+    reading                winners    losers       gap
+    --------------------------------------------------
+    planned R:R               2.85      2.49     +0.36
+    RSI                      58.20     55.94     +2.27
+    ADX                      33.73     35.11     -1.37
+    ATR %                     3.27      2.84     +0.44
+    volume x                  1.23      1.18     +0.05
+    price-EMA20 ATR           0.83      0.56     +0.26
+    EMA20-EMA50 ATR           0.91      1.05     -0.14
+    stop %                    3.25      2.73     +0.52
+    gates passed              4.00      4.00     +0.00
+
+  40 winners, 40 losers. WITH THIS FEW CASES SOME GAP IS
+  GUARANTEED — these are candidates to encode and score, not findings.
+====================================================================================================
