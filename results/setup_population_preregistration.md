@@ -97,3 +97,86 @@ In-sample. Every one of these 20 tickers is spent. This has real statistical
 power and **zero confirmatory value** — it generates a hypothesis with a
 trustworthy n. Tranche C is still unspent and is still the only thing that
 could confirm whatever comes out of here.
+
+---
+
+# AMENDMENT — 2026-09-15, AFTER seeing run 1
+
+**This is a post-hoc change to a pre-registered clause, made after seeing the
+result. That is the move this project exists to refuse, and it is recorded here
+in full rather than folded quietly into the code.**
+
+Approved by the user before implementation, with the reasoning below on the
+table.
+
+## What run 1 returned
+
+One survivor: **LONGS `planned R:R`**, clearing all three clauses.
+
+| R:R tercile | target rate | mean R |
+|---|---|---|
+| 0.65–2.19 | 47.8% | **+0.044** |
+| 2.21–3.00 | 30.3% | +0.153 |
+| 3.00–8.67 | 29.0% | +0.117 |
+
+My recorded prediction — "zero of seven survive on longs" — was wrong.
+
+## Why it is not a finding
+
+**It is arithmetic.** For a driftless walk, P(touch +k risk before −1 risk) is
+1/(1+k), giving roughly 41% / 28% / 24% across those buckets against the
+47.8% / 30.3% / 29.0% observed. Trades whose target sits nearer reach it more
+often. That is the target distance restated, not a property of the setup.
+
+**And the clause was mis-specified.** Clause 3 asked whether the favoured
+tercile's mean R is positive. It is: +0.044. But it is the **worst of the
+three** — the buckets it would have you skip pay +0.153 and +0.117. A rule
+preferring low planned R:R raises the hit rate and cuts the return by roughly
+two thirds. "Does this bucket make money" was the wrong question; "does it beat
+the alternatives" is the one a filter has to answer.
+
+## The two changes
+
+1. **Clause 3 is tightened**: the favoured bucket must have the **highest mean
+   R of the three**, not merely a positive one. A reading whose favoured bucket
+   is profitable but not best is recorded as `NOT THE BEST BUCKET`.
+
+2. **A second lens is added**, because the user's stated purpose is not
+   filtering — it is telling the user what to expect from a trade the tool is
+   already showing them. For that purpose the filter question is the wrong one,
+   and the tautology above becomes the central danger rather than a curiosity:
+   a readout that reports the raw hit rate is reporting the setup's own R:R
+   back to the user in disguise.
+
+   So the readout lens is tested on **excess hit rate** — observed minus the
+   1/(1+R:R) baseline — and never on the raw rate. A reading is INFORMATIVE
+   only if knowing the bucket moves the expectation beyond what the target
+   distance already implies. Each bucket now also carries a 95% interval on its
+   mean R, because an estimate without one invites over-reading.
+
+## Why this is not p-hacking, and where that argument stops
+
+p-hacking loosens a bar to rescue a finding. Both changes **tighten**, and the
+first one's only effect on run 1 is to kill the only thing that passed. The
+second adds a test that nothing has yet passed.
+
+Where the argument stops: the changes were still chosen with run 1's output
+visible, and a person who wanted `planned R:R` to fail could have arrived at
+exactly these two changes. The defence is the direction of the edit and the
+fact that it was made in public, not that the process was clean. It was not.
+
+**Consequence: run 2 of this module is not a confirmation of anything.** It is
+the same in-sample look with a better-specified bar. The predictions below are
+recorded for the same reason as the originals, and carry less weight because
+the population has now been seen once.
+
+## Predictions for run 2
+
+- `planned R:R` on longs becomes `NOT THE BEST BUCKET`, since +0.044 is the
+  worst of +0.044 / +0.153 / +0.117 and that is not a judgement call.
+- **Nothing is INFORMATIVE on either side.** The excess over 1/(1+R:R) was
+  roughly +5pp and flat across the R:R buckets, and every other reading was a
+  null at d ≈ 0.02–0.07. I expect the excess spread within each reading to be
+  inside noise.
+- If that holds, the bucket line is finished on spent data and tranche C should
+  not be spent on it.

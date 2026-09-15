@@ -114,6 +114,48 @@ def welch(a: list[float], b: list[float]) -> dict:
             "d": gap / pooled if pooled > 0 else 0.0, "gap": gap}
 
 
+def mech_baseline(ts: list[dict]) -> float:
+    """
+    P(touch target before stop) for a DRIFTLESS walk: 1/(1+R:R).
+
+    THIS IS THE NUMBER TO BEAT, and without it a bucket readout is theatre.
+    Run 1's only surviving reading was `planned R:R`, whose terciles hit their
+    targets 47.8% / 30.3% / 29.0% of the time — against a baseline of roughly
+    41% / 28% / 24%. Trades with nearer targets reach them more often. That is
+    arithmetic, not a property of the setup, and a tool that reports the raw
+    rate is reporting the target distance back to the user in disguise.
+
+    The informational content is the EXCESS: how far the observed rate sits
+    above what the target distance alone implies. For the R:R reading itself
+    the excess is near zero by construction, which is exactly the tautology
+    made visible instead of hidden.
+    """
+    vals = [1.0 / (1.0 + float(t["setup"].get("rr", 0)))
+            for t in ts if float(t["setup"].get("rr", 0) or 0) > 0]
+    return float(np.mean(vals)) if vals else float("nan")
+
+
+def mean_ci(vals: list[float], z: float = 1.96) -> tuple[float, float, float]:
+    """Mean and its 95% interval. A bucket estimate without one invites
+    over-reading: 30% on 40 trades and 30% on 400 are different claims."""
+    n = len(vals)
+    if n < 2:
+        return (float("nan"), float("nan"), float("nan"))
+    m = float(np.mean(vals))
+    half = z * float(np.std(vals, ddof=1)) / math.sqrt(n)
+    return (m, m - half, m + half)
+
+
+def two_prop_z(k1: int, n1: int, k2: int, n2: int) -> float:
+    """Unpooled z for two rates. Used on EXCESS rates, where the baselines are
+    observed rather than estimated, so the variance is the binomial one."""
+    if n1 < 2 or n2 < 2:
+        return 0.0
+    p1, p2 = k1 / n1, k2 / n2
+    se = math.sqrt(p1 * (1 - p1) / n1 + p2 * (1 - p2) / n2)
+    return (p1 - p2) / se if se > 0 else 0.0
+
+
 def terciles(sub: list[dict], getter, expect_sign: float) -> dict:
     """
     Sorted into three by the reading: target rate and mean R in each.
@@ -137,18 +179,32 @@ def terciles(sub: list[dict], getter, expect_sign: float) -> dict:
     for grp in cut:
         ts = [t for _, t in grp]
         hit = sum(1 for t in ts if t["outcome"] == "win")
+        base = mech_baseline(ts)
+        m, lo, hi = mean_ci([t["r"] for t in ts])
         buckets.append({
             "lo": grp[0][0], "hi": grp[-1][0], "n": len(ts), "hits": hit,
             "rate": hit / len(ts),
-            "mean_r": float(np.mean([t["r"] for t in ts])),
+            "base": base,
+            "excess": hit / len(ts) - base if np.isfinite(base) else float("nan"),
+            "mean_r": m, "r_lo": lo, "r_hi": hi,
+            "rr": float(np.mean([float(t["setup"].get("rr", 0)) for t in ts])),
         })
     rho = ar.spearman([0.0, 1.0, 2.0], [b["rate"] for b in buckets])
     monotone = abs(rho) == 1.0 and (rho > 0) == (expect_sign > 0)
     # The favoured bucket is the END the mean gap points at, named before its
     # mean R is read.
     fav = buckets[-1] if expect_sign > 0 else buckets[0]
+    # THE FAVOURED BUCKET MUST ALSO BE THE BEST ONE. See the amendment in the
+    # pre-registration: run 1 passed `planned R:R` because its favoured bucket
+    # had a positive mean R (+0.044) while being the WORST of the three (+0.153
+    # and +0.117 above it). A rule preferring that bucket raises the hit rate
+    # and cuts the return. "Makes money" was the wrong question; "beats the
+    # alternatives" is the one a filter has to answer.
+    best = max(buckets, key=lambda b: b["mean_r"])
     return {"ok": True, "buckets": buckets, "rho": rho,
-            "monotone": monotone, "favoured": fav}
+            "monotone": monotone, "favoured": fav,
+            "fav_is_best": fav is best,
+            "best_mean_r": best["mean_r"]}
 
 
 def assess(sub: list[dict], label: str) -> dict:
@@ -177,8 +233,46 @@ def assess(sub: list[dict], label: str) -> dict:
             r["verdict"] = "NO DOSE-RESPONSE"
         elif tc["favoured"]["mean_r"] <= 0:
             r["verdict"] = "REAL BUT UNPROFITABLE"
+        elif not tc.get("fav_is_best"):
+            r["verdict"] = "NOT THE BEST BUCKET"
         else:
-            r["verdict"] = "CANDIDATE"
+            r["verdict"] = "TRADEABLE"
+
+    # ── THE SECOND LENS: is the bucket INFORMATIVE? ──
+    #
+    # A filter asks "trade this bucket, skip the others". A readout asks "given
+    # that this trade exists, what should I expect". They are different
+    # questions and a reading can answer one and not the other.
+    #
+    # The informational test is on EXCESS hit rate, never the raw rate: the raw
+    # rate is mostly 1/(1+R:R), which the user can compute from the target
+    # distance without a tool. A reading is informative only if knowing the
+    # bucket moves the expectation BEYOND what the target distance already
+    # implies.
+    exc_p = []
+    for r in rows:
+        tc = r["terciles"]
+        if not tc.get("ok"):
+            exc_p.append(1.0)
+            continue
+        bs = [b for b in tc["buckets"] if np.isfinite(b["excess"])]
+        if len(bs) < 2:
+            exc_p.append(1.0)
+            continue
+        top = max(bs, key=lambda b: b["excess"])
+        bot = min(bs, key=lambda b: b["excess"])
+        z = two_prop_z(top["hits"], top["n"], bot["hits"], bot["n"])
+        # The baselines differ between the two buckets, so the quantity being
+        # tested is the excess spread, not the raw rate spread.
+        adj = (top["excess"] - bot["excess"])
+        raw = (top["rate"] - bot["rate"])
+        z = z * (adj / raw) if raw not in (0.0,) else 0.0
+        r["excess_spread"] = adj
+        exc_p.append(math.erfc(abs(z) / math.sqrt(2.0)))
+    keep_i = ar.holm(exc_p, ALPHA)
+    for r, p_, k_ in zip(rows, exc_p, keep_i):
+        r["info_p"] = p_
+        r["informative"] = k_
     return {"label": label, "n_win": len(w), "n_loss": len(l), "rows": rows}
 
 
@@ -201,37 +295,72 @@ def report(res: dict) -> None:
           f"d = {mde_d(n_w, n_l):.3f}")
     print("=" * 84)
     print(f"  {'reading':<18}{'target':>9}{'stopped':>9}{'gap':>8}{'d':>7}"
-          f"{'p':>9}{'Holm':>6}   verdict")
-    print("  " + "-" * 80)
+          f"{'p':>9}{'Holm':>6}   filter verdict / informative")
+    print("  " + "-" * 82)
     for r in res["rows"]:
         tc = r["terciles"]
+        info = (f"INFORMATIVE (p {r.get('info_p', 1):.4f})"
+                if r.get("informative") else "not informative")
         print(f"  {r['name']:<18}{r['mean_w']:>9.2f}{r['mean_l']:>9.2f}"
               f"{r['gap']:>+8.2f}{r['d']:>+7.2f}"
-              f"{r['p']:>9.4f}{'YES' if r['holm'] else 'no':>6}   {r['verdict']}")
-        if tc.get("ok"):
-            bits = "  ".join(
-                f"[{b['lo']:.2f}..{b['hi']:.2f}] {b['rate']*100:>4.1f}% "
-                f"R{b['mean_r']:+.3f}" for b in tc["buckets"])
-            print(f"      terciles rho {tc['rho']:+.1f}   {bits}")
+              f"{r['p']:>9.4f}{'YES' if r['holm'] else 'no':>6}   "
+              f"{r['verdict']}  |  {info}")
+        if not tc.get("ok"):
+            continue
+        # hit rate, what the TARGET DISTANCE alone implies, and the excess.
+        # The third column is the only one carrying information the user could
+        # not get from the setup's own R:R.
+        print(f"      {'bucket':<22}{'n':>5}{'hit':>7}{'base':>7}{'excess':>8}"
+              f"{'mean R':>9}{'95% CI':>18}")
+        for b in tc["buckets"]:
+            rng = f"[{b['lo']:.2f}..{b['hi']:.2f}]"
+            print(f"      {rng:<22}{b['n']:>5}{b['rate']*100:>6.1f}%"
+                  f"{b['base']*100:>6.1f}%{b['excess']*100:>+7.1f}%"
+                  f"{b['mean_r']:>+9.3f}"
+                  f"   [{b['r_lo']:+.3f}, {b['r_hi']:+.3f}]")
+        print(f"      rho {tc['rho']:+.1f} on hit rate; favoured bucket is "
+              f"{'the best' if tc.get('fav_is_best') else 'NOT the best'} "
+              f"by mean R (best {tc['best_mean_r']:+.3f})")
 
 
 def verdict(all_res: list[dict]) -> str:
     cands = [(r["label"], row["name"]) for r in all_res
-             for row in r["rows"] if row["verdict"] == "CANDIDATE"]
+             for row in r["rows"] if row["verdict"] == "TRADEABLE"]
     unprof = [(r["label"], row["name"]) for r in all_res
               for row in r["rows"] if row["verdict"] == "REAL BUT UNPROFITABLE"]
+    notbest = [(r["label"], row["name"]) for r in all_res
+               for row in r["rows"] if row["verdict"] == "NOT THE BEST BUCKET"]
+    infos = [(r["label"], row["name"], row.get("excess_spread", 0.0))
+             for r in all_res for row in r["rows"] if row.get("informative")]
     print(f"\n{'='*84}")
+    print("LENS 1 — FILTER: trade this bucket, skip the others")
     if cands:
-        print("CANDIDATES FOR STAGE 2 — cleared all three clauses:")
+        print("  TRADEABLE, cleared all four clauses:")
         for side, name in cands:
-            print(f"  {side}: {name}")
+            print(f"    {side}: {name}")
     else:
-        print("NO CANDIDATES. Nothing cleared all three clauses.")
+        print("  Nothing tradeable. No reading cleared all four clauses.")
+    if notbest:
+        print("  NOT THE BEST BUCKET — separates the outcomes, but the bucket")
+        print("  it points at earns less than the ones it would have you skip:")
+        for side, name in notbest:
+            print(f"    {side}: {name}")
     if unprof:
-        print("\nREAL BUT UNPROFITABLE — separates the outcomes, does not pay:")
+        print("  REAL BUT UNPROFITABLE — separates the outcomes, does not pay:")
         for side, name in unprof:
-            print(f"  {side}: {name}")
-        print("  A split of a zero-edge population is still zero edge.")
+            print(f"    {side}: {name}")
+
+    print("\nLENS 2 — READOUT: given this trade, what should I expect")
+    print("  Tested on EXCESS hit rate, never the raw rate. The raw rate is")
+    print("  mostly 1/(1+R:R), which the setup already tells you.")
+    if infos:
+        print("  INFORMATIVE — knowing the bucket moves the expectation beyond")
+        print("  what the target distance alone implies:")
+        for side, name, sp in sorted(infos, key=lambda x: -abs(x[2])):
+            print(f"    {side}: {name}   excess spread {sp*100:+.1f} pp")
+    else:
+        print("  Nothing informative. Every reading's bucket differences are")
+        print("  explained by the target distance the setup already carries.")
     print("\nIN-SAMPLE. Every ticker here is spent. This has power and no")
     print("confirmatory value. Tranche C is unspent and is the only test left.")
     print("=" * 84)
@@ -357,9 +486,100 @@ def selftest() -> int:
                     else mk("loss", -1.0, rsi=50.0 + i * 0.1))
     res = assess(rich, "PROBE")
     rsi_row = [r for r in res["rows"] if r["name"] == "RSI"][0]
-    assert rsi_row["verdict"] == "CANDIDATE", rsi_row
+    assert rsi_row["verdict"] == "TRADEABLE", rsi_row
     assert rsi_row["terciles"]["favoured"]["mean_r"] > 0
-    print("candidate path   : same split, paid at 3 R -> CANDIDATE")
+    print("tradeable path   : same split, paid at 3 R -> TRADEABLE")
+
+    # ── THE FAVOURED BUCKET MUST BE THE BEST ONE ──
+    # Run 1's shape exactly: `planned R:R` cleared Holm, showed a monotone
+    # gradient, and its favoured bucket had a POSITIVE mean R of +0.044 while
+    # the two buckets it would have you skip earned +0.153 and +0.117. Under
+    # the original clause that was a candidate. Following it would have raised
+    # the hit rate and cut the return.
+    #
+    # Built here as: the low bucket hits often for small change, the high
+    # bucket hits rarely for real money.
+    shaped = []
+    # low bucket mean R = 0.6(+0.9) + 0.4(-1.0) = +0.14: profitable, and the
+    # worst of the three. That is run 1's shape, where the favoured bucket paid
+    # +0.044 against +0.153 and +0.117 in the ones it would have you skip.
+    for i in range(90):                       # low: 60% hit at +0.9 R
+        shaped.append(mk("win", 0.9, rsi=10.0 + i * 0.1) if i % 5 < 3
+                      else mk("loss", -1.0, rsi=10.0 + i * 0.1))
+    for i in range(90):                       # mid: 40% hit at +3 R
+        shaped.append(mk("win", 3.0, rsi=40.0 + i * 0.1) if i % 5 < 2
+                      else mk("loss", -1.0, rsi=40.0 + i * 0.1))
+    for i in range(90):                       # high: 30% hit at +5 R
+        shaped.append(mk("win", 5.0, rsi=70.0 + i * 0.1) if i % 10 < 3
+                      else mk("loss", -1.0, rsi=70.0 + i * 0.1))
+    res = assess(shaped, "SHAPED")
+    row = [r for r in res["rows"] if r["name"] == "RSI"][0]
+    fav = row["terciles"]["favoured"]
+    assert row["holm"], f"the fixture must clear Holm: p={row['p']}"
+    assert fav["mean_r"] > 0, (
+        "the favoured bucket must be PROFITABLE, or the old clause would have "
+        "rejected this and the new one would go untested")
+    assert not row["terciles"]["fav_is_best"], row["terciles"]
+    assert row["verdict"] == "NOT THE BEST BUCKET", (
+        f"a bucket that pays {fav['mean_r']:+.3f} while the ones it would have "
+        f"you skip pay {row['terciles']['best_mean_r']:+.3f} is not tradeable. "
+        f"Got {row['verdict']}")
+    print(f"best-bucket clause: favoured pays {fav['mean_r']:+.2f}, best pays "
+          f"{row['terciles']['best_mean_r']:+.2f} -> NOT THE BEST BUCKET")
+
+    # ── A PURE TAUTOLOGY MUST NOT READ AS INFORMATIVE ──
+    # Every bucket hits at exactly 1/(1+R:R) — the driftless-walk rate. The raw
+    # hit rates differ enormously (50% vs 25% vs 12.5%) and mean nothing: they
+    # are the target distance restated. Excess is zero everywhere, so the
+    # readout must say so rather than present the gradient as a finding.
+    taut = []
+    # Equal group sizes so the terciles land exactly on the three R:R groups;
+    # unequal ones make buckets straddle groups and manufacture a small excess
+    # out of nothing but the boundary.
+    for rr_, hits, n_ in ((1.0, 30, 60), (3.0, 15, 60), (7.0, 8, 60)):
+        for i in range(n_):
+            won = i < hits
+            taut.append(mk("win" if won else "loss",
+                           rr_ if won else -1.0, rr=rr_,
+                           rsi=10.0 * rr_ + i * 0.01))
+    res = assess(taut, "TAUT")
+    row = [r for r in res["rows"] if r["name"] == "RSI"][0]
+    exc = [b["excess"] for b in row["terciles"]["buckets"]]
+    rates = [b["rate"] for b in row["terciles"]["buckets"]]
+    assert max(rates) - min(rates) > 0.3, (
+        f"the fixture must have a big RAW spread or it proves nothing: {rates}")
+    assert max(abs(e) for e in exc) < 0.02, (
+        f"excess must be ~0 when the rate IS the baseline: {exc}")
+    assert not row["informative"], (
+        f"raw rates {[round(r,3) for r in rates]} differ by "
+        f"{max(rates)-min(rates):.0%} and carry no information — every one of "
+        f"them is 1/(1+R:R). Reporting that gradient is reporting the target "
+        f"distance back to the user in disguise")
+    print(f"tautology         : raw spread {max(rates)-min(rates):.0%}, excess "
+          f"{max(abs(e) for e in exc):.1%} -> not informative")
+
+    # ── AND A REAL EDGE ON TOP OF THE BASELINE DOES READ AS INFORMATIVE ──
+    # Three groups, all at R:R 3.0, so the baseline is 25% everywhere and the
+    # buckets align with the terciles. Only the hit rate varies, which is the
+    # one thing target distance cannot explain.
+    edge = []
+    for base_rsi, hits in ((20.0, 8), (40.0, 18), (60.0, 33)):
+        for i in range(60):
+            won = i < hits
+            edge.append(mk("win" if won else "loss", 3.0 if won else -1.0,
+                           rr=3.0, rsi=base_rsi + i * 0.01))
+    res = assess(edge, "EDGE")
+    row = [r for r in res["rows"] if r["name"] == "RSI"][0]
+    bks = row["terciles"]["buckets"]
+    assert all(abs(b["base"] - 0.25) < 1e-9 for b in bks), \
+        f"the fixture must hold R:R constant so the baseline cannot move: {bks}"
+    assert row["informative"], (
+        f"three buckets at the SAME R:R hitting "
+        f"{[round(b['rate'],3) for b in bks]} cannot be explained by target "
+        f"distance; that is information. p={row.get('info_p')}")
+    _hits = "/".join(f"{b['rate']*100:.0f}%" for b in bks)
+    print(f"real edge         : R:R held at 3.0, hit {_hits} -> INFORMATIVE "
+          f"(p {row['info_p']:.1e})")
 
     # ── HOLM MUST ACTUALLY BIND ──
     # A reading whose raw p sits between alpha/7 (0.0071) and alpha (0.05) is
@@ -415,6 +635,47 @@ def selftest() -> int:
                       for b in row["terciles"]["buckets"])
     print(f"dose binds       : buckets {_rates} -> NO DOSE-RESPONSE")
 
+    # ── mean_ci must return an INTERVAL, not a point ──
+    # Every bucket line prints a 95% CI. Nothing asserted the interval had
+    # width, so collapsing it to the point estimate left the suite green while
+    # the readout claimed a precision it does not have.
+    m, lo, hi = mean_ci([1.0, 2.0, 3.0, 4.0, 5.0] * 8)
+    assert abs(m - 3.0) < 1e-9, m
+    assert hi - lo > 0.1, (
+        f"the CI collapsed to a point: [{lo}, {hi}]. A bucket estimate without "
+        f"an interval invites over-reading — 30% on 40 trades and 30% on 400 "
+        f"are different claims")
+    _, lo40, hi40 = mean_ci([1.0, 2.0, 3.0, 4.0, 5.0] * 8)
+    _, lo8, hi8 = mean_ci([1.0, 2.0, 3.0, 4.0, 5.0] * 2)
+    assert (hi8 - lo8) > (hi40 - lo40) * 1.5, (
+        "the interval must widen as n falls; it did not")
+    assert not np.isfinite(mean_ci([1.0])[1]), "n=1 has no interval"
+    print(f"bucket CI        : width {hi-lo:.2f} at n=40, {hi8-lo8:.2f} at n=10")
+
+    # ── HOLM MUST BIND ON THE INFORMATIONAL LENS TOO ──
+    # The edge fixture lands at p = 8.5e-08 and the tautology at p = 1.0, so
+    # neither can tell Holm from a raw threshold. This is the SECOND lens in
+    # this module with that hole and the fourth instance in the project.
+    # Three buckets at constant R:R hitting 20% / 30% / 40%: top vs bottom
+    # gives z = 2.45, p = 0.014 — under alpha, over alpha/7.
+    band2 = []
+    for base_rsi, hits in ((20.0, 12), (40.0, 18), (60.0, 24)):
+        for i in range(60):
+            won = i < hits
+            band2.append(mk("win" if won else "loss", 3.0 if won else -1.0,
+                            rr=3.0, rsi=base_rsi + i * 0.01))
+    res = assess(band2, "BAND2")
+    row = [r for r in res["rows"] if r["name"] == "RSI"][0]
+    assert ALPHA / len(READINGS) < row["info_p"] < ALPHA, (
+        f"the fixture must land between alpha/7 and alpha or it cannot tell "
+        f"Holm from a raw threshold; info_p = {row['info_p']:.4f}")
+    assert not row["informative"], (
+        f"info_p = {row['info_p']:.4f} is under {ALPHA} but over "
+        f"{ALPHA}/{len(READINGS)}. Holm must reject it — this is the best of "
+        f"seven readings, not one hypothesis")
+    print(f"info holm binds  : info_p {row['info_p']:.4f} < {ALPHA} but "
+          f"rejected at {ALPHA}/{len(READINGS)}")
+
     # ── a null population yields nothing ──
     import random
     rng = random.Random(7)
@@ -423,10 +684,13 @@ def selftest() -> int:
                rsi=rng.uniform(30, 70), adx=rng.uniform(25, 50),
                vol_ratio=rng.uniform(0.7, 2.0)) for _ in range(600)]
     res = assess(null, "NULL")
-    assert all(r["verdict"] != "CANDIDATE" for r in res["rows"]), (
-        f"noise produced a candidate: "
+    assert all(r["verdict"] != "TRADEABLE" for r in res["rows"]), (
+        f"noise produced a tradeable reading: "
         f"{[(r['name'], r['verdict'], r['p']) for r in res['rows']]}")
-    print("null population  : 600 random trades produce no candidate")
+    assert not any(r.get("informative") for r in res["rows"]), (
+        f"noise read as informative: "
+        f"{[(r['name'], r.get('info_p')) for r in res['rows'] if r.get('informative')]}")
+    print("null population  : 600 random trades, nothing tradeable or informative")
 
     # ── WIRING: the readings must arrive from a real signal ──
     # Checking that setup_cases produces these names would test a string. Run
