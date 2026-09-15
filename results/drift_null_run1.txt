@@ -1,0 +1,75 @@
+  collecting ...
+  GOOGL: 121 real
+  AVGO: 95 real
+  AMD: 118 real
+  NFLX: 116 real
+  CRM: 113 real
+  ADBE: 135 real
+  QCOM: 100 real
+  MU: 120 real
+  ORCL: 137 real
+  NOW: 91 real
+  PANW: 112 real
+  LRCX: 128 real
+  TSLA: 126 real
+  NVDA: 124 real
+  META: 124 real
+  INTC: 113 real
+  IBM: 136 real
+  DIS: 118 real
+  COST: 121 real
+  MCD: 112 real
+====================================================================================
+DRIFT NULL — is the entry signal's edge just market drift?
+====================================================================================
+  20 tickers, 10 years, 200 random draws
+  pre-registered: results/drift_null_preregistration.md
+
+====================================================================================
+LONGS   real: 1457 trades, 35.7% hit, baseline 31.5%, excess +4.2pp, mean R +0.1050
+  200 random draws, same frames, same exits, same costs
+====================================================================================
+  excess   real +4.2pp   null median +5.2pp   null 95% [+2.8, +7.2]pp
+           gap -1.0pp   empirical p 0.806   -> SIGNAL ADDS NOTHING
+  mean_r   real +0.1050R   null median +0.1489R   null 95% [+0.0389, +0.2696]R
+           gap -0.0440R   empirical p 0.806   -> SIGNAL ADDS NOTHING
+
+====================================================================================
+LONGS (R:R-matched subset)   real: 897 trades, 29.8% hit, baseline 25.0%, excess +4.8pp, mean R +0.1404
+  200 random draws, same frames, same exits, same costs
+====================================================================================
+  excess   real +4.8pp   null median +5.2pp   null 95% [+2.8, +7.2]pp
+           gap -0.4pp   empirical p 0.617   -> SIGNAL ADDS NOTHING
+  mean_r   real +0.1404R   null median +0.1489R   null 95% [+0.0389, +0.2696]R
+           gap -0.0085R   empirical p 0.562   -> SIGNAL ADDS NOTHING
+
+  robustness: 939 R:R-matched trades agree (SIGNAL ADDS NOTHING)
+
+====================================================================================
+SHORTS   real: 827 trades, 22.2% hit, baseline 31.8%, excess -9.5pp, mean R -0.3411
+  200 random draws, same frames, same exits, same costs
+====================================================================================
+  excess   real -9.5pp   null median -4.6pp   null 95% [-7.0, -1.8]pp
+           gap -4.9pp   empirical p 1.000   -> SIGNAL IS NEGATIVE
+  mean_r   real -0.3411R   null median -0.2097R   null 95% [-0.3151, -0.0585]R
+           gap -0.1314R   empirical p 0.995   -> SIGNAL IS NEGATIVE
+
+====================================================================================
+SHORTS (R:R-matched subset)   real: 497 trades, 16.7% hit, baseline 25.0%, excess -8.3pp, mean R -0.3363
+  200 random draws, same frames, same exits, same costs
+====================================================================================
+  excess   real -8.3pp   null median -4.6pp   null 95% [-7.0, -1.8]pp
+           gap -3.7pp   empirical p 1.000   -> SIGNAL IS NEGATIVE
+  mean_r   real -0.3363R   null median -0.2097R   null 95% [-0.3151, -0.0585]R
+           gap -0.1267R   empirical p 0.995   -> SIGNAL IS NEGATIVE
+
+  robustness: 524 R:R-matched trades agree (SIGNAL IS NEGATIVE)
+
+====================================================================================
+SUMMARY
+  LONGS    excess SIGNAL ADDS NOTHING   mean R SIGNAL ADDS NOTHING
+  SHORTS   excess SIGNAL IS NEGATIVE    mean R SIGNAL IS NEGATIVE
+
+IN-SAMPLE. Twenty spent tickers. A positive result here is a
+hypothesis for tranche C, not a finding.
+====================================================================================
