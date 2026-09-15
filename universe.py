@@ -143,27 +143,32 @@ SECTORS = {
 # precisely BECAUSE the live ranker kept selecting them (see the 2026-09-02
 # ledger entry) — but only tranche A is protected, and the claim should say so.
 CANDIDATE_POOL = [
+    # Tranche C was reserved on 2026-09-15 and seven of its names were in
+    # this pool: MRVL, NXPI, BKNG, CL, ETN, GILD, ISRG. They are removed
+    # rather than traded. Tranche B was lost exactly this way — the RS
+    # ranker kept selecting its names, the scanner alerted on them, their
+    # outcomes were observed, and the held-out set was gone before any test
+    # used it. check_universe_not_spending_reserved() caught this one.
     # Tech
     "AAPL", "MSFT", "GOOGL", "META", "ORCL", "CRM", "ADBE", "NOW",
     "PANW", "ACN", "ANET", "CRWD", "FTNT",
     # Semis
-    "NVDA", "AVGO", "AMD", "QCOM", "MU", "LRCX", "ADI", "MRVL", "NXPI",
-    "ON",
+    "NVDA", "AVGO", "AMD", "QCOM", "MU", "LRCX", "ADI", "ON",
     # Comms
     "NFLX", "CMCSA", "T", "TMUS", "VZ",
     # ConsDisc
-    "AMZN", "TSLA", "TGT", "ABNB", "BKNG", "CMG", "ROST", "TJX",
+    "AMZN", "TSLA", "TGT", "ABNB", "CMG", "ROST", "TJX",
     # Staples
-    "WMT", "PG", "KO", "PEP", "CL", "MDLZ", "MO", "PM",
+    "WMT", "PG", "KO", "PEP", "MDLZ", "MO", "PM",
     # Financials
     "JPM", "BAC", "GS", "MS", "V", "MA", "AXP", "BLK", "C", "CME",
     "SCHW", "SPGI", "WFC",
     # Industrials
-    "CAT", "DE", "HON", "GE", "BA", "UNP", "UPS", "CSX", "ETN", "FDX",
+    "CAT", "DE", "HON", "GE", "BA", "UNP", "UPS", "CSX", "FDX",
     "LMT", "RTX",
     # Health
     "UNH", "JNJ", "LLY", "ABBV", "MRK", "PFE", "TMO", "ABT", "AMGN",
-    "BMY", "CVS", "GILD", "ISRG", "SYK",
+    "BMY", "CVS", "SYK",
     # Energy
     "XOM", "CVX", "COP", "SLB", "MPC", "OXY", "PSX",
 ]

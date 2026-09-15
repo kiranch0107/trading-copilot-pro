@@ -1,5 +1,5 @@
 {
-  "reservation_hash": "431e21b4da127fe2",
+  "reservation_hash": "6e4580c94f5ad703",
   "created": "2026-08-24T22:50:05+00:00",
   "contaminated": {
     "TSLA": "Aug 2026 parameter sweep (~60 configurations)",
@@ -91,6 +91,32 @@
       "spent": true,
       "spent_on": "Spent de facto by live trading, not by a test. universe.py's dynamic RS ranking has been selecting Tranche B names (ABT, TGT, TMO, BAC, MA, UNP in the 2026-08-30 snapshot) and the scanner has been alerting on them, so their outcomes have been observed. Recorded honestly rather than left looking pristine. Tranche A is now excluded from CANDIDATE_POOL so it stays genuinely unspent.",
       "spent_at": "2026-09-02T04:49:13+00:00"
+    },
+    "C": {
+      "note": "Third held-out set, reserved 2026-09-15 BEFORE the setup-case buckets were defined. Every earlier tranche was spent, so nothing this project found could be confirmed anywhere. This exists so the bucket rules coming out of setup_cases.py can be scored on ground that was never used to find them. Do not look at these names for any purpose until the buckets are written down and fixed.",
+      "tickers": [
+        "MRVL",
+        "NXPI",
+        "DDOG",
+        "SNOW",
+        "SHOP",
+        "LULU",
+        "WDAY",
+        "TEAM",
+        "UBER",
+        "ICE",
+        "ISRG",
+        "VRTX",
+        "ETN",
+        "BKNG",
+        "COF",
+        "REGN",
+        "GILD",
+        "CL",
+        "XEL",
+        "DUK"
+      ],
+      "spent": false
     }
   },
   "ledger": [
@@ -180,5 +206,5 @@
       ]
     }
   ],
-  "state_hash": "a81e419ea937db6e"
+  "state_hash": "5468a06cb9202575"
 }
