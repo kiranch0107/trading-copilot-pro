@@ -1,0 +1,87 @@
+  collecting ...
+  GOOGL: 74 long, 48 inverted
+  AVGO: 71 long, 24 inverted
+  AMD: 79 long, 39 inverted
+  NFLX: 81 long, 35 inverted
+  CRM: 67 long, 47 inverted
+  ADBE: 64 long, 72 inverted
+  QCOM: 57 long, 42 inverted
+  MU: 84 long, 36 inverted
+  ORCL: 82 long, 54 inverted
+  NOW: 59 long, 32 inverted
+  PANW: 75 long, 38 inverted
+  LRCX: 98 long, 31 inverted
+  TSLA: 70 long, 56 inverted
+  NVDA: 92 long, 32 inverted
+  META: 77 long, 47 inverted
+  INTC: 69 long, 43 inverted
+  IBM: 79 long, 58 inverted
+  DIS: 60 long, 57 inverted
+  COST: 100 long, 23 inverted
+  MCD: 70 long, 42 inverted
+====================================================================================
+INVERTED ARM — the short signal's bars, entered LONG
+====================================================================================
+  20 tickers, 10 years, 200 random draws
+  regime: SPY vs its own 200-SMA, read at the SIGNAL bar
+  ! 5 ticker bars had no SPY date — filed Unknown
+  pre-registered: results/inverted_arm_preregistration.md
+
+####################################################################################
+# REAL LONG
+####################################################################################
+
+====================================================================================
+REAL LONG — Bull   real: 1362 trades, 29.2% hit, baseline 25.0%, excess +4.2pp, mean R +0.1261
+  200 random draws, same frames, same exits, same costs
+====================================================================================
+  excess   real +4.2pp   null median +4.5pp   null 95% [+0.9, +8.2]pp
+           gap -0.3pp   empirical p 0.582   -> SIGNAL ADDS NOTHING
+  mean_r   real +0.1261R   null median +0.1139R   null 95% [-0.0365, +0.2609]R
+           gap +0.0121R   empirical p 0.423   -> SIGNAL ADDS NOTHING
+
+  Bear: 69 trades, 200 usable draws — UNDERPOWERED, no verdict.
+     Below 100 trades or 20 draws a percentile is arithmetic, not evidence. An
+     underpowered cell is NOT support for a regime-independent effect.
+
+  Neutral: 0 trades, 0 usable draws — UNDERPOWERED, no verdict.
+     Below 100 trades or 20 draws a percentile is arithmetic, not evidence. An
+     underpowered cell is NOT support for a regime-independent effect.
+
+####################################################################################
+# INVERTED
+####################################################################################
+
+====================================================================================
+INVERTED — Bull   real: 423 trades, 32.9% hit, baseline 25.0%, excess +7.9pp, mean R +0.3983
+  200 random draws, same frames, same exits, same costs
+====================================================================================
+  excess   real +7.9pp   null median +4.5pp   null 95% [+0.9, +8.2]pp
+           gap +3.3pp   empirical p 0.035   -> SIGNAL ADDS NOTHING
+  mean_r   real +0.3983R   null median +0.1139R   null 95% [-0.0365, +0.2609]R
+           gap +0.2843R   empirical p 0.005   -> SIGNAL CONTRIBUTES
+
+====================================================================================
+INVERTED — Bear   real: 330 trades, 33.0% hit, baseline 25.0%, excess +8.0pp, mean R +0.2411
+  200 random draws, same frames, same exits, same costs
+====================================================================================
+  excess   real +8.0pp   null median +3.6pp   null 95% [-3.7, +12.2]pp
+           gap +4.5pp   empirical p 0.134   -> SIGNAL ADDS NOTHING
+  mean_r   real +0.2411R   null median +0.1343R   null 95% [-0.2087, +0.7862]R
+           gap +0.1069R   empirical p 0.299   -> SIGNAL ADDS NOTHING
+
+  Neutral: 0 trades, 0 usable draws — UNDERPOWERED, no verdict.
+     Below 100 trades or 20 draws a percentile is arithmetic, not evidence. An
+     underpowered cell is NOT support for a regime-independent effect.
+
+====================================================================================
+VERDICT — does the inversion survive when the market is not rising?
+  INVERTED in Bull : SIGNAL ADDS NOTHING
+  INVERTED in Bear : SIGNAL ADDS NOTHING
+
+  NOTHING
+    The inversion does not beat random entry even in the regime that should flatter it most.
+
+IN-SAMPLE. Twenty spent tickers, one decade. A positive result is
+a hypothesis for tranche C, not a finding, and not a reason to trade.
+====================================================================================
