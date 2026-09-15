@@ -1180,6 +1180,18 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
     if r["blocked"]:
         return r
 
+    # DIRECTION GATE, applied in the same place and from the same source as
+    # scanner.py's. Shorts measured worse than random entry (risk_params
+    # .LONGS_ONLY). Blocked in the evaluate() shape rather than returned as a
+    # live signal, so every downstream renderer treats it like any other
+    # rejection and the reason reaches the UI instead of the trade vanishing.
+    _dir = risk_params.direction_blocked(r["trend"])
+    if _dir:
+        r["blocked"] = True
+        r["block_reason"] = "direction"
+        r["reason"] = _dir
+        return r
+
     # Option chain stays here: it is app-specific, rate-limit sensitive, and
     # irrelevant to whether the SIGNAL fired.
     r["option"] = (get_option_data(ticker, r["price"], r["trend"],

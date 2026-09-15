@@ -599,6 +599,16 @@ def analyze(df: pd.DataFrame, ticker: str,
         logger.debug("%s — no signal (%s)", ticker, r.get("block_reason"))
         return None
 
+    # DIRECTION GATE. Shorts measured worse than random entry, so the live
+    # system does not send them. See risk_params.LONGS_ONLY for the numbers.
+    # Logged at INFO, not debug: a dropped alert should be visible in the
+    # scanner's own output, or "the scanner went quiet" and "the scanner is
+    # suppressing half its signals" look identical from outside.
+    _dir = risk_params.direction_blocked(r["trend"])
+    if _dir:
+        logger.info("%s — %s setup suppressed: %s", ticker, r["trend"], _dir)
+        return None
+
     # Alerts fire on the high-quality tier only, exactly as app.py defines it.
     if not r["high_quality"]:
         logger.debug("%s — signal but not high-quality (rr %.2f, %s, "
@@ -738,6 +748,43 @@ def selftest() -> int:
     a schedule and had NO test coverage at all, which is how it could have
     fetched nothing for days while looking exactly like a quiet market.
     """
+    # ── THE DIRECTION GATE MUST BIND IN analyze(), not just in risk_params ──
+    # Asserting that direction_blocked() returns a string proves the helper
+    # works, not that the scanner calls it. This project has shipped that
+    # mistake repeatedly — a guard aimed at the producer while the break sat in
+    # the consumer. Drive the real function and read what comes back.
+    import pandas as _pd
+    _frame = _pd.DataFrame({"Close": [100.0] * (MIN_BARS_AFTER_WARMUP + 5)})
+
+    def _canned(trend):
+        return {"blocked": False, "ticker": "ZZ", "trend": trend,
+                "strength": "Strong", "price": 100.0, "entry": 100.0,
+                "stop": 98.0, "target": 106.0, "rr": 3.0, "rsi": 65.0,
+                "adx": 30.0, "atr": 2.0, "high_quality": True,
+                "filters_pass": 4, "filters_total": 4}
+
+    _real_eval = sc.evaluate
+    _real_wk, _real_earn = get_weekly_trend, check_earnings_blackout
+    try:
+        globals()["get_weekly_trend"] = lambda t: "Bullish"
+        globals()["check_earnings_blackout"] = lambda t: (True, "n/a")
+        sc.evaluate = lambda *a, **k: _canned("Bearish")
+        assert analyze(_frame, "ZZ") is None, (
+            "a high-quality BEARISH signal reached the alert path. Shorts "
+            "measured worse than random entry (drift_null: all 200 random "
+            "draws beat the real signal, -0.131 R per trade) and the scanner "
+            "must not send them")
+        sc.evaluate = lambda *a, **k: _canned("Bullish")
+        got = analyze(_frame, "ZZ")
+        assert got is not None and got["trend"] == "Bullish", (
+            f"the gate swallowed a LONG. It must block one direction, not "
+            f"stop the scanner: {got}")
+    finally:
+        sc.evaluate = _real_eval
+        globals()["get_weekly_trend"] = _real_wk
+        globals()["check_earnings_blackout"] = _real_earn
+    print("direction gate          : bearish dropped, bullish still alerts")
+
     wl = ["AAA", "BBB", "CCC"]
 
     assert is_total_outage(["AAA (no data)", "BBB (x)", "CCC (y)"], wl) is True
