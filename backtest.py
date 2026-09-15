@@ -83,6 +83,8 @@ Run
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import sys
 import warnings
 from datetime import datetime
@@ -511,7 +513,8 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
 def backtest_ticker(df: pd.DataFrame, cfg: dict, params: sc.SignalParams,
                     regime_series: pd.Series | None = None,
                     weekly_series: pd.Series | None = None,
-                    tally: dict | None = None) -> list[dict]:
+                    tally: dict | None = None,
+                    policy: dict | None = None) -> list[dict]:
     trades = []
     i = 0
     n = len(df)
@@ -525,7 +528,7 @@ def backtest_ticker(df: pd.DataFrame, cfg: dict, params: sc.SignalParams,
         sig = evaluate_signal(df, i, params, regime=regime, weekly=weekly,
                               tally=tally)
         if sig:
-            res = simulate_trade(df, i, sig, cfg, tally=tally)
+            res = simulate_trade(df, i, sig, cfg, tally=tally, policy=policy)
             if res.get("filled"):
                 trades.append(res)
                 i += cfg["cooldown_bars"] + 1     # cooldown after a trade
@@ -914,7 +917,7 @@ def download(ticker: str, years: int,
     return df
 
 
-def run(cfg: dict) -> list[dict]:
+def run(cfg: dict, policy: dict | None = None) -> list[dict]:
     _CACHE_LOG.clear()
     print("=" * 78)
     print("TRADING COPILOT ELITE — HISTORICAL BACKTEST (real data)")
@@ -1010,7 +1013,8 @@ def run(cfg: dict) -> list[dict]:
                 [wmap.asof(pd.Timestamp(d)) for d in df["Date"]]
             ).reset_index(drop=True)
 
-        trades = backtest_ticker(df, cfg, params, regime_series=reg_series,
+        trades = backtest_ticker(df, cfg, params, policy=policy,
+                                 regime_series=reg_series,
                                  weekly_series=wk_series, tally=tally)
         s = stats(trades)
         for _t in trades:
@@ -1470,6 +1474,55 @@ def selftest() -> int:
             f"indistinguishable from a rule that genuinely does nothing")
     print(f"policies bite           : baseline -1.00 R -> breakeven +0.00, "
           f"trail +0.50, partial +0.25 on the same bars")
+
+    # ── THE POLICY MUST SURVIVE run() -> backtest_ticker() -> simulate_trade() ──
+    # A parameter that is accepted at the top and dropped in the middle leaves
+    # every A/B arm reporting a delta of zero, which reads as "the rule does
+    # nothing" and is indistinguishable from a rule that genuinely does nothing.
+    # Drive the DRIVER, not simulate_trade directly.
+    _pd_df = _synthetic_ohlc(up=True, adx=40.0)
+    _pa = backtest_ticker(_pd_df, dict(DEFAULTS), params)
+    _pb = backtest_ticker(_pd_df, dict(DEFAULTS), params,
+                          policy={"partial_at": 1.5, "partial_frac": 0.5})
+    assert _pa and len(_pa) == len(_pb), (len(_pa), len(_pb))
+    _moved = sum(1 for x, y in zip(_pa, _pb) if abs(x["r"] - y["r"]) > 1e-9)
+    assert _moved > 0, (
+        "backtest_ticker accepted a policy and changed nothing. Most trades on "
+        "this frame time out below the +1.5 R trigger so a small count is "
+        "expected — zero means the parameter is being dropped on the way down")
+    # entries must be IDENTICAL: only the exit differs, or the pairing any A/B
+    # relies on is a lie.
+    for x, y in zip(_pa, _pb):
+        assert x["entry_date"] == y["entry_date"] and x["entry"] == y["entry"], (
+            "the policy changed an ENTRY. It may only change how a trade is "
+            "managed after it is on")
+    print(f"policy threading        : {_moved}/{len(_pa)} trades changed, "
+          f"every entry identical")
+
+    # ── AND run() ITSELF MUST PASS IT DOWN ──
+    # The check above drives backtest_ticker, the middle of the chain. run() is
+    # the top, and dropping the parameter there leaves every caller --
+    # longs_only's break-even arm included -- silently running the baseline
+    # twice. run() needs data, so feed it a synthetic frame instead of network.
+    _rd, _rc = download, compute
+    try:
+        globals()["download"] = lambda tk, yrs, *a, **k: _synthetic_ohlc(
+            up=True, adx=40.0)
+        globals()["compute"] = lambda df: df
+        _cfg_r = dict(DEFAULTS, tickers=["AAA"], years=1)
+        _buf = io.StringIO()
+        with contextlib.redirect_stdout(_buf):
+            _ra = run(_cfg_r)
+            _rb = run(_cfg_r, policy={"partial_at": 1.5, "partial_frac": 0.5})
+        assert _ra and len(_ra) == len(_rb), (len(_ra or []), len(_rb or []))
+        _rm = sum(1 for x, y in zip(_ra, _rb) if abs(x["r"] - y["r"]) > 1e-9)
+        assert _rm > 0, (
+            "run() accepted a policy and passed it nowhere. Every caller would "
+            "run the baseline twice and report that the rule changes nothing")
+    finally:
+        globals()["download"], globals()["compute"] = _rd, _rc
+    print(f"run() threading         : {_rm}/{len(_ra)} trades changed through "
+          f"the top-level driver")
 
     # ── A TRAILING STOP NEVER MOVES AGAINST US, AND NEVER LOOKS AHEAD ──
     # Hand-built: entry 100, stop 98, ATR 2. Bar 1 highs 104 (+2 R) which arms

@@ -945,6 +945,63 @@ def check_backlog_coverage_table_current() -> None:
     print(f"  BACKLOG coverage table matches the repo ({len(rows)} modules)")
 
 
+def check_capital_never_gates_alerts() -> None:
+    """
+    Capital may be computed and shown. It must never suppress an alert.
+
+    Asked for explicitly: "I don't want to filter trades based on cap — alert
+    irrespective of cap." The scanner today does the right thing: an
+    over-budget contract gets a warning line appended and the alert still goes
+    out. This stops that drifting, because "skip the ones we can't afford"
+    looks like a kindness in a diff.
+
+    Encoded structurally rather than by promise: no branch in scanner.py may
+    both TEST a capital fact and RETURN or CONTINUE out of the alert path. The
+    scanner is free to read ACCOUNT_SIZE, size a contract and warn about the
+    budget — it may not act on any of it by staying silent.
+    """
+    import ast as _ast
+    capital = {"within_budget", "budget", "ACCOUNT_SIZE", "account_size",
+               "pct_account", "MAX_POSITION_PCT", "cost", "equity"}
+    src = Path("scanner.py").read_text()
+    tree = _ast.parse(src)
+    bad = []
+    for node in _ast.walk(tree):
+        if not isinstance(node, _ast.If):
+            continue
+        names = {n.id for n in _ast.walk(node.test) if isinstance(n, _ast.Name)}
+        names |= {n.attr for n in _ast.walk(node.test)
+                  if isinstance(n, _ast.Attribute)}
+        names |= {k.value for k in _ast.walk(node.test)
+                  if isinstance(k, _ast.Constant) and isinstance(k.value, str)}
+        if not (names & capital):
+            continue
+        for stmt in _ast.walk(node):
+            # `return None` is Return(value=Constant(None)); only a BARE
+            # `return` has value=None. Checking the latter alone missed the
+            # scanner's actual suppression pattern entirely — analyze() signals
+            # "no alert" by returning None, and the first version of this check
+            # sailed past a planted `if ACCOUNT_SIZE < X: return None`.
+            leaves = isinstance(stmt, _ast.Continue) or (
+                isinstance(stmt, _ast.Return) and (
+                    stmt.value is None
+                    or (isinstance(stmt.value, _ast.Constant)
+                        and stmt.value.value is None)))
+            if leaves:
+                bad.append((node.lineno, sorted(names & capital)))
+                break
+    if bad:
+        raise AssertionError(
+            f"scanner.py branches on capital and then leaves the alert path:\n"
+            + "\n".join(f"    line {ln}: tests {ns} then returns/continues"
+                         for ln, ns in bad)
+            + "\n  Capital may be computed and SHOWN, never used to stay "
+              "silent. An over-budget contract gets a warning and the alert "
+              "still goes out.")
+    print(f"  capital informs alerts, never suppresses them "
+          f"({len(capital)} symbols checked)")
+
+
 def check_forward_log_has_no_test_data() -> None:
     """
     The committed forward log must contain no fixture rows.
@@ -1823,6 +1880,7 @@ CHECKS = [
     ("app.py defaults derive from signal_core",    check_app_defaults_derived),
     ("backtest.evaluate_signal callers correct",   check_backtest_callers),
     ("weekly trend + SPY regime are one rule",     check_market_context_shared),
+    ("capital never gates an alert",             check_capital_never_gates_alerts),
     ("forward log carries no test data",         check_forward_log_has_no_test_data),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
