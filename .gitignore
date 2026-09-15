@@ -6,3 +6,11 @@ oos_raw_output.txt
 # Frozen bars for reproducible backtests (bar_cache.py). Local by design:
 # committing them would make the repo the data store and the diffs unreadable.
 .bar_cache/
+
+# forward_log.jsonl is DELIBERATELY TRACKED, not ignored.
+#
+# A hash chain cannot detect its own tail being cut — drop the last row and
+# what remains verifies clean, so the most recent trades are exactly what the
+# chain does not protect. Git is the external anchor: committing the log after
+# each scan makes a truncation visible as a deletion in the diff. Adding it
+# here would remove the only protection it has.
