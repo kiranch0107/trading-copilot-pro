@@ -363,8 +363,16 @@ def add_journal_trade(alert_id, ticker, trend, entry, stop, target,
                       rr, exit_price, outcome, notes, setup_date) -> None:
     journal = load_journal()
     risk    = abs(entry - stop)
-    pnl_r   = round((exit_price - entry) / risk, 2) if trend == "Bullish" \
-              else round((entry - exit_price) / risk, 2)
+    # GUARD THE DIVIDE. backtest.py:299 guards the identical expression, and
+    # scanner.py's header records the ZeroDivisionError this shape already
+    # caused once. The live path cannot reach entry == stop — signal_core's
+    # zero-risk gate blocks it before an alert exists — but a hand-edited or
+    # legacy journal row can, and this function takes its inputs from the UI.
+    if risk <= 0:
+        pnl_r = 0.0
+    else:
+        pnl_r = round((exit_price - entry) / risk, 2) if trend == "Bullish" \
+                else round((entry - exit_price) / risk, 2)
     journal = [j for j in journal if j["id"] != alert_id]
     journal.append({
         "id": alert_id, "date": setup_date,
@@ -713,6 +721,34 @@ def selftest() -> int:
     print(f"sizing gate reachable   : ${_blocks*100:,.0f} blocks, "
           f"${_warns*100:,.0f} warns, ${_ok*100:,.0f} ok "
           f"(account ${_rp.DEFAULT_ACCOUNT_SIZE:,})")
+
+    # ── a zero-risk row must not blow up the journal ──
+    # entry == stop cannot come from the live path (signal_core's zero-risk
+    # gate stops it before an alert exists) but CAN come from a hand-edited or
+    # legacy row, and this function takes its inputs from the UI. backtest.py
+    # guards the identical expression; scanner.py's header records the
+    # ZeroDivisionError this shape already caused once. The fix for it was
+    # written for app.py in August and did not follow the code here.
+    #
+    # Stubs load/save rather than a path: the journal persists through
+    # gh_sync + session_state, so patching a path global tests nothing. A
+    # first version did exactly that and the row was never written.
+    _captured = {}
+    _real_load, _real_save = load_journal, save_journal
+    try:
+        globals()["load_journal"] = lambda: []
+        globals()["save_journal"] = lambda d: _captured.setdefault("rows", d)
+        add_journal_trade("zr-1", "ZZZ", "Bullish", entry=100.0, stop=100.0,
+                          target=110.0, rr=0.0, exit_price=105.0,
+                          outcome="WIN", notes="zero risk",
+                          setup_date="2026-09-15")
+    finally:
+        globals()["load_journal"], globals()["save_journal"] = _real_load, _real_save
+    row = next(r for r in _captured.get("rows", []) if r["id"] == "zr-1")
+    assert row["actual_rr"] == 0.0, (
+        f"a zero-risk row must record 0.0 R, got {row['actual_rr']!r} — an "
+        f"R-multiple off a zero denominator is not a measurement")
+    print("zero risk        : entry == stop records 0.0 R instead of raising")
 
     print("\nAll self-tests passed.")
     return 0
