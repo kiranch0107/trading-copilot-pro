@@ -1,0 +1,88 @@
+  collecting ...
+  GOOGL: 121 signals
+  AVGO: 95 signals
+  AMD: 118 signals
+  NFLX: 116 signals
+  CRM: 113 signals
+  ADBE: 135 signals
+  QCOM: 100 signals
+  MU: 120 signals
+  ORCL: 137 signals
+  NOW: 91 signals
+  PANW: 112 signals
+  LRCX: 128 signals
+  TSLA: 126 signals
+  NVDA: 124 signals
+  META: 124 signals
+  INTC: 113 signals
+  IBM: 136 signals
+  DIS: 118 signals
+  COST: 121 signals
+  MCD: 112 signals
+============================================================================================
+EXIT A/B — three rules against the current one, paired by signal
+============================================================================================
+  2360 trades, 20 tickers, 10 years
+  baseline mean R -0.0173
+  pre-registered: results/exit_ab_preregistration.md
+  Same entries and fills in every arm. Only the exit differs.
+
+============================================================================================
+BREAK-EVEN — stop to entry once +1.0 R is touched
+============================================================================================
+  paired delta   +0.0408 R per trade   (baseline -0.0173 -> +0.0235)
+  p 0.0093   Holm SURVIVES   n 2360
+  changed 530 trades: 404 better (+398.9 R total), 126 worse (-302.6 R total)
+  unchanged 1830   best single +1.00 R   worst -8.14 R
+  where it came from, by the trade's ORIGINAL bucket:
+    NEAR MISS        better    252
+    SHALLOW LOSS     better    144
+    SCARE TARGET     worse      55
+    STALLED RUNNER   worse      36
+    CLEAN TARGET     worse      35
+    STALLED RUNNER   better      8
+  -> PASSES
+
+============================================================================================
+TRAIL — 1.0 ATR below the high-water mark, armed at +1.0 R
+============================================================================================
+  paired delta   +0.0266 R per trade   (baseline -0.0173 -> +0.0093)
+  p 0.2483   Holm no   n 2360
+  changed 672 trades: 409 better (+604.0 R total), 263 worse (-541.2 R total)
+  unchanged 1688   best single +11.11 R   worst -14.70 R
+  where it came from, by the trade's ORIGINAL bucket:
+    NEAR MISS        better    243
+    SHALLOW LOSS     better    141
+    CLEAN TARGET     worse     137
+    SCARE TARGET     worse      85
+    STALLED RUNNER   worse      41
+    STALLED RUNNER   better     25
+  -> NOT ESTABLISHED
+
+============================================================================================
+PARTIAL — half off at +1.5 R, remainder to the original target
+============================================================================================
+  paired delta   -0.0035 R per trade   (baseline -0.0173 -> -0.0207)
+  p 0.7833   Holm no   n 2360
+  changed 574 trades: 243 better (+278.4 R total), 331 worse (-286.6 R total)
+  unchanged 1786   best single +1.25 R   worst -8.32 R
+  where it came from, by the trade's ORIGINAL bucket:
+    NEAR MISS        better    207
+    CLEAN TARGET     worse     202
+    SCARE TARGET     worse     102
+    STALLED RUNNER   better     33
+    STALLED RUNNER   worse      27
+    SHALLOW LOSS     better      3
+  -> NOT ESTABLISHED
+
+============================================================================================
+SUMMARY
+  BREAK-EVEN   +0.0408 R   p 0.0093   PASSES
+  TRAIL        +0.0266 R   p 0.2483   NOT ESTABLISHED
+  PARTIAL      -0.0035 R   p 0.7833   NOT ESTABLISHED
+
+  BREAK-EVEN cleared Holm with a positive delta.
+  IN-SAMPLE on twenty spent tickers. That is a hypothesis for
+  tranche C, not a finding, and not a reason to change the live
+  exit.
+============================================================================================
