@@ -947,6 +947,38 @@ def check_backlog_coverage_table_current() -> None:
     print(f"  BACKLOG coverage table matches the repo ({len(rows)} modules)")
 
 
+def check_selftests_run_in_ci() -> None:
+    """
+    Every module with a --selftest flag must be invoked by tests.yml.
+
+    A selftest that CI never runs is a test suite you only find out about when
+    you happen to run it by hand. setup_population.py shipped with twelve
+    guards and no CI step: the workflow names each module explicitly, so a new
+    one is silently absent rather than picked up. Nothing in this suite tied
+    the two lists together, which is why the omission survived a green run of
+    everything else.
+
+    app.py is exempt and says so in the workflow — importing it renders the
+    Streamlit UI and makes live calls, so CI compiles and lints it instead.
+    """
+    import glob
+    yml = Path(".github/workflows/tests.yml").read_text()
+    missing = []
+    for f in sorted(glob.glob("*.py")):
+        if '"--selftest"' not in Path(f).read_text():
+            continue
+        if f not in yml:
+            missing.append(f)
+    if missing:
+        raise AssertionError(
+            f"{len(missing)} module(s) expose --selftest but tests.yml never "
+            f"runs them: {', '.join(missing)}.\n"
+            f"  Their guards do not protect anything on CI. Add a step to "
+            f"  .github/workflows/tests.yml for each.")
+    n = sum(1 for f in glob.glob("*.py") if '"--selftest"' in Path(f).read_text())
+    print(f"  all {n} --selftest modules are invoked by tests.yml")
+
+
 IMPORTABLE_MODULES = [
     "signal_core", "data_source", "rate_limit", "market_context", "gh_sync",
     "journal_store", "bar_cache", "risk_params", "notify",
@@ -1595,6 +1627,7 @@ CHECKS = [
     ("app.py defaults derive from signal_core",    check_app_defaults_derived),
     ("backtest.evaluate_signal callers correct",   check_backtest_callers),
     ("weekly trend + SPY regime are one rule",     check_market_context_shared),
+    ("every --selftest module runs in CI",        check_selftests_run_in_ci),
     ("live universe spends no reserved data",     check_universe_not_spending_reserved),
     ("scan failures are surfaced, not swallowed",  check_scan_failures_surfaced),
     ("backtest prices match the live paths",       check_adjustment_matches_live),
