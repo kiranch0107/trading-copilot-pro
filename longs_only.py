@@ -58,11 +58,19 @@ OOS_12 = "GOOGL,AVGO,AMD,NFLX,CRM,ADBE,QCOM,MU,ORCL,NOW,PANW,LRCX"
 BENCHMARK = "SPY"
 
 
-def collect_longs(tickers: list[str], years: int) -> list[dict]:
+def collect_longs(tickers: list[str], years: int,
+                  policy: dict | None = None) -> list[dict]:
+    """Long trades in date order, optionally under an exit policy.
+
+    `policy` reaches simulate_trade unchanged — same entries, same fills, same
+    initial levels, only the management differs. That is what lets the
+    constrained curve be run with and without the break-even exit and compared
+    trade for trade.
+    """
     cfg = dict(bt.DEFAULTS, tickers=tickers, years=years)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        trades = bt.run(cfg) or []
+        trades = bt.run(cfg, policy=policy) or []
     longs = [t for t in trades
              if t.get("trend") == "Bullish" and t.get("r") is not None]
     longs.sort(key=lambda t: str(t.get("entry_date")))
@@ -295,7 +303,7 @@ def selftest() -> int:
     import backtest as _bt
     real_run, = (_bt.run,)
     try:
-        _bt.run = lambda cfg: mixed
+        _bt.run = lambda cfg, policy=None: mixed
         got = collect_longs(["A"], 1)
     finally:
         _bt.run = real_run
@@ -309,8 +317,97 @@ def selftest() -> int:
         assert f in src, f"backtest.simulate_trade no longer carries {f}"
     print("wiring           : entry, stop and exit_date carried by simulate_trade")
 
+    # ── collect_longs MUST FORWARD THE POLICY ──
+    # A dropped parameter makes the break-even arm silently identical to the
+    # baseline, and the report then says "the rule changes nothing" — which is
+    # indistinguishable from a rule that genuinely changes nothing.
+    _seen = {}
+    _real_run = _bt.run
+    try:
+        def _spy(cfg, policy=None):
+            _seen["policy"] = policy
+            return mixed
+        _bt.run = _spy
+        collect_longs(["AAA"], 1, policy={"breakeven_at": 1.0})
+        assert _seen.get("policy") == {"breakeven_at": 1.0}, (
+            f"collect_longs dropped the policy on the way to bt.run: "
+            f"{_seen.get('policy')!r}")
+        collect_longs(["AAA"], 1)
+        assert _seen.get("policy") is None, _seen
+    finally:
+        _bt.run = _real_run
+    print("policy forwarding: collect_longs passes it to bt.run, None by default")
+
     print("=" * 72)
     print("All self-tests passed.")
+    return 0
+
+
+def break_even_arm(tickers, years, base_longs, base_ideal, base_real, *,
+                   account: float, risk_pct: float) -> int:
+    """
+    The confirmed exit rule, run through the capital constraint.
+
+    WHY THIS IS THE ONLY VERSION THAT MATTERS. The break-even rule was measured
+    per-trade on an unconstrained book: every signal taken, at full size,
+    however many were already open. That account does not exist. +0.034 R per
+    trade is a fact about an average; what a $5,000 account would have kept is
+    a different number, and it is the one that decides whether the rule is
+    worth anything.
+
+    The constraint can cut either way. Break-even converts near-misses into
+    scratches, which FREES A SLOT EARLIER — and a freed slot is worth more when
+    slots are the binding constraint than when capital is unlimited. It also
+    scratches winners, which under a cap costs less in dollars than it does in
+    R, because those positions were sized down anyway.
+    """
+    print(f"\n  collecting long trades under the break-even exit ...",
+          file=sys.stderr)
+    be_longs = collect_longs(tickers, years, policy={"breakeven_at": 1.0})
+    if not be_longs:
+        print("NOTHING MEASURED under the policy.")
+        return 2
+    be_ideal = simulate(be_longs, account=account, risk_pct=risk_pct,
+                        constrained=False)
+    be_real = simulate(be_longs, account=account, risk_pct=risk_pct,
+                       constrained=True)
+    print("\n" + "=" * 78)
+    print("BREAK-EVEN EXIT (+1.0 R) THROUGH THE CAPITAL CONSTRAINT")
+    print("=" * 78)
+    print("  The rule was confirmed on tranche C at +0.0342 R per trade, "
+          "measured")
+    print("  per-trade on an unconstrained book. This is the same rule on the "
+          "account")
+    print("  that actually exists.")
+    print()
+    hdr = f"  {'':<22}{'total %':>9}{'CAGR %':>9}{'max DD %':>10}{'trades':>8}{'ret/DD':>8}"
+    print(hdr)
+    print("  " + "-" * (len(hdr) - 2))
+    for label, d in (("idealised, baseline", base_ideal),
+                     ("idealised, break-even", be_ideal),
+                     ("constrained, baseline", base_real),
+                     ("constrained, break-even", be_real)):
+        dd = d["max_dd"] or float("nan")
+        print(f"  {label:<22}{d['total_pct']:>9.1f}{d['cagr']:>9.1f}"
+              f"{dd:>10.1f}{d['taken']:>8}"
+              f"{(d['cagr']/dd if dd else float('nan')):>8.3f}")
+    d_ideal = be_ideal["cagr"] - base_ideal["cagr"]
+    d_real = be_real["cagr"] - base_real["cagr"]
+    print()
+    print(f"  CAGR delta from the rule: {d_ideal:+.2f} pts idealised, "
+          f"{d_real:+.2f} pts constrained")
+    if (d_ideal > 0) != (d_real > 0):
+        print(f"  !! THE TWO DISAGREE IN SIGN. The rule helps one book and "
+              f"hurts the other.")
+        print(f"     The constrained row is the one an account can trade.")
+    elif abs(d_real) < abs(d_ideal) / 2:
+        print(f"  The constraint absorbs most of the rule's benefit: "
+              f"{abs(d_real)/abs(d_ideal)*100 if d_ideal else 0:.0f}% survives.")
+    print()
+    print("  A MEASUREMENT, NOT A TEST. No bar, nothing searched over, and")
+    print("  in-sample on spent tickers — the tranche C confirmation is what")
+    print("  established the rule; this says what it is worth after the cap.")
+    print("=" * 78)
     return 0
 
 
@@ -321,6 +418,10 @@ def main() -> int:
     ap.add_argument("--years", type=int, default=10)
     ap.add_argument("--account", type=float, default=rp.DEFAULT_ACCOUNT_SIZE)
     ap.add_argument("--risk-pct", type=float, default=rp.DEFAULT_RISK_PCT)
+    ap.add_argument("--break-even", action="store_true",
+                    help="also run every arm with the confirmed break-even "
+                         "exit (+1.0 R), to see whether it survives the "
+                         "capital constraint")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
@@ -338,7 +439,11 @@ def main() -> int:
                     constrained=True)
     print(f"  benchmark {BENCHMARK} ...", file=sys.stderr)
     bench = benchmark(BENCHMARK, a.years, a.account)
-    return report(ideal, real, bench, account=a.account, risk_pct=a.risk_pct)
+    rc = report(ideal, real, bench, account=a.account, risk_pct=a.risk_pct)
+    if a.break_even:
+        rc = max(rc, break_even_arm(tickers, a.years, longs, ideal, real,
+                                    account=a.account, risk_pct=a.risk_pct))
+    return rc
 
 
 if __name__ == "__main__":
