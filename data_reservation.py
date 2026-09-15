@@ -94,6 +94,24 @@ RESERVED = {
                     "GE", "BA", "UNP", "UPS", "UNH", "JNJ", "LLY", "ABBV",
                     "MRK", "PFE", "TMO", "ABT", "XOM", "CVX", "COP", "SLB"],
     },
+    "C": {
+        "note": "Third held-out set, reserved 2026-09-15 BEFORE the setup-case "
+                "buckets were defined. Every earlier tranche was spent, so "
+                "nothing this project found could be confirmed anywhere. This "
+                "exists so the bucket rules coming out of setup_cases.py can be "
+                "scored on ground that was never used to find them. Do not "
+                "look at these names for any purpose until the buckets are "
+                "written down and fixed.",
+        # ABNB, AMGN and SCHW were in the first draft of this list and were
+        # dropped: universe_history shows the live weekly scan selected them on
+        # 2026-09-06 and 2026-09-13, so their charts had already been looked at.
+        # SO was dropped as a symbol, not as a company — "SO" matches ordinary
+        # uppercase prose, so every future contamination grep on this tranche
+        # would return a false positive and train us to ignore it.
+        "tickers": ["MRVL", "NXPI", "DDOG", "SNOW", "SHOP", "LULU",
+                    "WDAY", "TEAM", "UBER", "ICE", "ISRG", "VRTX",
+                    "ETN", "BKNG", "COF", "REGN", "GILD", "CL", "XEL", "DUK"],
+    },
 }
 
 # Weakly-seen names: these appeared in printed universe.py rankings, so their
@@ -353,6 +371,65 @@ def assert_clean(tickers: list[str], purpose: str = "") -> None:
           "--purpose \"<what you are testing>\"")
 
 
+def add_tranche(name: str, tickers: list[str], note: str) -> bool:
+    """
+    Reserve a NEW tranche without disturbing the existing ones.
+
+    init_lock(force=True) would rebuild the lock from RESERVED and wipe every
+    spend flag and the whole ledger — a spent tranche would come back looking
+    pristine, which is the exact failure reconcile() exists to shout about. So
+    adding a reservation gets its own path rather than a hand edit of the JSON.
+
+    Refuses to reserve a name that is already contaminated, reserved or spent:
+    a "held-out" set containing a burned ticker is worse than no reservation,
+    because it looks like evidence and is not.
+    """
+    lock = load_lock()
+    if lock is None:
+        print("no lock file — run --init first")
+        return False
+    if name in lock.get("reserved", {}):
+        print(f"tranche {name} already exists; reservations are not overwritten")
+        return False
+    # The hash refresh below asserts "the lock matches RESERVED in this file".
+    # If what gets written differs from RESERVED, that assertion becomes a lie
+    # and status() goes on printing a clean hash over a divergent lock. So the
+    # definition must already live in the code, verbatim, before it is stored.
+    defn = RESERVED.get(name)
+    if defn is None:
+        print(f"tranche {name} is not defined in RESERVED; add it to the file "
+              "first so the reservation is in version control")
+        return False
+    if list(defn.get("tickers", [])) != list(tickers) or defn.get("note") != note:
+        print(f"tranche {name} does not match its RESERVED definition; "
+              "refusing to store a lock the definition hash would misdescribe")
+        return False
+
+    taken: dict[str, str] = {t: "contaminated" for t in lock.get("contaminated", {})}
+    for tname, tr in lock.get("reserved", {}).items():
+        for t in tr.get("tickers", []):
+            taken[t] = f"tranche {tname}" + (" (spent)" if tr.get("spent") else "")
+    clash = {t: taken[t] for t in tickers if t in taken}
+    if clash:
+        print("cannot reserve names that are already accounted for:")
+        for t, where in sorted(clash.items()):
+            print(f"  {t}: {where}")
+        return False
+    dupes = sorted({t for t in tickers if tickers.count(t) > 1})
+    if dupes:
+        print(f"duplicate tickers in the request: {dupes}")
+        return False
+
+    lock["reserved"][name] = {"note": note, "tickers": list(tickers),
+                              "spent": False}
+    # reservation_hash covers the DEFINITIONS, which have just changed. Refresh
+    # it, or status() reports a mismatch for a change that was deliberate.
+    lock["reservation_hash"] = reservation_hash()
+    save_lock(lock)
+    print(f"reserved tranche {name}: {len(tickers)} tickers")
+    return True
+
+
 def spend(tranche: str, purpose: str) -> bool:
     lock = load_lock() or init_lock()
     tranche = tranche.upper()
@@ -519,13 +596,21 @@ def selftest() -> int:
     tmp = tempfile.mkdtemp()
     LOCK = os.path.join(tmp, "test.lock.json")
     try:
-        # tranches must not overlap each other or the contaminated set
-        a, b = set(RESERVED["A"]["tickers"]), set(RESERVED["B"]["tickers"])
-        assert not (a & b), f"tranches overlap: {a & b}"
-        assert not (a & set(CONTAMINATED)), f"A hits contaminated: {a & set(CONTAMINATED)}"
-        assert not (b & set(CONTAMINATED)), f"B hits contaminated: {b & set(CONTAMINATED)}"
-        print(f"tranche A       : {len(a)} tickers, no overlap")
-        print(f"tranche B       : {len(b)} tickers, no overlap")
+        # tranches must not overlap each other or the contaminated set.
+        # Pairwise over every tranche, not just A and B: a hard-coded pair
+        # stops checking the moment a third tranche is added, which is exactly
+        # when an overlap becomes easy to introduce.
+        _names = sorted(RESERVED)
+        for _i, _n in enumerate(_names):
+            _ti = set(RESERVED[_n]["tickers"])
+            assert len(_ti) == len(RESERVED[_n]["tickers"]), \
+                f"tranche {_n} lists a ticker twice"
+            assert not (_ti & set(CONTAMINATED)), \
+                f"{_n} hits contaminated: {_ti & set(CONTAMINATED)}"
+            for _m in _names[_i + 1:]:
+                _tm = set(RESERVED[_m]["tickers"])
+                assert not (_ti & _tm), f"{_n}/{_m} overlap: {_ti & _tm}"
+            print(f"tranche {_n}       : {len(_ti)} tickers, no overlap")
         print(f"contaminated    : {len(CONTAMINATED)} tickers")
 
         init_lock(force=True)
@@ -630,6 +715,106 @@ def selftest() -> int:
         assert annul("ZZ", "no such tranche") is False
         print("annul guards     : reason required, spent tranche refused")
 
+        # ── add_tranche() must never disturb what is already recorded ──
+        # The reason this function exists: init_lock(force=True) rebuilds from
+        # RESERVED with spent=False everywhere and an empty ledger, so using it
+        # to add a tranche would silently un-spend A and B.
+        _before = load_lock()
+        assert _before["reserved"]["A"]["spent"] is True
+        assert len(_before["ledger"]) == 1
+
+        assert add_tranche("A", list(RESERVED["A"]["tickers"]),
+                           RESERVED["A"]["note"]) is False, \
+            "add_tranche must refuse a tranche that already exists"
+        assert load_lock()["reserved"]["A"]["spent"] is True, \
+            "a refused add must not touch the existing tranche"
+
+        # The dangerous version of that case: the lock holds tranche A from
+        # BEFORE its definition was edited, so the new tickers do not clash with
+        # the stored ones and the burned-ticker check waves them through. Only
+        # the name check stands between that and an overwrite that resets
+        # spent=True to False. Falsification proved the assertion above could
+        # not tell the two guards apart — it passed with the name check deleted.
+        _lk = load_lock()
+        _lk["reserved"]["A"]["tickers"] = ["QQQQ1", "QQQQ2"]
+        save_lock(_lk)
+        assert add_tranche("A", list(RESERVED["A"]["tickers"]),
+                           RESERVED["A"]["note"]) is False, \
+            "an existing tranche must not be overwritten even when its stored " \
+            "tickers differ from the current definition"
+        _lk = load_lock()
+        assert _lk["reserved"]["A"]["spent"] is True, \
+            "a refused add must not reset a spend flag"
+        assert _lk["reserved"]["A"]["tickers"] == ["QQQQ1", "QQQQ2"], \
+            "a refused add must not rewrite the stored tickers"
+        _lk["reserved"]["A"]["tickers"] = list(RESERVED["A"]["tickers"])
+        save_lock(_lk)
+
+        assert add_tranche("QQ", ["ZZZZ"], "not in RESERVED") is False, \
+            "add_tranche must refuse a name that is not defined in RESERVED"
+
+        # Simulate a lock written before the newest tranche was defined. This
+        # has to happen BEFORE the mismatch probes: while the tranche is still
+        # in the lock, every call short-circuits on the already-exists guard and
+        # the mismatch guard is never reached. The first draft of this test did
+        # exactly that and passed while testing nothing.
+        _new = sorted(RESERVED)[-1]
+        _lk = load_lock()
+        _lk["reserved"].pop(_new)
+        # A lock written before this tranche existed also carries the definition
+        # hash from before it existed. Leaving the stored hash current here made
+        # the "hash refreshed" assertion below pass with the refresh deleted.
+        _lk["reservation_hash"] = "staleh4sh00000000"
+        save_lock(_lk)
+
+        # A definition that disagrees with RESERVED would make the refreshed
+        # reservation_hash() describe something other than what was stored.
+        assert add_tranche(_new, ["ZZZZ"], RESERVED[_new]["note"]) is False, \
+            "add_tranche must refuse tickers that differ from RESERVED"
+        assert add_tranche(_new, list(RESERVED[_new]["tickers"]),
+                           "a different note") is False, \
+            "add_tranche must refuse a note that differs from RESERVED"
+        assert _new not in load_lock()["reserved"], \
+            "a refused add must not have written anything"
+        print("add_tranche      : existing name, undefined name and mismatched "
+              "definition all refused")
+
+        assert add_tranche(_new, list(RESERVED[_new]["tickers"]),
+                           RESERVED[_new]["note"]) is True
+        _after = load_lock()
+        assert _after["reserved"][_new]["spent"] is False, \
+            "a newly reserved tranche must start unspent"
+        assert _after["reserved"]["A"]["spent"] is True, \
+            "adding a tranche must not un-spend an existing one"
+        assert _after["reserved"]["A"].get("spent_on") == "test purpose"
+        assert _after["ledger"] == _before["ledger"], \
+            "adding a tranche must not touch the ledger"
+        assert _after["reservation_hash"] == reservation_hash(), \
+            "the stored definition hash must match the code after an add"
+        assert not reconcile(_after), "the lock must still reconcile"
+        print(f"add_tranche      : {_new} reserved, A still spent, ledger "
+              f"intact, hash refreshed")
+
+        # A held-out set containing a burned name is worse than no reservation,
+        # because it looks like evidence and is not.
+        _burned = sorted(RESERVED["A"]["tickers"])[0]
+        RESERVED["ZZ"] = {"note": "probe", "tickers": [_burned]}
+        try:
+            assert add_tranche("ZZ", [_burned], "probe") is False, \
+                f"add_tranche must refuse {_burned}, already in a spent tranche"
+            _c = sorted(CONTAMINATED)[0]
+            RESERVED["ZZ"] = {"note": "probe", "tickers": [_c]}
+            assert add_tranche("ZZ", [_c], "probe") is False, \
+                f"add_tranche must refuse {_c}, already contaminated"
+            RESERVED["ZZ"] = {"note": "probe", "tickers": ["WWWW", "WWWW"]}
+            assert add_tranche("ZZ", ["WWWW", "WWWW"], "probe") is False, \
+                "add_tranche must refuse a duplicated ticker"
+        finally:
+            RESERVED.pop("ZZ", None)
+        assert "ZZ" not in load_lock()["reserved"]
+        print("add_tranche      : spent, contaminated and duplicate tickers "
+              "all refused")
+
         print("\nAll self-tests passed.")
         return 0
     finally:
@@ -644,6 +829,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--init", action="store_true", help="create the lock file")
+    ap.add_argument("--add-tranche", metavar="NAME",
+                    help="reserve a new tranche defined in RESERVED")
     ap.add_argument("--force", action="store_true",
                     help="with --init, overwrite an existing lock (destroys the ledger)")
     ap.add_argument("--status", action="store_true")
@@ -668,6 +855,17 @@ def main() -> int:
         print(f"Created {LOCK}")
         status()
         return 0
+    if args.add_tranche:
+        name = args.add_tranche.upper()
+        defn = RESERVED.get(name)
+        if defn is None:
+            print(f"No tranche {name} in RESERVED. Define it in this file "
+                  f"first. Known: {', '.join(sorted(RESERVED))}")
+            return 1
+        ok = add_tranche(name, list(defn["tickers"]), defn["note"])
+        if ok:
+            status()
+        return 0 if ok else 1
     if args.check:
         print_check(check_clean(args.check.split(",")))
         return 0
