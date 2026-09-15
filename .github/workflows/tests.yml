@@ -169,6 +169,9 @@ jobs:
       - name: drift_null.py — excess vs 1/(1+R:R), the null distribution, real exits
         run: python drift_null.py --selftest
 
+      - name: inverted_arm.py — the inversion, regime labels, per-regime null
+        run: python inverted_arm.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 
