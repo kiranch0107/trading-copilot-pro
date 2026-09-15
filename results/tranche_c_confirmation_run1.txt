@@ -1,0 +1,106 @@
+  collecting ...
+  MRVL: 107 signals
+  NXPI: 108 signals
+  DDOG: 63 signals
+  SNOW: 57 signals
+  SHOP: 113 signals
+  LULU: 122 signals
+  WDAY: 94 signals
+  TEAM: 108 signals
+  UBER: 65 signals
+  ICE: 115 signals
+  ISRG: 128 signals
+  VRTX: 110 signals
+  ETN: 121 signals
+  BKNG: 121 signals
+  COF: 112 signals
+  REGN: 135 signals
+  GILD: 98 signals
+  CL: 122 signals
+  XEL: 121 signals
+  DUK: 108 signals
+  · MRVL: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · NXPI: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · DDOG: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · SNOW: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · SHOP: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · LULU: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · WDAY: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · TEAM: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · UBER: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · ICE: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · ISRG: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · VRTX: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · ETN: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · BKNG: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · COF: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · REGN: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · GILD: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · CL: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · XEL: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+  · DUK: dropped 1 bar(s) dated 2026-09-15 or later — still forming, and unusable by a next-bar-open fill
+============================================================================================
+EXIT A/B — three rules against the current one, paired by signal
+============================================================================================
+  2128 trades, 20 tickers, 10 years
+  baseline mean R -0.0591
+  pre-registered: results/exit_ab_preregistration.md
+  Same entries and fills in every arm. Only the exit differs.
+
+============================================================================================
+BREAK-EVEN — stop to entry once +1.0 R is touched
+============================================================================================
+  paired delta   +0.0342 R per trade   (baseline -0.0591 -> -0.0248)
+  p 0.0304   Holm no   n 2128
+  changed 452 trades: 335 better (+327.1 R total), 117 worse (-254.2 R total)
+  unchanged 1676   best single +1.00 R   worst -6.54 R
+  where it came from, by the trade's ORIGINAL bucket:
+    NEAR MISS        better    221
+    SHALLOW LOSS     better    101
+    STALLED RUNNER   worse      48
+    SCARE TARGET     worse      37
+    CLEAN TARGET     worse      32
+    STALLED RUNNER   better     13
+  -> NOT ESTABLISHED
+
+============================================================================================
+TRAIL — 1.0 ATR below the high-water mark, armed at +1.0 R
+============================================================================================
+  paired delta   +0.0384 R per trade   (baseline -0.0591 -> -0.0206)
+  p 0.0620   Holm no   n 2128
+  changed 577 trades: 351 better (+494.5 R total), 226 worse (-412.7 R total)
+  unchanged 1551   best single +9.73 R   worst -6.13 R
+  where it came from, by the trade's ORIGINAL bucket:
+    NEAR MISS        better    217
+    CLEAN TARGET     worse     106
+    SHALLOW LOSS     better    100
+    SCARE TARGET     worse      76
+    STALLED RUNNER   worse      44
+    STALLED RUNNER   better     34
+  -> NOT ESTABLISHED
+
+============================================================================================
+PARTIAL — half off at +1.5 R, remainder to the original target
+============================================================================================
+  paired delta   +0.0234 R per trade   (baseline -0.0591 -> -0.0357)
+  p 0.0444   Holm no   n 2128
+  changed 513 trades: 239 better (+263.3 R total), 274 worse (-213.6 R total)
+  unchanged 1615   best single +1.25 R   worst -6.71 R
+  where it came from, by the trade's ORIGINAL bucket:
+    NEAR MISS        better    191
+    CLEAN TARGET     worse     164
+    SCARE TARGET     worse      91
+    STALLED RUNNER   better     46
+    STALLED RUNNER   worse      19
+    SHALLOW LOSS     better      2
+  -> NOT ESTABLISHED
+
+============================================================================================
+SUMMARY
+  BREAK-EVEN   +0.0342 R   p 0.0304   NOT ESTABLISHED
+  TRAIL        +0.0384 R   p 0.0620   NOT ESTABLISHED
+  PARTIAL      +0.0234 R   p 0.0444   NOT ESTABLISHED
+
+  No arm passed. Managing the exit did not recover the near
+  misses without giving back more elsewhere.
+============================================================================================

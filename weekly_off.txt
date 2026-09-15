@@ -1,0 +1,45 @@
+==============================================================================
+TRADING COPILOT ELITE — HISTORICAL BACKTEST (real data)
+==============================================================================
+Tickers      : GOOGL, AVGO, AMD, NFLX, CRM, ADBE, QCOM, MU, ORCL, NOW, PANW, LRCX
+History      : 15 years daily
+ADX min      : 35.0   ATR stop×: 1.25   ATR tgt×: 4.0   Min R:R: 0.5
+Max hold     : 30 bars   Slippage: 2.0bps/side   Regime filter: ON (SPY 200-SMA)
+Weekly filter: OFF
+==============================================================================
+
+PER-TICKER RESULTS
+Ticker      Trades  Win%      Avg R    Total R    PF    MaxDD    Hold
+--------  --------  ------  -------  ---------  ----  -------  ------
+GOOGL           49  33%       0.036        1.8  1.05    -12.5       5
+AVGO            53  36%       0.11         5.8  1.17    -17         5
+AMD             56  43%       0.184       10.3  1.32     -8         6
+NFLX            62  31%      -0.223      -13.8  0.68    -15.9       8
+CRM             44  32%      -0.213       -9.4  0.67    -16.9       6
+ADBE            54  26%      -0.155       -8.4  0.79    -13.9       8
+QCOM            37  51%       0.313       11.6  1.64     -8         5
+MU              65  40%       0.299       19.4  1.5     -15.4       6
+ORCL            41  34%      -0.084       -3.4  0.87    -16.1       6
+NOW             38  37%      -0.075       -2.9  0.88     -7.5       5
+PANW            42  38%       0.053        2.2  1.09    -10.3       5
+LRCX            51  18%      -0.445      -22.7  0.44    -21.7       6
+
+==============================================================================
+AGGREGATE (all tickers combined)
+==============================================================================
+  Total trades   : 592
+  Win rate       : 34.5%
+  Expectancy     : -0.016 R per trade
+  Total return   : -9.4 R
+  Profit factor  : 0.98
+  Max drawdown   : -34.6 R
+  Avg hold       : 6.0 bars
+  Best / worst   : +15.94 R / -1.56 R
+
+INTERPRETATION
+  🔴 Negative expectancy (-0.016 R/trade) on real data. The synthetic
+     edge did NOT survive. Do not trade this as-is — investigate which
+     tickers/periods dragged it down before risking capital.
+
+  Reminder: past performance is not predictive. Stops are not guaranteed
+  (overnight gaps). Options add theta/slippage this share-based test omits.

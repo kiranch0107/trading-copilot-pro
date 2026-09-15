@@ -1,0 +1,54 @@
+==============================================================================
+TRADING COPILOT ELITE — HISTORICAL BACKTEST (real data)
+==============================================================================
+Tickers      : GOOGL, AVGO, AMD, NFLX, CRM, ADBE, QCOM, MU, ORCL, NOW, PANW, LRCX
+History      : 15 years daily
+ADX min      : 35.0   ATR stop×: 1.25   ATR tgt×: 4.0   Min R:R: 0.5
+Max hold     : 30 bars   Slippage: 2.0bps/side   Regime filter: ON (SPY 200-SMA)
+Weekly filter: ON (price vs 20w EMA)   <- the live default, measured here
+==============================================================================
+
+PER-TICKER RESULTS
+Ticker      Trades  Win%      Avg R    Total R    PF    MaxDD    Hold
+--------  --------  ------  -------  ---------  ----  -------  ------
+GOOGL           49  33%       0.036        1.8  1.05    -12.5       5
+AVGO            53  36%       0.11         5.8  1.17    -17         5
+AMD             56  43%       0.184       10.3  1.32     -8         6
+NFLX            62  31%      -0.223      -13.8  0.68    -15.9       8
+CRM             44  32%      -0.213       -9.4  0.67    -16.9       6
+ADBE            52  25%      -0.161       -8.4  0.79    -13.9       9
+QCOM            37  51%       0.313       11.6  1.64     -8         5
+MU              59  37%       0.177       10.4  1.28    -15.3       6
+ORCL            40  35%      -0.06        -2.4  0.91    -15.1       6
+NOW             38  37%      -0.075       -2.9  0.88     -7.5       5
+PANW            42  38%       0.053        2.2  1.09    -10.3       5
+LRCX            52  17%      -0.456      -23.7  0.43    -22.7       6
+
+==============================================================================
+AGGREGATE (all tickers combined)
+==============================================================================
+  Total trades   : 584
+  Win rate       : 34.1%
+  Expectancy     : -0.032 R per trade
+  Total return   : -18.4 R
+  Profit factor  : 0.95
+  Max drawdown   : -38.4 R
+  Avg hold       : 6.0 bars
+  Best / worst   : +15.94 R / -1.56 R
+
+==============================================================================
+GATE REJECTIONS (bars that formed a valid setup, then were filtered)
+==============================================================================
+  Bars reaching the filters : 13748
+  rejected by ADX below minimum         :  12886  ( 93.7%)
+  rejected by Macro regime conflict     :    273  (  2.0%)
+  rejected by Weekly misaligned/missing :      5  (  0.0%)
+  survived every gate       : 584
+
+INTERPRETATION
+  🔴 Negative expectancy (-0.032 R/trade) on real data. The synthetic
+     edge did NOT survive. Do not trade this as-is — investigate which
+     tickers/periods dragged it down before risking capital.
+
+  Reminder: past performance is not predictive. Stops are not guaranteed
+  (overnight gaps). Options add theta/slippage this share-based test omits.

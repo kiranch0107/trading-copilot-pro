@@ -116,7 +116,9 @@
         "XEL",
         "DUK"
       ],
-      "spent": false
+      "spent": true,
+      "spent_on": "Confirm the break-even exit at +1.0R: in-sample +0.0408 R/trade, p 0.0093, n 2360. Pre-registered in results/tranche_c_confirmation_preregistration.md",
+      "spent_at": "2026-09-15T22:54:18+00:00"
     }
   },
   "ledger": [
@@ -204,7 +206,34 @@
         "MCD",
         "COST"
       ]
+    },
+    {
+      "tranche": "C",
+      "purpose": "Confirm the break-even exit at +1.0R: in-sample +0.0408 R/trade, p 0.0093, n 2360. Pre-registered in results/tranche_c_confirmation_preregistration.md",
+      "at": "2026-09-15T22:54:18+00:00",
+      "tickers": [
+        "MRVL",
+        "NXPI",
+        "DDOG",
+        "SNOW",
+        "SHOP",
+        "LULU",
+        "WDAY",
+        "TEAM",
+        "UBER",
+        "ICE",
+        "ISRG",
+        "VRTX",
+        "ETN",
+        "BKNG",
+        "COF",
+        "REGN",
+        "GILD",
+        "CL",
+        "XEL",
+        "DUK"
+      ]
     }
   ],
-  "state_hash": "5468a06cb9202575"
+  "state_hash": "8cfd1c805f932471"
 }
