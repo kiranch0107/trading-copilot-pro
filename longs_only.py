@@ -93,6 +93,7 @@ def simulate(trades: list[dict], *, account: float, risk_pct: float,
     taken = skipped = capped = 0
     peak_deployed = 0.0
     peak_concurrent = 0
+    unusable = 0
     per_year: dict = defaultdict(lambda: {"pnl": 0.0, "n": 0})
     wins = 0
 
@@ -106,6 +107,17 @@ def simulate(trades: list[dict], *, account: float, risk_pct: float,
         entry, stop = float(t.get("entry", 0.0)), float(t.get("stop", 0.0))
         dist = entry - stop
         if not (dist > 0 and entry > 0):
+            # COUNTED, NEVER SILENT.
+            #
+            # This `continue` used to drop the trade with no trace. When
+            # simulate_trade briefly recorded the POLICY-MOVED stop instead of
+            # the original, every break-even trade arrived with dist == 0 and
+            # was skipped here — and those are disproportionately the WINNERS,
+            # the ones that reached +1 R and had their stop moved. The replay
+            # kept the losers, discarded the winners, and reported -98.5% total
+            # return from a rule that can only cap losses. A plausible-looking
+            # catastrophe, from a silent drop.
+            unusable += 1
             continue
         value = risk_dollars / dist * entry          # shares x price
         scale = 1.0
@@ -145,6 +157,7 @@ def simulate(trades: list[dict], *, account: float, risk_pct: float,
             "win_rate": 100.0 * wins / taken if taken else float("nan"),
             "peak_deployed_pct": peak_deployed,
             "peak_concurrent": peak_concurrent,
+            "unusable": unusable,
             "per_year": dict(per_year), "years": years}
 
 
@@ -190,6 +203,17 @@ def report(ideal: dict, real: dict, bench: dict | None, *, account: float,
     print(f"    signals skipped, no room    {real['skipped']}")
     print(f"    positions sized down        {real['capped']}")
     print(f"    peak concurrent positions   {real['peak_concurrent']}")
+    if real.get("unusable") or ideal.get("unusable"):
+        print(f"\n  !! {max(real.get('unusable', 0), ideal.get('unusable', 0))} "
+              f"TRADE(S) HAD NO USABLE RISK and were dropped.")
+        print(f"     entry and stop were equal or inverted, so the position "
+              f"could not be sized.")
+        print(f"     These are disproportionately WINNERS — a trade whose stop "
+              f"moved to entry")
+        print(f"     reached its target zone first. Dropping them keeps the "
+              f"losers and reports")
+        print(f"     a catastrophe. Treat this run as void until the cause is "
+              f"found.")
     print(f"    peak capital deployed       {real['peak_deployed_pct']:.0f}% of equity")
     lost = ideal["taken"] - real["taken"]
     if ideal["taken"]:
@@ -310,12 +334,38 @@ def selftest() -> int:
     assert len(got) == 1 and all(t["trend"] == "Bullish" for t in got), got
     print("longs only       : Bearish trades filtered out before anything runs")
 
-    # ── WIRING: the fields this module needs must exist upstream ──
-    import inspect as _i
-    src = _i.getsource(bt.simulate_trade)
-    for f in ('"entry": float(entry)', '"stop": float(stop)', '"exit_date"'):
-        assert f in src, f"backtest.simulate_trade no longer carries {f}"
-    print("wiring           : entry, stop and exit_date carried by simulate_trade")
+    # ── WIRING: the fields must ARRIVE, with the meaning this module needs ──
+    #
+    # This used to grep simulate_trade's SOURCE for '"stop": float(stop)'. It
+    # passed for months and then broke on a RENAME while the behaviour was
+    # correct — and it would equally have passed if `stop` had come to mean
+    # something else, which is exactly what happened when an exit policy
+    # started moving it. A string in the producer is not the fact this module
+    # depends on. Run a trade and read what comes back.
+    import pandas as _pd
+    _wd = _pd.DataFrame({
+        "Date": _pd.date_range("2024-01-01", periods=3, freq="D"),
+        "Open":  [100.0, 100.0, 103.0], "High": [100.0, 103.0, 103.0],
+        "Low":   [100.0, 100.0,  99.0], "Close": [100.0, 103.0, 99.5]})
+    _wc = dict(bt.DEFAULTS, max_hold=3, slippage_bps=0.0, commission=0.0)
+    _wt = {"trend": "Bullish", "entry": 100.0, "stop": 98.0, "target": 120.0,
+           "rr": 10.0, "atr": 2.0}
+    for _nm, _pl in (("baseline", None), ("break-even", {"breakeven_at": 1.0})):
+        _wr = bt.simulate_trade(_wd, 0, _wt, _wc, policy=_pl)
+        for _k in ("entry", "stop", "exit_date", "r"):
+            assert _k in _wr, f"{_nm}: simulate_trade no longer carries {_k!r}"
+        # THE MEANING, not just the presence: `stop` must be what the position
+        # was sized on, so entry - stop is the risk per share and is non-zero
+        # under every policy.
+        assert abs(float(_wr["entry"]) - float(_wr["stop"])) > 1e-9, (
+            f"{_nm}: entry {_wr['entry']} and stop {_wr['stop']} give zero "
+            f"risk per share. simulate() divides by this, and a zero silently "
+            f"drops the trade")
+        assert abs(float(_wr["stop"]) - 98.0) < 1e-9, (
+            f"{_nm}: stop is {_wr['stop']}, not the 98.00 the trade was sized "
+            f"on. A policy-moved stop belongs in stop_at_exit")
+    print("wiring           : entry/stop/exit_date arrive, and stop still "
+          "means the sizing stop")
 
     # ── collect_longs MUST FORWARD THE POLICY ──
     # A dropped parameter makes the break-even arm silently identical to the
@@ -371,6 +421,23 @@ def selftest() -> int:
         assert _k in _probe, (
             f"break_even_arm reads {_k!r} and simulate() does not produce it")
     print("break-even arm   : runs end to end, four rows, keys match simulate()")
+
+    # ── A TRADE WITH NO USABLE RISK MUST BE COUNTED, NEVER DROPPED SILENTLY ──
+    # simulate_trade briefly recorded the POLICY-MOVED stop instead of the
+    # original, so every break-even trade arrived with entry == stop and was
+    # skipped here without a trace. Those are disproportionately the winners,
+    # so the replay kept the losers and reported -98.5% total return from a
+    # rule that can only cap losses.
+    _good = mk("2020-01-01", 1.0, hold_to="2020-01-02")
+    _zero = dict(_good, stop=_good["entry"])          # stop moved onto entry
+    assert simulate([_good], account=5000.0, risk_pct=1.0,
+                    constrained=False)["unusable"] == 0
+    _u = simulate([_good, _zero], account=5000.0, risk_pct=1.0,
+                  constrained=False)
+    assert _u["unusable"] == 1, (
+        f"a trade with entry == stop was dropped without being counted: {_u}")
+    assert _u["taken"] == 1, _u["taken"]
+    print("unusable risk    : entry == stop is counted, not silently dropped")
 
     print("=" * 72)
     print("All self-tests passed.")
@@ -437,6 +504,13 @@ def break_even_arm(tickers, years, base_longs, base_ideal, base_real, *,
     elif abs(d_real) < abs(d_ideal) / 2:
         print(f"  The constraint absorbs most of the rule's benefit: "
               f"{abs(d_real)/abs(d_ideal)*100 if d_ideal else 0:.0f}% survives.")
+    for _lbl, _d in (("idealised, break-even", be_ideal),
+                     ("constrained, break-even", be_real)):
+        if _d.get("unusable"):
+            print(f"\n  !! {_lbl}: {_d['unusable']} trade(s) had no usable "
+                  f"risk and were dropped.")
+            print(f"     Those are disproportionately winners. This row is "
+                  f"VOID, not a result.")
     print()
     print("  A MEASUREMENT, NOT A TEST. No bar, nothing searched over, and")
     print("  in-sample on spent tickers — the tranche C confirmation is what")
