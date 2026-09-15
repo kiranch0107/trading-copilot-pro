@@ -267,8 +267,23 @@ def evaluate_signal(df: pd.DataFrame, i: int, params: sc.SignalParams,
         return None
     _count("passed")
 
-    return {"trend": r["trend"], "entry": r["entry"], "stop": r["stop"],
-            "target": r["target"], "rr": r["rr"], "atr": r["atr"]}
+    # PASS THE WHOLE EVALUATION THROUGH, not a hand-picked projection.
+    #
+    # This used to return six keys — trend, entry, stop, target, rr, atr — and
+    # simulate_trade() then stored that six-key dict as the trade's "setup",
+    # under a comment claiming it carried "every gate, every indicator reading".
+    # It did not. setup_cases.py duly printed 80 real trades with RSI 0.0, ADX
+    # 0.0, ATR% nan, volume 0.00x and price 0.00, and the winners-vs-losers
+    # table showed a +0.00 gap on every feature. Nothing was wrong with the
+    # trades; the readings had been dropped one function earlier.
+    #
+    # A whitelist is the wrong shape here: every field signal_core gains has to
+    # be remembered in a second place or it silently vanishes, and the failure
+    # is a zero rather than an error. Copy everything instead, minus the two
+    # keys that would be actively misleading downstream — "blocked" is always
+    # False by this point, and "ticker" is the literal "BT" this function
+    # passes to sc.evaluate(), not the ticker being traded.
+    return {k: v for k, v in r.items() if k not in ("blocked", "ticker")}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -397,11 +412,12 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
         # idealised backtest apart from one a $5,000 account could actually run.
         "entry": float(entry), "stop": float(stop),
         # THE SETUP AS THE LOGIC SAW IT, carried whole. `trade` is
-        # signal_core.evaluate()'s result — every gate, every indicator reading
-        # and the constructed levels at the signal bar. The record previously
-        # kept only what the trade DID; this keeps why it was taken, which is
-        # what setup_cases.py reads. Nothing here is computed after signal_i,
-        # so it carries no lookahead.
+        # signal_core.evaluate()'s result, less "blocked" and the placeholder
+        # ticker: every gate, every indicator reading and the constructed levels
+        # at the signal bar. That claim was false when first written —
+        # evaluate_signal() was projecting the result down to six keys, so this
+        # stored levels with no readings behind them. Nothing here is computed
+        # after signal_i, so it carries no lookahead.
         "setup": {k: v for k, v in trade.items() if k != "filled"},
     }
 
@@ -1182,7 +1198,28 @@ def selftest() -> int:
     assert sig["stop"] > sig["entry"] > sig["target"]
     for k in ("trend", "entry", "stop", "target", "rr", "atr"):
         assert k in sig, f"simulate_trade() reads '{k}' — missing from evaluate_signal()"
-    print(f"clean bearish bar        : trades, keys present for simulate_trade()")
+
+    # THE READINGS MUST SURVIVE THE HANDOFF, not merely exist upstream.
+    # simulate_trade() stores this dict as the trade's "setup", and that is the
+    # only record of WHY a trade was taken. The guard that was supposed to
+    # protect it grepped signal_core.evaluate()'s source for these key names —
+    # the producer, which was never the broken end. evaluate_signal() dropped
+    # them on the floor and the grep stayed green while every setup in
+    # setup_cases.py printed zeros. Assert against the value that arrives.
+    for k in ("price", "rsi", "adx", "ema20", "ema50", "vol_ratio",
+              "volume", "vol_avg", "strength", "high_quality", "filters",
+              "filters_pass", "filters_total"):
+        assert k in sig, (
+            f"evaluate_signal() drops '{k}'. It reaches simulate_trade() as the "
+            f"trade's setup and is the only record of why the trade was taken; "
+            f"dropping it reads downstream as a zero, not as an error")
+    assert sig["price"] > 0 and sig["ema20"] > 0 and sig["ema50"] > 0, \
+        "structure readings must be real prices, not zeros"
+    assert 0 < sig["rsi"] < 100, f"RSI {sig['rsi']} is not a real reading"
+    assert sig["atr"] > 0, "ATR must be positive or every ATR-unit reading is nan"
+    assert isinstance(sig["filters"], dict) and sig["filters"], \
+        "the gate detail must arrive as a populated dict"
+    print(f"clean bearish bar        : trades, levels AND readings both present")
 
     # ── the weekly filter must actually GATE, not just get reported ──
     # THE REGRESSION THIS TEST EXISTS TO CATCH: --use-weekly turns on

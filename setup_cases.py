@@ -272,16 +272,43 @@ def selftest() -> int:
     print(f"default set      : {len(_names)} tickers, none of them clean — "
           f"looking costs nothing")
 
-    # ── WIRING: the setup must actually arrive from the backtest ──
+    # ── WIRING: the readings must ARRIVE, not merely be produced upstream ──
+    #
+    # The first version of this guard read signal_core.evaluate()'s SOURCE and
+    # checked the key names appeared in it. They did. Every one of them was then
+    # discarded by backtest.evaluate_signal(), which returned a six-key
+    # projection, and the guard stayed green while the first real run printed 80
+    # trades with RSI 0.0, ADX 0.0, ATR% nan and a +0.00 gap on every feature.
+    #
+    # Checking the producer can never catch a broken handoff. Run the real
+    # signal on a real frame and assert on the dict that comes back.
     import inspect as _i
     assert '"setup"' in _i.getsource(bt.simulate_trade), (
         "backtest.simulate_trade no longer carries the setup; every case would "
         "be dropped and this module would print nothing")
-    import signal_core as _sc
-    ev = _i.getsource(_sc.evaluate)
-    for key in ("high_quality", "filters", "vol_ratio", "strength"):
-        assert f'"{key}"' in ev, f"signal_core.evaluate stopped returning {key!r}"
-    print("wiring           : simulate_trade carries it, evaluate still produces it")
+
+    _df = bt._synthetic_ohlc(up=True, adx=40.0)
+    _sig = bt.evaluate_signal(_df, len(_df) - 1, bt.build_signal_params(bt.DEFAULTS))
+    assert _sig is not None, "the synthetic bar no longer signals; guard is blind"
+    for _k in ("price", "rsi", "adx", "atr", "ema20", "ema50", "vol_ratio",
+               "strength", "high_quality", "filters"):
+        assert _k in _sig, (
+            f"backtest.evaluate_signal() drops {_k!r} before it reaches the "
+            f"setup. This module would render it as 0.00 or nan — a silent "
+            f"zero, not an error, which is how 80 empty cases got printed")
+
+    # Rendered through this module's own units, so a reading that arrives but
+    # is structurally useless — ATR of zero makes every ATR-distance nan — is
+    # caught here rather than in the output.
+    _d = derived({"setup": _sig})
+    for _k, _v in _d.items():
+        assert np.isfinite(_v), (
+            f"derived reading {_k!r} is {_v} on a live signal; the inputs "
+            f"behind it did not survive the handoff")
+    assert _d["atr_pct"] > 0, "ATR% of zero means no ATR arrived"
+    assert _sig["rsi"] > 0 and _sig["price"] > 0, \
+        "RSI and price must be real readings, not defaulted zeros"
+    print("wiring           : real signal -> real readings, checked at the sink")
 
     print("=" * 72)
     print("All self-tests passed.")
