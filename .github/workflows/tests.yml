@@ -160,6 +160,9 @@ jobs:
       - name: longs_only.py — compounding, position ceiling, concurrency, drawdown
         run: python longs_only.py --selftest
 
+      - name: setup_cases.py — scale-free readings, per-ticker picks, the caveat
+        run: python setup_cases.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 
