@@ -338,6 +338,40 @@ def selftest() -> int:
         _bt.run = _real_run
     print("policy forwarding: collect_longs passes it to bt.run, None by default")
 
+    # ── break_even_arm MUST RUN, not merely exist ──
+    # It crashed on its first real use with KeyError 'max_dd': the report was
+    # written against invented key names. Nothing caught it because the only
+    # route in was collect_longs -> bt.run -> network, so the function was
+    # unreachable from any test. Stub the fetch and drive it.
+    #
+    # This is the sixth time in this project a break has hidden behind a
+    # network call. The fix is always the same: give the test a way in.
+    _real_run2 = _bt.run
+    try:
+        _bt.run = lambda cfg, policy=None: mixed
+        _buf2 = io.StringIO()
+        with contextlib.redirect_stdout(_buf2):
+            _rc = break_even_arm(["AAA"], 1, mixed,
+                                 simulate(mixed, account=5000.0, risk_pct=1.0,
+                                          constrained=False),
+                                 simulate(mixed, account=5000.0, risk_pct=1.0,
+                                          constrained=True),
+                                 account=5000.0, risk_pct=1.0)
+    finally:
+        _bt.run = _real_run2
+    _out2 = _buf2.getvalue()
+    assert _rc == 0, _rc
+    for _need in ("idealised, baseline", "constrained, break-even",
+                  "CAGR delta", "MEASUREMENT, NOT A TEST"):
+        assert _need in _out2, (
+            f"break_even_arm printed no {_need!r}:\n{_out2[:400]}")
+    # every key it reads must exist on a real simulate() result
+    _probe = simulate(mixed, account=5000.0, risk_pct=1.0, constrained=True)
+    for _k in ("total_pct", "cagr_pct", "max_dd_pct", "taken"):
+        assert _k in _probe, (
+            f"break_even_arm reads {_k!r} and simulate() does not produce it")
+    print("break-even arm   : runs end to end, four rows, keys match simulate()")
+
     print("=" * 72)
     print("All self-tests passed.")
     return 0
@@ -387,12 +421,12 @@ def break_even_arm(tickers, years, base_longs, base_ideal, base_real, *,
                      ("idealised, break-even", be_ideal),
                      ("constrained, baseline", base_real),
                      ("constrained, break-even", be_real)):
-        dd = d["max_dd"] or float("nan")
-        print(f"  {label:<22}{d['total_pct']:>9.1f}{d['cagr']:>9.1f}"
+        dd = d["max_dd_pct"] or float("nan")
+        print(f"  {label:<22}{d['total_pct']:>9.1f}{d['cagr_pct']:>9.1f}"
               f"{dd:>10.1f}{d['taken']:>8}"
-              f"{(d['cagr']/dd if dd else float('nan')):>8.3f}")
-    d_ideal = be_ideal["cagr"] - base_ideal["cagr"]
-    d_real = be_real["cagr"] - base_real["cagr"]
+              f"{(d['cagr_pct']/dd if dd else float('nan')):>8.3f}")
+    d_ideal = be_ideal["cagr_pct"] - base_ideal["cagr_pct"]
+    d_real = be_real["cagr_pct"] - base_real["cagr_pct"]
     print()
     print(f"  CAGR delta from the rule: {d_ideal:+.2f} pts idealised, "
           f"{d_real:+.2f} pts constrained")
