@@ -396,6 +396,13 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
         # cannot hold three of those. longs_only.py needs this to tell an
         # idealised backtest apart from one a $5,000 account could actually run.
         "entry": float(entry), "stop": float(stop),
+        # THE SETUP AS THE LOGIC SAW IT, carried whole. `trade` is
+        # signal_core.evaluate()'s result — every gate, every indicator reading
+        # and the constructed levels at the signal bar. The record previously
+        # kept only what the trade DID; this keeps why it was taken, which is
+        # what setup_cases.py reads. Nothing here is computed after signal_i,
+        # so it carries no lookahead.
+        "setup": {k: v for k, v in trade.items() if k != "filled"},
     }
 
 
