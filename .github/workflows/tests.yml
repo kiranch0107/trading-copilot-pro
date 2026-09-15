@@ -163,6 +163,9 @@ jobs:
       - name: setup_cases.py — scale-free readings, per-ticker picks, the caveat
         run: python setup_cases.py --selftest
 
+      - name: setup_population.py — Holm across readings, dose-response, the economic clause
+        run: python setup_population.py --selftest
+
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
 
