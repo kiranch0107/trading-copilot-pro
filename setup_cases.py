@@ -39,7 +39,27 @@ import numpy as np
 
 import backtest as bt
 
-DEFAULT_TICKERS = "GOOGL,AVGO,AMD,NFLX"
+# TWENTY NAMES, EVERY ONE ALREADY SPENT. Deliberate.
+#
+# Stage 1 forms hypotheses by LOOKING at these setups, which burns them for any
+# later test — you cannot find a pattern in a name and then confirm the pattern
+# on that same name. So the cases come from ground already burned: the 12-name
+# OOS set, three swept high-beta names, and five from spent tranche A.
+#
+# Chosen to span VOLATILITY, not sector, because ATR% is the live bucket
+# candidate and a set that is all high-beta semis would make every case look the
+# same. MU and AMD sit at one end, COST and MCD at the other.
+#
+# Any name NOT listed here stays clean, and clean names are the only thing that
+# could ever make stage 3 mean something. See data_reservation.py.
+DEFAULT_TICKERS = (
+    # the 12-name OOS set — spent on the 591-trade validation
+    "GOOGL,AVGO,AMD,NFLX,CRM,ADBE,QCOM,MU,ORCL,NOW,PANW,LRCX,"
+    # swept in Aug 2026, high beta
+    "TSLA,NVDA,META,"
+    # spent tranche A — lower beta, different sectors, wider ATR spread
+    "INTC,IBM,DIS,COST,MCD"
+)
 
 
 def collect(tickers: list[str], years: int) -> list[dict]:
@@ -226,6 +246,31 @@ def selftest() -> int:
             f"this output's whole risk is being read as evidence, and the "
             f"warning is the only thing standing between it and that reading")
     print("rendering        : survives a sparse setup, matrix warns about itself")
+
+    # ── THE DEFAULT SET MUST BE ALREADY SPENT ──
+    # Stage 1 forms hypotheses by looking, which burns whatever it looks at. A
+    # clean name in this list would be destroyed silently — no error, no
+    # warning, just a name that can no longer confirm anything. Clean names are
+    # the ONLY thing that could make stage 3 mean more than "in-sample".
+    import data_reservation as _dr
+    _names = [x.strip().upper() for x in DEFAULT_TICKERS.split(",") if x.strip()]
+    assert len(_names) == len(set(_names)), (
+        f"duplicate tickers in the default set: "
+        f"{sorted({x for x in _names if _names.count(x) > 1})}")
+    _chk = _dr.check_clean(_names, purpose="setup_cases stage 1")
+    # `spent` is a dict keyed by TRANCHE — {"A": ["INTC", ...]} — so membership
+    # against it tests the keys, not the names. A first version did exactly that
+    # and reported five spent tickers as clean. Flatten the values.
+    _burned = set(_chk.get("contaminated") or [])
+    for _tranche_names in (_chk.get("spent") or {}).values():
+        _burned |= set(_tranche_names)
+    _clean = [t for t in _names if t not in _burned]
+    assert not _clean, (
+        f"{_clean} are still CLEAN and must not be in stage 1's default set. "
+        f"Looking at a setup is how a hypothesis is formed, so it spends the "
+        f"name; put burned names here and keep clean ones for stage 3")
+    print(f"default set      : {len(_names)} tickers, none of them clean — "
+          f"looking costs nothing")
 
     # ── WIRING: the setup must actually arrive from the backtest ──
     import inspect as _i
