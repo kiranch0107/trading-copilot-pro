@@ -1,0 +1,70 @@
+  collecting long trades ...
+    1254 long trades
+  benchmark SPY ...
+
+  collecting long trades under the break-even exit ...
+====================================================================================
+LONGS ONLY, IN SHARES — what it would actually have been
+====================================================================================
+  $5,000 account, 1.0% risk per trade, position ceiling 25%
+  A MEASUREMENT, not a test. No bar, nothing searched over.
+====================================================================================
+                   total %   CAGR %  max DD %  trades   win %
+  -----------------------------------------------------------
+  idealised         +130.2     +8.7      49.7    1254    36.8
+  constrained        +37.6     +3.2      21.4     848    37.0
+  SPY buy-hold      +252.4    +13.4      34.1       —       —
+
+  WHAT THE CONSTRAINT COST
+    signals skipped, no room    406
+    positions sized down        1097
+    peak concurrent positions   5
+    peak capital deployed       101% of equity
+    -> 406 of 1254 signals (32%) were not takeable at this account size
+
+  BY YEAR (constrained)
+    year      trades       P&L $
+    2017          83        +330
+    2018          71         -47
+    2019          94        +684
+    2020         101        -297
+    2021         107        +456
+    2022          50        -141
+    2023          83        +899
+    2024         105        +596
+    2025         101       -1209
+    2026          53        +607
+
+====================================================================================
+  READING IT
+  The long side is +0.085 R with a CI of [-0.037, +0.206] — it SPANS
+  ZERO, and it decayed +0.268 -> +0.106 -> +0.085 as the sample grew.
+  Dropping shorts removes a measured loss; it does not add a measured
+  gain. Expectancy above has a confidence interval. The DRAWDOWN does
+  not — that is what the path did.
+
+  This returned +3.2%/yr against SPY at +13.4%/yr,
+  at 21% drawdown against 34%. Owning the index was
+  better on both axes, with no signals to follow.
+====================================================================================
+
+==============================================================================
+BREAK-EVEN EXIT (+1.0 R) THROUGH THE CAPITAL CONSTRAINT
+==============================================================================
+  The rule was confirmed on tranche C at +0.0342 R per trade, measured
+  per-trade on an unconstrained book. This is the same rule on the account
+  that actually exists.
+
+                          total %   CAGR %  max DD %  trades  ret/DD
+  ------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspaces/trading-copilot-pro/longs_only.py", line 450, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/workspaces/trading-copilot-pro/longs_only.py", line 444, in main
+    rc = max(rc, break_even_arm(tickers, a.years, longs, ideal, real,
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/trading-copilot-pro/longs_only.py", line 390, in break_even_arm
+    dd = d["max_dd"] or float("nan")
+         ~^^^^^^^^^^
+KeyError: 'max_dd'
