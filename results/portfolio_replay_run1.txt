@@ -57,14 +57,14 @@ BREAK-EVEN EXIT (+1.0 R) THROUGH THE CAPITAL CONSTRAINT
 
                           total %   CAGR %  max DD %  trades  ret/DD
   ------------------------------------------------------------------
-Traceback (most recent call last):
-  File "/workspaces/trading-copilot-pro/longs_only.py", line 450, in <module>
-    sys.exit(main())
-             ^^^^^^
-  File "/workspaces/trading-copilot-pro/longs_only.py", line 444, in main
-    rc = max(rc, break_even_arm(tickers, a.years, longs, ideal, real,
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/workspaces/trading-copilot-pro/longs_only.py", line 390, in break_even_arm
-    dd = d["max_dd"] or float("nan")
-         ~^^^^^^^^^^
-KeyError: 'max_dd'
+  idealised, baseline       130.2      8.7      49.7    1254   0.175
+  idealised, break-even     -98.5    -34.5      98.7     786  -0.350
+  constrained, baseline      37.6      3.2      21.4     848   0.151
+  constrained, break-even    -90.1    -20.6      90.6     740  -0.228
+
+  CAGR delta from the rule: -43.21 pts idealised, -23.89 pts constrained
+
+  A MEASUREMENT, NOT A TEST. No bar, nothing searched over, and
+  in-sample on spent tickers — the tranche C confirmation is what
+  established the rule; this says what it is worth after the cap.
+==============================================================================
