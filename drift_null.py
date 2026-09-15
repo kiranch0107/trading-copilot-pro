@@ -71,9 +71,26 @@ def excess(trades: list[dict]) -> dict:
     hits = sum(1 for t in ts if t["outcome"] == "win")
     rr = [float((t.get("setup") or {}).get("rr", 0) or 0) for t in ts]
     base = float(np.mean([1.0 / (1.0 + k) for k in rr if k > 0]))
+    # R ON THE PLANNED STOP, alongside R on the fill.
+    #
+    # R is measured against |fill - stop|, and the fill is the next bar's open.
+    # An arm that enters where price has been falling gets opens that gap
+    # further down, landing near the stop, shrinking the denominator and
+    # inflating R with no change in what price did. setup_cases run 2 was
+    # voided by exactly this: 37 of 37 winners had filled toward the stop, and
+    # re-basing on planned risk collapsed the spread 7.3x.
+    #
+    # So every mean R is reported twice. When the two disagree, the difference
+    # was decided after the signal bar by something no entry rule can see.
+    planned = [scs.fill_stats(t)["r_planned"] for t in ts]
+    planned = [x for x in planned if np.isfinite(x)]
+    offs = [scs.fill_stats(t)["fill_offset"] for t in ts]
+    offs = [x for x in offs if np.isfinite(x)]
     return {"n": len(ts), "rate": hits / len(ts), "base": base,
             "excess": hits / len(ts) - base,
-            "mean_r": float(np.mean([t["r"] for t in ts]))}
+            "mean_r": float(np.mean([t["r"] for t in ts])),
+            "mean_r_planned": float(np.mean(planned)) if planned else float("nan"),
+            "fill_offset": float(np.median(offs)) if offs else float("nan")}
 
 
 def random_entries(df, n_trades: int, trend: str, cfg: dict,
@@ -127,9 +144,13 @@ def compare(real: list[dict], null_draws: list[dict], label: str) -> dict:
     """The real arm against the null distribution, on excess and on mean R."""
     r = excess(real)
     out = {"label": label, "real": r, "n_draws": len(null_draws)}
-    for key in ("excess", "mean_r"):
-        vals = sorted(d[key] for d in null_draws if np.isfinite(d[key]))
-        if len(vals) < 20 or not np.isfinite(r[key]):
+    for key in ("excess", "mean_r", "mean_r_planned"):
+        # .get with a nan default: a caller may hand in draws that predate a
+        # metric, and a KeyError here would take down a comparison whose other
+        # two metrics are perfectly good.
+        vals = sorted(d.get(key, float("nan")) for d in null_draws
+                      if np.isfinite(d.get(key, float("nan"))))
+        if len(vals) < 20 or not np.isfinite(r.get(key, float("nan"))):
             out[key] = {"verdict": "NOT ENOUGH DRAWS", "lo": float("nan"),
                         "hi": float("nan"), "mid": float("nan"), "p": 1.0}
             continue
@@ -159,16 +180,28 @@ def report(c: dict) -> None:
           f"mean R {r['mean_r']:+.4f}")
     print(f"  {c['n_draws']} random draws, same frames, same exits, same costs")
     print("=" * 84)
-    for key, unit in (("excess", "pp"), ("mean_r", "R")):
-        k = c[key]
+    if np.isfinite(r.get("fill_offset", float("nan"))):
+        print(f"  median fill offset {r['fill_offset']:+.3f} "
+              f"(negative = the open landed toward the stop, shrinking risk)")
+    for key, unit in (("excess", "pp"), ("mean_r", "R"), ("mean_r_planned", "R")):
+        k = c.get(key)
+        if k is None or not np.isfinite(r.get(key, float("nan"))):
+            continue
         scale = 100.0 if key == "excess" else 1.0
         fmt = "+.1f" if key == "excess" else "+.4f"
-        print(f"  {key:<8} real {format(r[key]*scale, fmt)}{unit}"
+        name = "R planned" if key == "mean_r_planned" else key
+        print(f"  {name:<10} real {format(r[key]*scale, fmt)}{unit}"
               f"   null median {format(k['mid']*scale, fmt)}{unit}"
               f"   null 95% [{format(k['lo']*scale, fmt)}, "
               f"{format(k['hi']*scale, fmt)}]{unit}")
-        print(f"  {'':<8} gap {format(k['gap']*scale, fmt)}{unit}"
+        print(f"  {'':<10} gap {format(k['gap']*scale, fmt)}{unit}"
               f"   empirical p {k['p']:.3f}   -> {k['verdict']}")
+    # A disagreement between the two R bases is the finding, not a nuisance.
+    a, b = c.get("mean_r", {}).get("verdict"), c.get("mean_r_planned", {}).get("verdict")
+    if a and b and a != b:
+        print(f"  !! R ON THE FILL SAYS {a}, R ON THE PLANNED STOP SAYS {b}.")
+        print(f"     The difference was decided by the next bar's open, which "
+              f"no entry rule can see.")
 
 
 def run(tickers: list[str], years: int, draws: int, seed: int) -> int:
@@ -288,6 +321,36 @@ def selftest() -> int:
         f"a trade that reached neither level is not evidence about either")
     print("excess           : 25%@3.0 and 50%@1.0 read as zero; timeouts excluded")
 
+    # ── THE TWO R BASES MUST DIVERGE WHEN THE FILL MOVES ──
+    # Planned risk 100.5 - 98.0 = 2.5. A fill at 99.25 leaves 1.25, half of it,
+    # so +6 R on the fill is +3 R on the stop the signal actually planned. If
+    # these two never differ, the whole point of reporting both is lost and an
+    # inflated-denominator result reads as a discovery.
+    def tr2(outcome, r, fill):
+        return {"r": r, "outcome": outcome,
+                "entry": fill, "stop": 98.0,
+                "setup": {"rr": 3.0, "trend": "Bullish",
+                          "entry": 100.5, "stop": 98.0}}
+    lucky = [tr2("win", 6.0, 99.25)] * 25 + [tr2("loss", -1.0, 99.25)] * 75
+    e = excess(lucky)
+    assert abs(e["mean_r"] - (6.0 * 0.25 - 0.75)) < 1e-9, e["mean_r"]
+    assert abs(e["fill_offset"] - (-0.5)) < 1e-9, e["fill_offset"]
+    assert abs(e["mean_r_planned"] - (3.0 * 0.25 - 0.5 * 0.75)) < 1e-9, (
+        f"R on the planned stop must halve with a half-sized denominator: "
+        f"{e['mean_r_planned']}")
+    assert e["mean_r"] > e["mean_r_planned"], (
+        "a fill that landed toward the stop must read LOWER on the planned "
+        "basis; if the two agree here the metric is not measuring the fill")
+    clean = [tr2("win", 3.0, 100.5)] * 25 + [tr2("loss", -1.0, 100.5)] * 75
+    ec = excess(clean)
+    assert abs(ec["fill_offset"]) < 1e-9, ec["fill_offset"]
+    assert abs(ec["mean_r"] - ec["mean_r_planned"]) < 1e-9, (
+        f"with the fill ON the planned entry the two bases must agree "
+        f"exactly: {ec['mean_r']} vs {ec['mean_r_planned']}")
+    print(f"two R bases      : fill offset {e['fill_offset']:+.2f} splits "
+          f"{e['mean_r']:+.2f} R on the fill from "
+          f"{e['mean_r_planned']:+.2f} R on the plan; equal when the fill is clean")
+
     # ── the verdicts, against a hand-built null distribution ──
     nd = [{"excess": 0.04 + 0.01 * math.sin(i), "mean_r": 0.1}
           for i in range(200)]
@@ -313,6 +376,27 @@ def selftest() -> int:
         f"Beating the median is what half of pure noise does")
     print(f"verdicts         : inside / above / below resolve; above the "
           f"median but inside the band is still nothing")
+
+    # ── compare() MUST CARRY THE PLANNED-R VERDICT, AND THE DISAGREEMENT ──
+    # Dropping "mean_r_planned" from compare()'s loop left every other guard
+    # green: excess() still computed it, nothing read it back. This is run 1's
+    # INVERTED-Bull shape — R on the fill clears the null, R on the planned
+    # stop does not, and the gap is the next bar's open.
+    nd2 = [{"excess": 0.04 + 0.001 * i,
+            "mean_r": 0.20 + 0.002 * (i % 25),
+            "mean_r_planned": 0.34 + 0.004 * (i % 25)} for i in range(200)]
+    split = compare(lucky, nd2, "SPLIT")
+    assert "mean_r_planned" in split, (
+        "compare() dropped the planned-R metric; an inflated-denominator "
+        "result would read as a discovery with nothing to contradict it")
+    assert split["mean_r"]["verdict"] == "SIGNAL CONTRIBUTES", split["mean_r"]
+    assert split["mean_r_planned"]["verdict"] == "SIGNAL ADDS NOTHING", (
+        f"R on the planned stop must fall inside this null: "
+        f"{split['mean_r_planned']}")
+    assert split["mean_r"]["verdict"] != split["mean_r_planned"]["verdict"], (
+        "the fixture must make the two bases DISAGREE or it proves nothing")
+    print(f"planned-R verdict: fill says {split['mean_r']['verdict']}, plan "
+          f"says {split['mean_r_planned']['verdict']} — reported, not merged")
 
     # ── the empirical p can never be zero ──
     # (k+1)/(n+1), not k/n: 200 draws cannot establish p < 1/201, and printing

@@ -47,6 +47,19 @@ import setup_cases as scs
 MIN_TRADES = 100          # below this a regime cell refuses a verdict
 MIN_DRAWS = 20
 
+# AND THE NULL ITSELF MUST HAVE SOMETHING IN IT.
+#
+# Run 1's Bear cell passed the real-trade floor with 330 trades and printed a
+# verdict against a null band of [-3.7, +12.2]pp — sixteen points wide, which
+# nothing could fall outside. The floor checked the REAL arm and never looked
+# at the null. A wide band is not a null result; it is no test at all, and it
+# reads as "SIGNAL ADDS NOTHING", which is indistinguishable from a real null
+# to anyone reading the summary line.
+#
+# So a cell also needs enough trades INSIDE the typical draw. Bear regimes are
+# short, so per-draw counts there are small even when the real arm is large.
+MIN_NULL_PER_DRAW = 60
+
 
 def regime_of(df, trades: list[dict], reg: "object") -> None:
     """Tag each trade with SPY's regime at its SIGNAL bar, in place.
@@ -102,6 +115,25 @@ def arm_trades(df, cfg, params, want: str) -> list[dict]:
                     continue
         i += 1
     return out
+
+
+def power_check(n_real: int, n_draws: int, per_draw: float) -> str | None:
+    """Why this cell cannot support a verdict, or None if it can.
+
+    Extracted so it is testable. Run 1's floor lived inline in run(), checked
+    only the real arm, and let the Bear cell print a verdict against a
+    sixteen-point-wide band. A rule that decides whether a result is admissible
+    has to be reachable by a test.
+    """
+    if n_real < MIN_TRADES:
+        return f"{n_real} real trades, needs {MIN_TRADES}"
+    if n_draws < MIN_DRAWS:
+        return f"{n_draws} usable draws, needs {MIN_DRAWS}"
+    if per_draw < MIN_NULL_PER_DRAW:
+        return (f"the typical draw holds {per_draw:.0f} trades, needs "
+                f"{MIN_NULL_PER_DRAW} — a thin null gives a band nothing can "
+                f"fall outside")
+    return None
 
 
 def by_regime(trades: list[dict]) -> dict[str, list[dict]]:
@@ -182,13 +214,17 @@ def run(tickers: list[str], years: int, draws: int, seed: int) -> int:
             nd_lists = [[t for t in d if t.get("regime") == rg] for d in null]
             nd = [dn.excess(x) for x in nd_lists if x]
             n_real = len([t for t in ts if t.get("outcome") in ("win", "loss")])
-            if n_real < MIN_TRADES or len(nd) < MIN_DRAWS:
-                print(f"\n  {rg}: {n_real} trades, {len(nd)} usable draws — "
-                      f"UNDERPOWERED, no verdict.")
-                print(f"     Below {MIN_TRADES} trades or {MIN_DRAWS} draws a "
-                      f"percentile is arithmetic, not evidence. An")
-                print(f"     underpowered cell is NOT support for a "
-                      f"regime-independent effect.")
+            per_draw = (float(np.median([d["n"] for d in nd])) if nd else 0.0)
+            thin = power_check(n_real, len(nd), per_draw)
+            if thin:
+                print(f"\n  {rg}: {n_real} trades, {len(nd)} draws, "
+                      f"median {per_draw:.0f} per draw — UNDERPOWERED, "
+                      f"no verdict.")
+                print(f"     {thin}.")
+                print(f"     An underpowered cell prints as 'adds nothing' and "
+                      f"is indistinguishable from a real")
+                print(f"     null. It is NOT support for a regime-independent "
+                      f"effect.")
                 if label == "INVERTED":
                     verdicts[rg] = "UNDERPOWERED"
                 continue
@@ -337,11 +373,25 @@ def selftest() -> int:
 
     # ── UNDERPOWERED IS NOT A PASS ──
     assert MIN_TRADES >= 100 and MIN_DRAWS >= 20, (MIN_TRADES, MIN_DRAWS)
+    assert MIN_NULL_PER_DRAW >= 60, MIN_NULL_PER_DRAW
+    assert power_check(500, 200, 300) is None, "a healthy cell must pass"
+    assert power_check(50, 200, 300), "too few real trades must fail"
+    assert power_check(500, 5, 300), "too few draws must fail"
+    # RUN 1'S ACTUAL BEAR CELL: 330 real trades and 200 draws, both well over
+    # their floors, against a null whose typical draw held far too little. It
+    # printed a verdict against a band of [-3.7, +12.2]pp.
+    why = power_check(330, 200, 12)
+    assert why, (
+        "330 real trades and 200 draws passed while the typical draw held 12. "
+        "That is run 1's Bear cell, and it produced a verdict from a band "
+        "nothing could fall outside")
+    assert "thin null" in why, why
     thin = dn.compare([mk("win", 3.0, "Bear")] * 5 + [mk("loss", -1.0, "Bear")] * 5,
                       [{"excess": 0.05, "mean_r": 0.1} for _ in range(5)], "T")
     assert thin["excess"]["verdict"] == "NOT ENOUGH DRAWS", thin["excess"]
-    print(f"underpowered     : refuses below {MIN_TRADES} trades / "
-          f"{MIN_DRAWS} draws, never reads as support")
+    print(f"power rule       : refuses below {MIN_TRADES} trades, "
+          f"{MIN_DRAWS} draws, or {MIN_NULL_PER_DRAW} per draw — run 1's Bear "
+          f"cell now fails")
 
     print("=" * 72)
     print("All self-tests passed.")
