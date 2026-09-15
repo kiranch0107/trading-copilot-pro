@@ -652,6 +652,30 @@ def analyze(df: pd.DataFrame, ticker: str,
         "filters_pass": r["filters_pass"], "filters_total": r["filters_total"],
     }
 
+def selftest() -> int:
+    """
+    Run the checks with the forward log pointed at a throwaway file.
+
+    THE BUG THIS FIXES. analyze() writes to forward_log.LOG, and the
+    direction-gate check below drives analyze() directly — so every selftest
+    run appended two fabricated "ZZ" rows to the REAL forward_log.jsonl. Twenty
+    two of them reached a commit before anyone noticed, and CI would have kept
+    adding more on every push.
+
+    A research log that quietly accumulates test fixtures is worse than no log:
+    it looks like a record. The redirect has to wrap the WHOLE function, not
+    the one block that happens to mention the log, because any check that
+    drives analyze() writes as a side effect.
+    """
+    import tempfile as _tf, pathlib as _pl
+    real = forward_log.LOG
+    try:
+        forward_log.LOG = _pl.Path(_tf.mkdtemp()) / "selftest.jsonl"
+        return _selftest_body()
+    finally:
+        forward_log.LOG = real
+
+
 def run(args) -> int:
     if not args.force and not is_market_open():
         logger.info("Market closed — skipping.")
@@ -770,13 +794,15 @@ def run(args) -> int:
     return 0
 
 
-def selftest() -> int:
+def _selftest_body() -> int:
     """
     Offline checks for the unattended paths. This module sends real alerts on
     a schedule and had NO test coverage at all, which is how it could have
     fetched nothing for days while looking exactly like a quiet market.
     """
     # ── THE DIRECTION GATE MUST BIND IN analyze(), not just in risk_params ──
+    # (forward_log.LOG is redirected for the whole of this function by
+    # selftest() below — see the note there.)
     # Asserting that direction_blocked() returns a string proves the helper
     # works, not that the scanner calls it. This project has shipped that
     # mistake repeatedly — a guard aimed at the producer while the break sat in
