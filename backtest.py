@@ -342,9 +342,27 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
             tally[key] = tally.get(key, 0) + 1
         return {"filled": False, "gapped": gapped}
 
+    # EXCURSIONS, recorded as the trade is walked.
+    #
+    # This loop already sees every bar the trade lived through and then throws
+    # the path away, keeping only the verdict. But -1 R covers two opposite
+    # failures: a trade that travelled 2.8 R our way and gave it all back is an
+    # EXIT problem, and one that never went 0.3 R our way is an ENTRY problem.
+    # They are identical in every other number this project records.
+    #
+    # Measured intrabar from High/Low, in units of this trade's own risk — the
+    # same denominator R uses — and only up to and including the exit bar,
+    # because after that we are out and the path is not ours.
+    mfe = mae = 0.0
+    bars_to_mfe = 0
     exit_i = None; exit_px = None; outcome = None
     for j in range(entry_i, min(entry_i + cfg["max_hold"], n)):
         hi = float(df["High"].iloc[j]); lo = float(df["Low"].iloc[j])
+        fav = (hi - entry) if trend == "Bullish" else (entry - lo)
+        adv = (lo - entry) if trend == "Bullish" else (entry - hi)
+        if fav / risk > mfe:
+            mfe, bars_to_mfe = fav / risk, j - entry_i
+        mae = min(mae, adv / risk)
         if trend == "Bullish":
             if lo <= stop:                       # stop first (conservative)
                 exit_px, outcome, exit_i = stop, "loss", j; break
@@ -411,6 +429,8 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
         # cannot hold three of those. longs_only.py needs this to tell an
         # idealised backtest apart from one a $5,000 account could actually run.
         "entry": float(entry), "stop": float(stop),
+        # THE PATH, not just the verdict. See the excursion block above.
+        "mfe_r": float(mfe), "mae_r": float(mae), "bars_to_mfe": int(bars_to_mfe),
         # THE SETUP AS THE LOGIC SAW IT, carried whole. `trade` is
         # signal_core.evaluate()'s result, less "blocked" and the placeholder
         # ticker: every gate, every indicator reading and the constructed levels
@@ -1220,6 +1240,103 @@ def selftest() -> int:
     assert isinstance(sig["filters"], dict) and sig["filters"], \
         "the gate detail must arrive as a populated dict"
     print(f"clean bearish bar        : trades, levels AND readings both present")
+
+    # ── EXCURSIONS MUST MATCH THE OUTCOME THEY ACCOMPANY ──
+    # A stop exit went at least -1 R against by definition; a target exit went
+    # at least +rr our way. If the recorded path contradicts the recorded
+    # verdict, one of them is wrong and the taxonomy built on top is fiction.
+    # Tight levels and a short hold, so trades RESOLVE. At the 3 ATR default
+    # the smooth synthetic frames time out every trade, and a fixture of pure
+    # timeouts exercises neither the win branch nor the loss branch below.
+    _ecfg = dict(DEFAULTS, atr_stop_mult=0.5, atr_tgt_mult=0.5, min_rr=0.1,
+                 max_hold=8)
+    _eparams = build_signal_params(_ecfg)
+    _exc = []
+    for _up in (True, False):
+        _d = _synthetic_ohlc(up=_up, adx=40.0)
+        for _i in range(60, len(_d) - 25):
+            _sg = evaluate_signal(_d, _i, _eparams)
+            if not _sg:
+                continue
+            _r = simulate_trade(_d, _i, _sg, _ecfg)
+            if _r.get("filled"):
+                _exc.append(_r)
+    assert _exc, "no trade filled — the excursion guard would test nothing"
+    for _t in _exc:
+        assert _t["mfe_r"] >= 0.0, f"MFE cannot be negative: {_t['mfe_r']}"
+        assert _t["mae_r"] <= 0.0, f"MAE cannot be positive: {_t['mae_r']}"
+        assert _t["bars_to_mfe"] >= 0 and _t["bars_to_mfe"] <= _t["hold"], (
+            f"MFE arrived at bar {_t['bars_to_mfe']} of a {_t['hold']}-bar "
+            f"trade — outside the trade's own life")
+        # MAE <= realised R <= MFE, always. The price had to travel at least as
+        # far as the exit in both directions to produce the exit.
+        #
+        # NOT "MFE >= rr on a win": rr is measured from the PLANNED entry and
+        # MFE from the ACTUAL fill. A long that gaps up fills further from its
+        # stop (more risk) and closer to its target (less distance), so MFE at
+        # a target hit sits BELOW rr. Asserting otherwise fails on correct
+        # code, which is how a good guard gets deleted.
+        assert _t["mae_r"] <= _t["r"] + 1e-6, (
+            f"realised {_t['r']:+.2f} R is worse than the worst the price ever "
+            f"went ({_t['mae_r']:+.2f})")
+        assert _t["r"] <= _t["mfe_r"] + 1e-6, (
+            f"realised {_t['r']:+.2f} R is better than the best the price ever "
+            f"went ({_t['mfe_r']:+.2f})")
+    # The signal never produces a LOSS on these frames — a long in a smooth
+    # uptrend always reaches its target — so the stop branch above would never
+    # run. Drive simulate_trade directly for that case: a long into a
+    # downtrend, which is what a losing trade actually looks like.
+    _dn = _synthetic_ohlc(up=False, adx=40.0)
+    for _i in range(60, len(_dn) - 25, 7):
+        _px = float(_dn["Close"].iloc[_i])
+        _atr = float(_dn["ATR"].iloc[_i])
+        if _atr <= 0:
+            continue
+        _r = simulate_trade(_dn, _i, {"trend": "Bullish", "entry": _px,
+                                      "stop": _px - _atr, "target": _px + 3 * _atr,
+                                      "rr": 3.0, "atr": _atr}, dict(DEFAULTS))
+        if _r.get("filled"):
+            _exc.append(_r)
+    _losses = [t for t in _exc if t["outcome"] == "loss"]
+    _wins = [t for t in _exc if t["outcome"] == "win"]
+    assert _losses and _wins, (
+        f"need both outcomes to test both directions; got {len(_wins)} wins "
+        f"and {len(_losses)} losses")
+    for _t in _losses:
+        assert _t["mae_r"] <= -0.98, (
+            f"a stop exit must have gone at least -1 R against, recorded "
+            f"{_t['mae_r']:+.2f}. The path contradicts the verdict")
+    print(f"excursions              : {len(_exc)} trades, MFE/MAE agree with "
+          f"every verdict ({len(_wins)} win, {len(_losses)} loss)")
+
+    # ── AND THE UNITS MUST BE R, NOT PRICE ──
+    # MAE <= R <= MFE holds in price units too, so it cannot catch a missing
+    # division by risk — the whole taxonomy downstream would then bucket on a
+    # scale that moves with the stock's price. Pin it on a frame built by hand
+    # where the answer is arithmetic.
+    _hand = pd.DataFrame({
+        "Date": pd.date_range("2024-01-01", periods=3, freq="D"),
+        "Open":  [100.0, 100.0, 101.0],
+        "High":  [100.0, 103.0, 101.0],
+        "Low":   [100.0,  99.0, 100.0],
+        "Close": [100.0, 101.0, 100.0],
+    })
+    _hc = dict(DEFAULTS, max_hold=2, slippage_bps=0.0, commission=0.0)
+    _hr = simulate_trade(_hand, 0, {"trend": "Bullish", "entry": 100.0,
+                                    "stop": 98.0, "target": 106.0, "rr": 3.0,
+                                    "atr": 2.0}, _hc)
+    assert _hr.get("filled"), _hr
+    # entry 100, stop 98 -> risk 2. High 103 is +3 price = +1.50 R.
+    # Low 99 is -1 price = -0.50 R. In price units these read 3.0 and -1.0.
+    assert abs(_hr["mfe_r"] - 1.5) < 1e-9, (
+        f"MFE should be +1.50 R (3 points over a 2-point risk), got "
+        f"{_hr['mfe_r']:.4f}. {_hr['mfe_r']:.1f} means price units, not R")
+    assert abs(_hr["mae_r"] - (-0.5)) < 1e-9, (
+        f"MAE should be -0.50 R (1 point over a 2-point risk), got "
+        f"{_hr['mae_r']:.4f}")
+    assert _hr["bars_to_mfe"] == 0, _hr["bars_to_mfe"]
+    print(f"excursion units         : +1.50 R / -0.50 R on a 2-point risk "
+          f"(price units would read +3.0 / -1.0)")
 
     # ── the weekly filter must actually GATE, not just get reported ──
     # THE REGRESSION THIS TEST EXISTS TO CATCH: --use-weekly turns on

@@ -947,6 +947,55 @@ def check_backlog_coverage_table_current() -> None:
     print(f"  BACKLOG coverage table matches the repo ({len(rows)} modules)")
 
 
+def check_taxonomy_never_gates() -> None:
+    """
+    The outcome buckets annotate. They never decide whether a trade is taken.
+
+    Asked for explicitly: "I do not want you to restrict any trade because it
+    falls in bucket A vs B". This pins that, because the drift from "show the
+    bucket" to "skip the bad bucket" is one line and looks like an improvement
+    in the diff.
+
+    Two independent reasons it cannot happen, and both are checked:
+
+      1. No live path imports outcome_taxonomy at all.
+      2. classify() needs mfe_r and mae_r, which exist only AFTER a trade is
+         over. A setup at signal time has no path, so there is nothing to
+         classify even if someone wired it in.
+
+    The second is the real guarantee; the first stops the attempt earlier.
+    """
+    import ast as _ast
+    live = ("scanner.py", "app.py", "exit_monitor.py", "signal_core.py")
+    offenders = []
+    for f in live:
+        path = Path(f)
+        if not path.exists():
+            continue
+        tree = _ast.parse(path.read_text())
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Import):
+                if any(a.name == "outcome_taxonomy" for a in node.names):
+                    offenders.append(f)
+            elif isinstance(node, _ast.ImportFrom):
+                if node.module == "outcome_taxonomy":
+                    offenders.append(f)
+    if offenders:
+        raise AssertionError(
+            f"live path(s) import outcome_taxonomy: {', '.join(sorted(set(offenders)))}.\n"
+            f"  The buckets are a readout, never a gate. Annotating an alert "
+            f"is fine and needs no import here; skipping a setup because of "
+            f"its bucket is the thing that must not happen.")
+    import outcome_taxonomy as _ot
+    unfinished = {"outcome": "win", "setup": {"rr": 3.0}}
+    assert _ot.classify(unfinished) == "OTHER", (
+        "a setup with no completed path received a bucket. classify() must "
+        "depend on mfe_r/mae_r so it is unusable at signal time by "
+        "construction, not merely by convention")
+    print(f"  outcome buckets annotate only ({len(live)} live paths clean, "
+          f"unfinished trades unclassifiable)")
+
+
 def check_line_endings_preserved() -> None:
     """
     Files that ship CRLF must keep it.
@@ -1090,6 +1139,7 @@ IMPORTABLE_MODULES = [
     "rvol_retest", "record_recheck", "atr_stop_test", "option_decompose",
     "thesis_test", "feature_sweep", "conditional_test", "longs_only",
     "setup_cases", "setup_population", "drift_null", "inverted_arm",
+    "outcome_taxonomy",
 ]
 
 
@@ -1728,6 +1778,7 @@ CHECKS = [
     ("app.py defaults derive from signal_core",    check_app_defaults_derived),
     ("backtest.evaluate_signal callers correct",   check_backtest_callers),
     ("weekly trend + SPY regime are one rule",     check_market_context_shared),
+    ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),
     ("every --selftest module runs in CI",        check_selftests_run_in_ci),
