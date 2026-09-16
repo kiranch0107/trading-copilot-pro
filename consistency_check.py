@@ -1976,8 +1976,11 @@ def check_forward_log_single_writer() -> None:
         if p.name in ("forward_log.py", "consistency_check.py"):
             continue
         txt = p.read_text()
-        if "forward_log.record_signal" in txt or "forward_log.record_outcome" in txt \
-                or "forward_log.append" in txt:
+        # attach_outcomes() is a WRITE too — it is how the scanner appends
+        # outcome rows (BACKLOG 17). Leaving it out would let a second module
+        # start writing through the one entry point this check did not name.
+        if any(f"forward_log.{fn}" in txt for fn in
+               ("record_signal", "record_outcome", "append", "attach_outcomes")):
             writers.append(p.name)
     if writers != ["scanner.py"]:
         raise AssertionError(

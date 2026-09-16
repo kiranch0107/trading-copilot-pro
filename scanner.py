@@ -697,6 +697,36 @@ def run(args) -> int:
     state = load_state()
     hits, skipped, failed = 0, 0, []
 
+    # ── ATTACH OUTCOMES TO SETTLED SIGNALS, BEFORE SCANNING ──
+    #
+    # THE SCANNER DOES THIS, by the owner's decision (BACKLOG 17). The app
+    # writes trade_journal.json through the Contents API but must never append
+    # to the forward log: two writers on an append-only hash chain collide on
+    # seq AND prev, and the merged chain does not verify — permanently, because
+    # the hashes cover the seq so it cannot be renumbered. Reading the journal
+    # here keeps exactly one writer.
+    #
+    # Runs first so an outcome lands even on a scan that finds no setups, and
+    # before the loop that can raise per ticker.
+    #
+    # Non-fatal, like the signal write: the record matters, it does not matter
+    # more than the trade.
+    try:
+        _j = Path("trade_journal.json")
+        if _j.exists():
+            _rep = forward_log.attach_outcomes(json.loads(_j.read_text()))
+            if _rep["attached"]:
+                logger.info("forward log: attached %d outcome(s)", _rep["attached"])
+            # REFUSALS ARE REPORTED, NOT SWALLOWED. An ambiguous match is
+            # refused rather than guessed (a wrong row here is permanent), and
+            # a silent refusal would look exactly like "no trades closed".
+            for _k in ("ambiguous", "no_match"):
+                if _rep[_k]:
+                    logger.warning("forward log: %d trade(s) %s — %s", _rep[_k],
+                                   _k, "; ".join(_rep["detail"][:5]))
+    except Exception as _exc:                          # noqa: BLE001
+        logger.warning("forward log: attaching outcomes failed: %s", _exc)
+
     # Fetched ONCE for the whole scan, not per ticker.
     spy_regime = get_spy_regime() if PARAMS.spy_regime_on else None
     if PARAMS.spy_regime_on:
