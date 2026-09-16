@@ -692,7 +692,20 @@ property this monitor exists for.
 
 ---
 
-## 20. The earnings blackout is a second duplicated gate implementation
+## 20. ~~The earnings blackout is a second duplicated gate implementation~~ — CLOSED 2026-09-16
+
+**Merged into `market_context.py`, the module that already owns the weekly trend
+and the SPY regime.** Both callers delegate; the window arithmetic exists in one
+place; `check_earnings_gate_shared()` pins all three facts and was falsified
+three ways (single-date read, a caller dropping the delegation, a caller
+re-growing its own window).
+
+**The window semantics already agreed** — app's two branches combined to exactly
+the scanner's single inclusive test — so a constants check would have passed.
+The divergence was in PARSING: yfinance returns "Earnings Date" as a range of
+two estimates more often than not, and app read only the first element. Reading
+every date is the stricter rule and the one kept.
+
 
 **Found 2026-09-16 by review; see `results/code_review_2026-09-16.md` (M3).**
 

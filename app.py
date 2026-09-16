@@ -873,52 +873,46 @@ def get_weekly_trend(ticker: str) -> str | None:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def _earnings_calendar(ticker: str):
+    """The raw yfinance calendar payload. Cached because it is a slow call."""
+    _rl_slow.wait()
+    return yf.Ticker(ticker).calendar
+
+
 def get_next_earnings(ticker: str) -> str | None:
+    """Next earnings date as a string, for display. None when unknown."""
     try:
-        _rl_slow.wait()
-        t   = yf.Ticker(ticker)
-        cal = t.calendar
-        if cal is None:
-            return None
-        if isinstance(cal, dict):
-            date_val = cal.get("Earnings Date")
-            if isinstance(date_val, (list, tuple)):
-                date_val = date_val[0]
-            ts = pd.to_datetime(date_val, errors="coerce")
-        elif isinstance(cal, pd.DataFrame):
-            if "Earnings Date" in cal.columns:
-                ts = pd.to_datetime(cal["Earnings Date"].iloc[0], errors="coerce")
-            else:
-                first = cal.iloc[0].dropna().iloc[0] if not cal.empty else None
-                ts    = pd.to_datetime(first, errors="coerce")
-        else:
-            ts = pd.NaT
-        return None if pd.isna(ts) else str(ts.date())
+        today = datetime.now(pytz.timezone("America/New_York")).date()
+        dates = market_context.calendar_dates(_earnings_calendar(ticker))
+        nxt = [d for d in dates if d >= today]
+        return str(nxt[0]) if nxt else (str(dates[-1]) if dates else None)
     except Exception as e:
         logger.exception("get_next_earnings(%s): %s", ticker, e)
         return None
 
 
 def check_earnings_blackout(ticker: str) -> tuple[bool, str]:
-    ds = get_next_earnings(ticker)
-    if ds is None:
-        return True, "Earnings date unknown — proceed with caution"
-    try:
-        edt   = datetime.strptime(ds, "%Y-%m-%d").date()
-        today = datetime.now(pytz.timezone("America/New_York")).date()
-        days  = (edt - today).days
-        if 0 <= days <= EARNINGS_DAYS:
-            return False, f"⚠️ Earnings in {days}d ({ds}) — signal blocked"
-        elif days < 0:
-            # Fix 5: post-earnings cooling window — very recent earnings can
-            # still cause IV crush / gap residual the next 1-2 days
-            if abs(days) <= POST_EARNINGS_DAYS:
-                return False, f"⚠️ Earnings was {abs(days)}d ago ({ds}) — post-earnings cooling ({POST_EARNINGS_DAYS}d)"
-            return True, f"Last earnings: {ds} ({abs(days)}d ago)"
-        return True, f"Next earnings: {ds} ({days}d away)"
-    except Exception as e:
-        logger.exception("check_earnings_blackout(%s): %s", ticker, e)
-        return True, "Earnings check failed — proceed with caution"
+    """
+    ROUTED THROUGH market_context — one implementation, as with the weekly
+    trend and the SPY regime.
+
+    THE DIVERGENCE THIS ENDS. This function read ONE earnings date, because
+    get_next_earnings() returned a single value, while scanner.py's copy
+    iterated every date in the calendar. yfinance routinely returns a RANGE of
+    two estimates for one event, so on a ticker where the blackout matched the
+    second date the app said "clear" and the scanner said "blocked" — the same
+    app-vs-scanner split signal_core.py was written to end, in one of the
+    inputs it takes on trust. Nothing in consistency_check pinned it.
+
+    The window semantics were already identical: this function's two branches
+    (0..EARNINGS_DAYS ahead, and up to POST_EARNINGS_DAYS behind) combine to
+    exactly the scanner's single inclusive test, so no live behaviour changes
+    beyond reading every date instead of the first.
+    """
+    return market_context.get_earnings_blackout(
+        ticker, _earnings_calendar,
+        datetime.now(pytz.timezone("America/New_York")).date(),
+        blackout_days=EARNINGS_DAYS, post_days=POST_EARNINGS_DAYS)
 
 
 @st.cache_data(ttl=1800, show_spinner=False)

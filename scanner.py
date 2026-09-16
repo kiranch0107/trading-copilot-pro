@@ -508,47 +508,32 @@ def get_weekly_trend(ticker: str) -> str | None:
     return market_context.get_weekly_trend(ticker, _fetch)
 
 
+def _earnings_calendar(ticker: str):
+    """The raw yfinance calendar payload, behind this module's fetch gap."""
+    time.sleep(FETCH_GAP_SEC)
+    return yf.Ticker(ticker).calendar
+
+
 def check_earnings_blackout(ticker: str) -> tuple[bool, str]:
     """
-    (ok, detail). False when earnings fall inside the blackout window either
-    side of today. Fails OPEN — an unavailable calendar must not silence every
-    signal, so an error returns ok=True with the reason stated.
+    ROUTED THROUGH market_context — one implementation, as with the weekly
+    trend and the SPY regime.
+
+    This copy and app.py's parsed the yfinance calendar differently: app read
+    only the FIRST earnings date, this one iterated all of them. yfinance
+    routinely returns a RANGE of two estimates for one event, so the two could
+    reach opposite verdicts on the same ticker at the same moment. Reading
+    every date — the behaviour this copy already had — is what the shared rule
+    keeps, because a calendar entry inside the window should block whichever
+    position it holds in the list.
+
+    Still ET, still fails open. `today` is passed explicitly because
+    market_context refuses to default it: a host-clock default is the bug this
+    repo has already fixed twice, and the runners here are UTC.
     """
-    try:
-        time.sleep(FETCH_GAP_SEC)
-        cal = yf.Ticker(ticker).calendar
-        dates = None
-        if isinstance(cal, dict):
-            dates = cal.get("Earnings Date")
-        elif cal is not None and hasattr(cal, "empty") and not cal.empty:
-            if "Earnings Date" in cal.index:
-                dates = cal.loc["Earnings Date"].tolist()
-        if not dates:
-            return True, "No earnings date available"
-        if not isinstance(dates, (list, tuple)):
-            dates = [dates]
-        # ET, NOT THE HOST CLOCK. This module runs on GitHub Actions, where
-        # the host is UTC, and it is comparing against an earnings date on
-        # the US calendar. Any run after 20:00 ET is already tomorrow in UTC,
-        # which shifts every delta by a day and moves the edge of the
-        # blackout window. exit_monitor.days_to_expiry() documents this exact
-        # trap and fixed it there; this was the copy that still had it. The
-        # current cron (15/17/19 UTC) never crosses midnight UTC, so nothing
-        # is wrong live today — but exit-monitor.yml has already been widened
-        # to 21 UTC once, and this would have gone wrong silently.
-        today = datetime.now(ET).date()
-        for d in dates:
-            try:
-                ed = pd.Timestamp(d).date()
-            except Exception:
-                continue
-            delta = (ed - today).days
-            if -POST_EARNINGS_DAYS <= delta <= EARNINGS_BLACKOUT_DAYS:
-                return False, f"Earnings {ed} ({delta:+d}d) inside blackout"
-        return True, "Outside earnings blackout"
-    except Exception as e:
-        logger.debug("Earnings check failed for %s (%s)", ticker, e)
-        return True, f"Earnings check unavailable ({e})"
+    return market_context.get_earnings_blackout(
+        ticker, _earnings_calendar, datetime.now(ET).date(),
+        blackout_days=EARNINGS_BLACKOUT_DAYS, post_days=POST_EARNINGS_DAYS)
 
 
 def get_spy_regime() -> dict | None:

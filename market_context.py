@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-market_context.py — ONE implementation of the weekly trend and the SPY regime
+market_context.py — ONE implementation of the weekly trend, the SPY regime
+and the earnings blackout
 
 WHY THIS EXISTS
 ---------------
@@ -13,6 +14,8 @@ diverged into different rules entirely:
                    scanner: price vs EMA20w,            2y, >=30 bars
     get_spy_regime     app: 3-state, Bull/Bear only when ADX >= 20, else Neutral
                    scanner: 2-state, price vs 200-SMA, no ADX anywhere
+    earnings gate      app: read the FIRST calendar date only
+                   scanner: iterate EVERY calendar date
 
 "Is the 10-week EMA above the 20-week EMA" and "is price above the 20-week EMA"
 are different questions that disagree constantly, and weekly alignment is a
@@ -57,12 +60,31 @@ price version.
      validated config. The rule below is unchanged and still used whenever a
      caller turns the filter on (app.py's sidebar checkbox).
 
+EARNINGS BLACKOUT: added here 2026-09-16, and it is the same defect a third
+time. The WINDOW semantics already agreed — app's two branches (0..N days
+ahead, up to M days behind) combine to exactly the scanner's single inclusive
+test — so this is not a rule disagreement. It is a PARSING one, and it still
+changes verdicts: yfinance returns the "Earnings Date" as a RANGE of two
+estimates for one event more often than not, and app read only the first
+element. On a ticker where the blackout matched the second estimate, the app
+said clear and the scanner said blocked, on the same ticker at the same moment.
+
+  Reading every date is what the shared rule keeps. It is the stricter of the
+  two, and the right one: a calendar entry inside the window should block
+  whichever position it happens to hold in the list.
+
 DESIGN
 ------
-Pure functions take bars and return a verdict; thin wrappers take an injected
-fetch callable. Same shape as data_source.py and signal_core.py, and it means
-the decision rules are testable offline — these two functions gate live signals
-and had no tests at all before this module existed.
+Pure functions take bars (or dates) and return a verdict; thin wrappers take an
+injected fetch callable. Same shape as data_source.py and signal_core.py, and it
+means the decision rules are testable offline — these functions gate live
+signals and had no tests at all before this module existed.
+
+One deliberate asymmetry: get_earnings_blackout() REQUIRES `today` and will not
+default it. Every other input here is bars, which carry their own dates; this
+one needs a clock, and a host-clock default is the bug this repo has already
+fixed twice (exit_monitor.days_to_expiry, scanner.check_earnings_blackout) on
+UTC runners reading a US calendar.
 """
 
 from __future__ import annotations
@@ -89,6 +111,12 @@ REGIME_PERIOD     = "2y"
 # that gate, so it does not decide anything here. Do not reintroduce it as a
 # gate without backtesting it first.
 SPY_ADX_REPORT_WINDOW = 14
+
+# EARNINGS BLACKOUT defaults. app.py exposes both as sidebar inputs and passes
+# them in; scanner.py uses these. They are defaults, not the rule — the rule is
+# earnings_blackout_from_dates() below, and there is now only one of it.
+EARNINGS_BLACKOUT_DAYS = 3   # block this many days BEFORE earnings
+POST_EARNINGS_DAYS     = 1   # and this many days after, for the IV-crush tail
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +234,88 @@ def spy_regime_from_bars(df: pd.DataFrame,
             "reasoning": f"SPY ${price:.0f} {where} 200-SMA ${sma200:.0f}{adx_note}"}
 
 
+def calendar_dates(cal) -> list:
+    """
+    Every earnings date in a yfinance `.calendar` payload, normalised to dates.
+
+    THE TWO CALLERS PARSED THIS DIFFERENTLY, which is half of why they could
+    disagree. yfinance returns either a dict (`{"Earnings Date": [d, ...]}`) or
+    a DataFrame, and the "date" is routinely a RANGE of two estimates for one
+    event rather than a single day. Unparseable entries are skipped rather than
+    guessed at.
+    """
+    dates = None
+    if cal is None:
+        return []
+    if isinstance(cal, dict):
+        dates = cal.get("Earnings Date")
+    elif isinstance(cal, pd.DataFrame):
+        if cal.empty:
+            return []
+        if "Earnings Date" in getattr(cal, "columns", ()):
+            dates = cal["Earnings Date"].tolist()
+        elif "Earnings Date" in getattr(cal, "index", ()):
+            dates = cal.loc["Earnings Date"]
+            dates = dates.tolist() if hasattr(dates, "tolist") else dates
+    else:
+        dates = cal
+    if dates is None:
+        return []
+    if not isinstance(dates, (list, tuple)):
+        dates = [dates]
+    out = []
+    for d in dates:
+        try:
+            ts = pd.to_datetime(d, errors="coerce")
+        except Exception:
+            continue
+        if ts is not None and not pd.isna(ts):
+            out.append(ts.date())
+    return sorted(set(out))
+
+
+def earnings_blackout_from_dates(dates,
+                                 today,
+                                 blackout_days: int = EARNINGS_BLACKOUT_DAYS,
+                                 post_days: int = POST_EARNINGS_DAYS
+                                 ) -> tuple[bool, str]:
+    """
+    (ok, detail). False when any earnings date falls inside the window
+    [today - post_days, today + blackout_days].
+
+    EVERY DATE IS CHECKED, not just the first. app.py used to read one date
+    (`get_next_earnings()` returned a single value) while scanner.py iterated
+    all of them, so on a ticker whose calendar carries more than one — which is
+    the COMMON case, because the "date" is usually a two-estimate range — the
+    app and the scanner could reach opposite verdicts on the same ticker at the
+    same moment. That is the divergence signal_core.py exists to end, one level
+    up in its inputs, and it is the same defect this module already fixed for
+    the weekly trend and the SPY regime.
+
+    FAILS OPEN on missing data, matching both previous implementations: an
+    unavailable calendar must not silence every signal. It says so in `detail`
+    rather than returning a bare True, because "no earnings nearby" and "I could
+    not check" are different facts and the UI prints this string.
+
+    The blocking window is INCLUSIVE at both ends, which is what both callers
+    already did:  -post_days <= (earnings - today).days <= blackout_days.
+    """
+    if not dates:
+        return True, "No earnings date available — proceed with caution"
+    for ed in dates:
+        delta = (ed - today).days
+        if -post_days <= delta <= blackout_days:
+            if delta >= 0:
+                return False, (f"Earnings {ed} in {delta}d — inside the "
+                               f"{blackout_days}d blackout")
+            return False, (f"Earnings was {abs(delta)}d ago ({ed}) — "
+                           f"post-earnings cooling ({post_days}d)")
+    nxt = [d for d in dates if d >= today]
+    if nxt:
+        return True, f"Next earnings: {nxt[0]} ({(nxt[0] - today).days}d away)"
+    return True, f"Last earnings: {dates[-1]} ({(today - dates[-1]).days}d ago)"
+
+
 # ---------------------------------------------------------------------------
 # Fetch wrappers — the caller injects how bars are fetched
 # ---------------------------------------------------------------------------
@@ -238,6 +348,32 @@ def get_spy_regime(fetch, ticker: str = "SPY") -> dict:
         logger.warning("SPY regime unavailable (%s)", e)
         return {"regime": "Unknown", "price": None, "sma200": None,
                 "adx": None, "reasoning": f"SPY fetch failed ({e})"}
+
+
+def get_earnings_blackout(ticker: str, fetch, today,
+                          blackout_days: int = EARNINGS_BLACKOUT_DAYS,
+                          post_days: int = POST_EARNINGS_DAYS
+                          ) -> tuple[bool, str]:
+    """
+    Earnings blackout with the calendar fetch injected.
+
+    `fetch(ticker)` returns a yfinance `.calendar` payload (or None). app.py
+    injects its rate-limited call, scanner.py its gapped one — the same split
+    as get_weekly_trend().
+
+    `today` is REQUIRED and must be an ET date. It is not defaulted, because a
+    host-clock default is exactly the bug this repo has now fixed twice
+    (exit_monitor.days_to_expiry, scanner.check_earnings_blackout): the runners
+    are UTC, the calendar is a US one, and a silent default is how they drift
+    apart again.
+    """
+    try:
+        return earnings_blackout_from_dates(
+            calendar_dates(fetch(ticker)), today,
+            blackout_days=blackout_days, post_days=post_days)
+    except Exception as e:
+        logger.debug("Earnings check failed for %s (%s)", ticker, e)
+        return True, f"Earnings check unavailable ({e}) — proceed with caution"
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +502,63 @@ def selftest() -> int:
     assert get_weekly_trend("X", _boom) is None
     assert get_spy_regime(_boom)["regime"] == "Unknown"
     print(f"fetch wrappers          : inject, degrade to None/Unknown on error")
+
+
+    # ── EARNINGS BLACKOUT — the third rule that was duplicated ──
+    #
+    # app.py read ONE earnings date; scanner.py iterated all of them. yfinance
+    # routinely returns a RANGE of two estimates for one event, so the two
+    # could reach opposite verdicts on the same ticker at the same moment.
+    import datetime as _dt
+    _t = _dt.date(2026, 9, 16)
+
+    assert earnings_blackout_from_dates([_dt.date(2026, 9, 18)], _t)[0] is False
+    assert earnings_blackout_from_dates([_dt.date(2026, 9, 19)], _t)[0] is False
+    assert earnings_blackout_from_dates([_dt.date(2026, 9, 20)], _t)[0] is True, \
+        "4 days out is OUTSIDE a 3-day blackout; the window is inclusive at 3"
+    assert earnings_blackout_from_dates([_dt.date(2026, 9, 15)], _t)[0] is False, \
+        "yesterday is inside the 1-day post-earnings cooling window"
+    assert earnings_blackout_from_dates([_dt.date(2026, 9, 14)], _t)[0] is True
+    print("earnings, window edges  : blocks -1..+3, clears -2 and +4")
+
+    # THE DIVERGENCE THIS ENDS, made concrete. The blackout matches the SECOND
+    # estimate only. Reading the first date alone -- what app.py did -- returns
+    # CLEAR on the exact bar the scanner blocked.
+    _range = [_dt.date(2026, 9, 25), _dt.date(2026, 9, 18)]
+    assert earnings_blackout_from_dates(_range, _t)[0] is False, \
+        "every date must be checked; the old app read only the first and " \
+        "would have cleared this ticker while the scanner blocked it"
+    assert earnings_blackout_from_dates([_range[0]], _t)[0] is True, \
+        "the fixture must actually depend on the second date, or it proves nothing"
+    print("earnings, two estimates : blocks on the LATER date too "
+          "(the app/scanner split)")
+
+    # Fails OPEN, and says which kind of open it is.
+    _ok, _why = earnings_blackout_from_dates([], _t)
+    assert _ok is True and "No earnings date" in _why
+    _ok2, _why2 = get_earnings_blackout(
+        "X", lambda t: (_ for _ in ()).throw(RuntimeError("boom")), _t)
+    assert _ok2 is True and "unavailable" in _why2, (_ok2, _why2)
+    print("earnings, no data       : fails OPEN, and names the reason")
+
+    # The calendar parser takes every shape yfinance emits.
+    assert calendar_dates({"Earnings Date": ["2026-09-18", "2026-09-19"]}) == \
+        [_dt.date(2026, 9, 18), _dt.date(2026, 9, 19)]
+    assert calendar_dates({"Earnings Date": "2026-09-18"}) == [_dt.date(2026, 9, 18)]
+    assert calendar_dates(pd.DataFrame({"Earnings Date": ["2026-09-18"]})) == \
+        [_dt.date(2026, 9, 18)]
+    assert calendar_dates(None) == [] and calendar_dates(pd.DataFrame()) == []
+    assert calendar_dates({"Earnings Date": ["not a date"]}) == [], \
+        "an unparseable entry is skipped, never guessed at"
+    print("earnings, calendar shape: dict, DataFrame, scalar, empty, junk")
+
+    # `today` is REQUIRED -- a host-clock default is the bug fixed twice here.
+    try:
+        get_earnings_blackout("X", lambda t: None)
+    except TypeError:
+        print("earnings, today         : required, never defaulted to the host clock")
+    else:
+        raise AssertionError("get_earnings_blackout must not default `today`")
 
     print("\nAll self-tests passed.")
     return 0
