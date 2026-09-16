@@ -262,10 +262,11 @@ def trading_sessions_between(start: date, end: date) -> int:
     would make a Friday entry "3 bars old" by Monday morning, which would
     fire the stop early on every weekend the position is held.
 
-    MARKET_HOLIDAYS only covers 2025-2026; beyond that the count drifts
+    MARKET_HOLIDAYS covers 2025-2027; beyond its last entry the count drifts
     slightly long (holidays get counted as sessions), which is the safe
     direction — it holds a position marginally longer rather than exiting
-    on a day the market was shut.
+    on a day the market was shut. consistency_check.check_calendar_runway()
+    is the forcing function that keeps the calendar ahead of today.
     """
     if end <= start:
         return 0

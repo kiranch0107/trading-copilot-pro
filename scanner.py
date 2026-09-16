@@ -527,7 +527,16 @@ def check_earnings_blackout(ticker: str) -> tuple[bool, str]:
             return True, "No earnings date available"
         if not isinstance(dates, (list, tuple)):
             dates = [dates]
-        today = datetime.now().date()
+        # ET, NOT THE HOST CLOCK. This module runs on GitHub Actions, where
+        # the host is UTC, and it is comparing against an earnings date on
+        # the US calendar. Any run after 20:00 ET is already tomorrow in UTC,
+        # which shifts every delta by a day and moves the edge of the
+        # blackout window. exit_monitor.days_to_expiry() documents this exact
+        # trap and fixed it there; this was the copy that still had it. The
+        # current cron (15/17/19 UTC) never crosses midnight UTC, so nothing
+        # is wrong live today — but exit-monitor.yml has already been widened
+        # to 21 UTC once, and this would have gone wrong silently.
+        today = datetime.now(ET).date()
         for d in dates:
             try:
                 ed = pd.Timestamp(d).date()

@@ -134,7 +134,7 @@ jobs:
           USE_DYNAMIC_UNIVERSE: '1'
         run: |
           python exit_monitor.py \
-            --interval 30 \
+            --interval 60 \
             ${{ inputs.dry_run && '--dry-run' || '' }} \
             ${{ inputs.force && '--force' || '' }}
 
