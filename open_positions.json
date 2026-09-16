@@ -35,7 +35,7 @@
     "mode": "live",
     "source": "signal",
     "traded_at": "2026-09-11 11:56 ET",
-    "last_check_epoch": 1789493369.3212137,
+    "last_check_epoch": 1789574722.941904,
     "status": "OPEN",
     "exit_alerted": false
   }
