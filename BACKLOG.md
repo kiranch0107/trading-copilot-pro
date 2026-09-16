@@ -840,6 +840,66 @@ both callers importing it, and a `check_` function that pins it.
 
 ---
 
+## 21. The share backtest fills a gapped stop AT the stop — every loss is floored at −1 R
+
+**Found 2026-09-16 by review. NOT FIXED, deliberately — see the last section.**
+
+`simulate_trade()` checks `if lo <= stop` and then exits at `stop`. When a bar
+GAPS THROUGH the stop, a real stop order fills at the OPEN, not at the trigger.
+Reproduced on a long entered at 100 with a stop at 98:
+
+| bar opens at | recorded R | real-fill R |
+|---:|---:|---:|
+| 95 | **−1.00** | −2.50 |
+| 90 | **−1.00** | −5.00 |
+| 80 | **−1.00** | −10.00 |
+| 40 | **−1.00** | −30.00 |
+
+**No trade in the share engine can be worse than about −1 R, at any gap size.**
+The three exit paths are: stop → exactly −1 R; target → +rr; timeout → marked to
+the close, which cannot be below the stop because the low would have exited
+first. Reality has no such floor.
+
+**Direction of the bias, stated honestly.** The target side has the mirror
+defect — a bar gapping past the target fills at the target when a real limit
+would fill better — so this is not purely one-directional. But the two are very
+unequal in practice: the stop sits at 1.25 × ATR and the target at 4.0 × ATR, and
+an overnight gap through 1.25 ATR is ordinary while one through 4 ATR is rare.
+The net effect flatters the strategy, and it flatters the LEFT TAIL specifically
+— which is the part `longs_only.py` calls "the number worth trusting most in
+this file".
+
+**This is not the same thing as the entry-bar group already recorded** in item 4
+and `results/longshort_split.md`. That is about how OFTEN trades gap into their
+stop (17.5%, averaging −0.770 R). This is about what each one is WORTH when it
+does. The printed reminder "Stops are not guaranteed (overnight gaps)" is a
+caveat about live trading; it does not say the backtest caps the loss.
+
+**`option_backtest.py` does NOT have this defect** and is the model to copy: it
+computes `pnl_pct` from the actual mid at the exit bar and books THAT, so a −50%
+rule can and does record −72%. Its sweep table's avg loss of −45.1% at SL−50 is
+a real distribution, not a threshold.
+
+### Why it was not fixed in the session that found it
+
+Fixing it moves EVERY R-multiple in the repo: the 1,386-trade record, all three
+cuts, tranche C, `exit_ab`, `drift_null`, `atr_stop_test`, `inverted_arm`, the
+feature sweeps. Per `CLAUDE.md`, the fix and the re-run are ONE change, and that
+session could not reach Yahoo to produce a single re-run. Shipping the fix alone
+would have left every file in `results/` disagreeing with the code that made it.
+
+### How to fix it, when there is market data
+
+In `simulate_trade()`, on a stop hit take `exit_px = min(stop, Open[j])` for a
+long and `max(stop, Open[j])` for a short — the fill is the worse of the trigger
+and the open. Mirror it on the target with the better of the two. Then re-run
+`record_recheck.py` FIRST: it is the module that says whether the record still
+reproduces, and it will show exactly how much of the recorded edge was this.
+
+Expect the expectancy to get worse, not better. That is the point.
+
+---
+
 ## Working conventions
 
 - `signal_core.py` is canonical. `consistency_check.py` enforces 31 cross-module
