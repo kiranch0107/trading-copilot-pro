@@ -333,6 +333,53 @@ def days_to_expiry(expiry: str) -> int | None:
 # ══════════════════════════════════════════════════════════════════
 # EXIT RULES
 # ══════════════════════════════════════════════════════════════════
+# WHICH EXIT REASONS OUTRANK WHICH — and why a position keeps being watched
+# after its first alert.
+#
+# THE GAP THIS CLOSES. run() used to select `status == "OPEN"` and skip
+# everything else, so the FIRST rule to fire flipped a position to
+# EXIT_SIGNALLED and it left monitoring permanently. Nothing in the app could
+# put it back: `status: OPEN` is assigned in exactly one place
+# (journal_store.open_option_position), and the app's "close these" list has no
+# dismiss and no re-arm.
+#
+# That is ordinary, not exotic. THESIS fires on a single close through EMA20 and
+# HOLD on a session count; both are judgement calls the owner may reasonably
+# decline. The moment either fired, the STOP rule was dead for the life of that
+# position — on a long option where the premium is the entire maximum loss. Same
+# shape as the 92-hour gap that widened this workflow's cron, except unbounded.
+#
+# So an already-signalled position is still checked, and re-alerts ONLY on a
+# reason that outranks the one already sent. The ranking is the rules' own
+# evaluation order in check_option_position() — risk before reward, both before
+# the softer signals — so "outranks" means "more urgent", not "newer".
+#
+#   STOP after THESIS   -> alerts. This is the case the gap was losing.
+#   STOP after TARGET   -> alerts. You did not take the profit and it turned.
+#   THESIS after STOP   -> silent. You have already been told the worse thing.
+#   THESIS after THESIS -> silent. No new information, and a repeat every hour
+#                          is what the exit_alerted flag was added to stop.
+EXIT_PRIORITY = {"STOP": 0, "TARGET": 1, "TIME": 2, "HOLD": 3, "THESIS": 4}
+
+# Statuses run() still evaluates. EXIT_SIGNALLED is in here deliberately; see
+# EXIT_PRIORITY above.
+MONITORED_STATUSES = ("OPEN", "EXIT_SIGNALLED")
+
+
+def outranks(new_reason: str, previous_reason: str | None) -> bool:
+    """
+    True when `new_reason` is urgent enough to alert again.
+
+    An unknown or missing previous reason is treated as the LOWEST rank, so a
+    position carrying a status this module does not recognise still gets its
+    stop. Failing the other way would re-create the silence this exists to end.
+    """
+    if not previous_reason:
+        return True
+    lo = len(EXIT_PRIORITY)
+    return EXIT_PRIORITY.get(new_reason, lo) < EXIT_PRIORITY.get(previous_reason, lo)
+
+
 def check_option_position(pos: dict) -> dict:
     """
     Evaluate every enabled exit rule. Priority: STOP, TARGET, TIME, HOLD,
@@ -440,13 +487,19 @@ def check_option_position(pos: dict) -> dict:
     return {**info, "exit": False}
 
 
-def format_alert(pos: dict, ev: dict) -> str:
+def format_alert(pos: dict, ev: dict, escalated_from: str | None = None) -> str:
     icons = {"TARGET": "🎯", "STOP": "🛑", "TIME": "⏳", "HOLD": "📆",
              "THESIS": "📉"}
     icon = icons.get(ev["reason"], "⚠️")
     contract = (f"{pos['ticker']} {pos['expiry']} "
                 f"${pos['strike']:g} {pos['right'].upper()}")
-    lines = [f"{icon} <b>EXIT {ev['reason']}</b>", "", f"<b>{contract}</b>", ""]
+    head = f"{icon} <b>EXIT {ev['reason']}</b>"
+    if escalated_from:
+        # Say plainly that this is a SECOND alert on a position already
+        # flagged, or it reads as a duplicate and gets dismissed as noise —
+        # which is the opposite of what an escalation to STOP needs.
+        head += f" (escalated from {escalated_from})"
+    lines = [head, "", f"<b>{contract}</b>", ""]
     lines.append(f"Reason:  {ev['detail']}")
     if ev.get("mid") is not None:
         lines.append(f"Premium: {pos['entry_premium']:.2f} → {ev['mid']:.2f} "
@@ -637,9 +690,9 @@ def run(args) -> int:
         diagnose(positions)
         return 0
 
-    open_pos = [p for p in positions if p.get("status") == "OPEN"]
+    open_pos = [p for p in positions if p.get("status") in MONITORED_STATUSES]
     if not open_pos:
-        logger.info("No OPEN positions — nothing to check.")
+        logger.info("No OPEN or EXIT_SIGNALLED positions — nothing to check.")
         return 0
     if not args.force and not is_market_open():
         logger.info("Market closed — skipping. (--force to override.)")
@@ -651,7 +704,9 @@ def run(args) -> int:
     unpriced: list[str] = []
 
     for pos in positions:
-        if pos.get("status") != "OPEN":
+        # EXIT_SIGNALLED is still watched — see EXIT_PRIORITY. Only a
+        # higher-priority reason gets through to an alert below.
+        if pos.get("status") not in MONITORED_STATUSES:
             continue
         if not pos.get("right"):
             logger.info("%s — not an option position, skipping.",
@@ -689,13 +744,35 @@ def run(args) -> int:
             continue
 
         logger.info("%s EXIT %s — %s", tag, ev["reason"], ev["detail"])
-        if pos.get("exit_alerted"):
-            logger.info("  already alerted — not re-sending.")
+        prev = pos.get("exit_reason") if pos.get("exit_alerted") else None
+        if prev and not outranks(ev["reason"], prev):
+            # Already alerted, and this reason is no more urgent than the one
+            # sent. Not silence: the position stays watched and its clock keeps
+            # ticking, so a STOP after this can still get through.
+            logger.info("  already alerted %s, and %s does not outrank it — "
+                        "not re-sending (still watching).", prev, ev["reason"])
+            if not args.dry_run:
+                pos["last_check_epoch"] = now_epoch
             continue
+        if prev:
+            logger.warning("  ESCALATION: %s outranks the %s already alerted.",
+                           ev["reason"], prev)
 
-        if send_telegram(format_alert(pos, ev), dry_run=args.dry_run):
+        if send_telegram(format_alert(pos, ev, escalated_from=prev),
+                         dry_run=args.dry_run):
             sent += 1
             if not args.dry_run:
+                # The earlier verdict is KEPT, not overwritten in place. A
+                # position that went THESIS then STOP is a different history
+                # from one that only ever stopped, and the journal is the one
+                # record of what the rules actually said.
+                if prev:
+                    pos.setdefault("exit_history", []).append({
+                        "reason": prev, "detail": pos.get("exit_detail"),
+                        "premium": pos.get("exit_premium"),
+                        "pnl_pct": pos.get("exit_pnl_pct"),
+                        "detected": pos.get("exit_detected"),
+                    })
                 pos.update({
                     "exit_alerted": True, "status": "EXIT_SIGNALLED",
                     "exit_reason": ev["reason"], "exit_detail": ev["detail"],
@@ -897,6 +974,87 @@ def selftest() -> int:
     finally:
         _g["get_option_quote"] = _real_quote
         _g["get_underlying_state"] = _real_under
+
+    # ══════════════════════════════════════════════════════════════
+    # AN EXIT_SIGNALLED POSITION IS STILL WATCHED
+    # ══════════════════════════════════════════════════════════════
+    #
+    # THE GAP THIS PINS. run() selected `status == "OPEN"`, so the first rule to
+    # fire ended monitoring for good and nothing could put it back. Decline a
+    # THESIS or a HOLD — both judgement calls — and the STOP rule was dead for
+    # the life of the position, on a long option where the premium is the whole
+    # risk.
+    #
+    # Driven through run() itself, not through outranks(). The bug was never in
+    # the ranking; it was in which positions run() looked at, and a unit test on
+    # the comparator would have passed throughout.
+    import argparse as _ap
+    import tempfile as _tf
+    from pathlib import Path as _P
+
+    assert outranks("STOP", "THESIS") and outranks("STOP", "TARGET")
+    assert not outranks("THESIS", "STOP") and not outranks("THESIS", "THESIS")
+    assert outranks("STOP", None), "a never-alerted position always alerts"
+    assert outranks("STOP", "WHAT_IS_THIS"), \
+        "an unrecognised previous reason must not be able to suppress a STOP"
+    print("priority          : STOP outranks THESIS/TARGET; THESIS never outranks")
+
+    def _run_once(rows, quote):
+        """run() over a temp positions file. Returns (sent, rows_after)."""
+        d = _P(_tf.mkdtemp()) / "pos.json"
+        d.write_text(json.dumps(rows))
+        _g["get_option_quote"] = lambda *a, **k: quote
+        _g["get_underlying_state"] = lambda *a, **k: None
+        _g["send_telegram"] = lambda *a, **k: True
+        try:
+            args = _ap.Namespace(positions=str(d), diagnose=False, force=True,
+                                 dry_run=False)
+            _sent = run(args)
+            assert _sent == 0, _sent
+            return json.loads(d.read_text())
+        finally:
+            _g["get_option_quote"] = _real_quote
+            _g["get_underlying_state"] = _real_under
+            _g["send_telegram"] = _real_send
+
+    _real_send = _g["send_telegram"]
+    _base = {"id": "X", "ticker": "TEST", "right": "CALL", "strike": 10.0,
+             "expiry": "2099-01-01", "contracts": 1.0, "entry_premium": 1.00,
+             "rules": {"tp_pct": 200, "sl_pct": 50},
+             "status": "EXIT_SIGNALLED", "exit_alerted": True,
+             "exit_reason": "THESIS", "exit_detail": "closed below EMA20"}
+
+    # A STOP after a declined THESIS MUST get through. This is the whole point.
+    _after = _run_once([dict(_base)], {"mid": 0.40, "reliable": True,
+                                       "spread_pct": 3.0})[0]
+    assert _after["exit_reason"] == "STOP", (
+        f"a STOP on a position already flagged THESIS was not alerted "
+        f"(reason is still {_after['exit_reason']!r}). This is the gap: "
+        f"declining a soft exit used to kill the stop for good.")
+    assert _after["exit_history"][0]["reason"] == "THESIS", \
+        "the earlier verdict must be kept, not overwritten in place"
+    print("escalation        : STOP after a declined THESIS alerts, "
+          "and THESIS is kept in exit_history")
+
+    # The same THESIS again must NOT re-alert — that is the noise the
+    # exit_alerted flag was added to stop, and it must survive this change.
+    _quiet = dict(_base, exit_reason="STOP", exit_detail="premium -60%")
+    _after2 = _run_once([_quiet], {"mid": 0.40, "reliable": True,
+                                   "spread_pct": 3.0})[0]
+    assert "exit_history" not in _after2, (
+        "a STOP on a position already flagged STOP re-alerted; the hourly "
+        "duplicate is exactly what the already-alerted flag exists to prevent")
+    assert _after2["last_check_epoch"] > 0, \
+        "a suppressed position must still have been CHECKED, or it is not " \
+        "being watched at all — only quietly ignored"
+    print("no repeat         : same reason stays silent, but the clock still ticks")
+
+    # And a position in neither status is left alone.
+    _closed = _run_once([dict(_base, status="CLOSED")], {"mid": 0.40,
+                                                         "reliable": True})[0]
+    assert _closed["exit_reason"] == "THESIS" and "exit_history" not in _closed, \
+        "only OPEN and EXIT_SIGNALLED are monitored"
+    print("scope             : CLOSED positions are not touched")
 
     print("=" * 66)
     print("All self-tests passed.")

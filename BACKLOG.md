@@ -661,7 +661,27 @@ containment as the `stop`/`orig_stop` regression in #89.
 
 ---
 
-## 19. An EXIT_SIGNALLED position is never monitored again, and there is no way back
+## 19. ~~An EXIT_SIGNALLED position is never monitored again~~ — CLOSED 2026-09-16
+
+**Owner picked the fail-safe design 2026-09-16.** An `EXIT_SIGNALLED` position
+stays monitored and re-alerts only on a reason that OUTRANKS the one already
+sent, ranked by `check_option_position()`'s own evaluation order
+(`EXIT_PRIORITY`: STOP, TARGET, TIME, HOLD, THESIS).
+
+  - STOP after a declined THESIS **alerts** — the case the gap was losing.
+  - STOP after TARGET **alerts** — you did not take the profit and it turned.
+  - THESIS after STOP, or the same reason twice, stays **silent** — the hourly
+    duplicate `exit_alerted` was added to stop.
+
+The earlier verdict is appended to `exit_history` rather than overwritten: a
+position that went THESIS then STOP is a different history from one that only
+ever stopped. An unrecognised previous reason ranks LOWEST, so a status this
+module does not know cannot suppress a stop.
+
+Pinned by tests that drive `run()` end to end, not the comparator — the bug was
+never in the ranking, it was in which positions `run()` looked at, and a unit
+test on `outranks()` would have passed throughout. Falsified two ways.
+
 
 **Found 2026-09-16 by review; see `results/code_review_2026-09-16.md` (H3).**
 
