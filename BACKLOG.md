@@ -575,7 +575,47 @@ that distinguishes a confirmed record from a stale one.
 
 ---
 
-## 17. The forward log records into a void — and could not be settled if it did
+## 17. The forward log — 3 of 4 closed 2026-09-16; outcomes still open
+
+**CLOSED: it persists, and it records signals rather than scans.**
+
+  - `record_signal()` now requires the SIGNAL BAR's date and dedupes on
+    `(ticker, trend, bar_date)`. The scanner runs three times a day and
+    `drop_partial_bar()` means all three read the same settled bar, so one
+    signal was writing three rows a day. The dedupe is in the module, not the
+    caller, so a second caller cannot reintroduce it.
+  - `scanner.yml` now stages and commits `forward_log.jsonl`. **Order mattered:**
+    committing before the dedupe would have written those triplicates into an
+    append-only chain that cannot be cleaned, only abandoned.
+  - `check_forward_log_single_writer()` pins both facts.
+  - `_log("taken")` runs before the cooldown and before `send_alert()`, so it
+    means "the rules produced a tradeable signal", not "a message went out".
+    That is the right semantic for this log; it is now written down where the
+    caller sees it, rather than left to be rediscovered from a mismatched rate.
+
+**STILL OPEN: `record_outcome()` has no caller, and wiring it is a DESIGN
+DECISION, not a missing line.**
+
+`append()` takes `seq = len(rows)+1` and `prev = rows[-1]["hash"]`, so two
+processes appending from the same file produce rows with the SAME seq and prev.
+Git merges both and the chain does not verify — **permanently**, because an
+append-only log whose hashes cover the seq cannot be renumbered to repair it.
+Demonstrated in `forward_log.selftest()`.
+
+The obvious caller is `journal_store.close_position()`, which runs in the app on
+**Streamlit Cloud** — a different machine from the scanner's Actions runner. So
+it cannot simply append. Three routes, and one must be chosen:
+
+  1. the scanner attaches outcomes, reading closed trades from the journal;
+  2. the app keeps its own chain file and the two are reconciled offline;
+  3. the log moves somewhere with a single writer and real appends.
+
+**A second question to settle first: WHICH R.** `close_position()` computes a
+return on PREMIUM; a signal row's `setup` carries entry/stop/target on the
+UNDERLYING. Those are different denominators, and recording one against the
+other is the same basis error that put a TP+100 win rate against a TP+200
+breakeven in `risk_params.py`. Whatever calls it must carry the basis on the row.
+
 
 **Found 2026-09-16 by review; see `results/code_review_2026-09-16.md` (H1).**
 
@@ -616,7 +656,27 @@ it is not what the field name says.
 
 ---
 
-## 18. `longs_only.simulate()` books P&L at entry — `portfolio_replay_run1` is void
+## 18. ~~`longs_only.simulate()` books P&L at entry~~ — CODE FIXED 2026-09-16; RE-RUN OWED
+
+**The accounting is fixed and pinned. The published numbers are not yet replaced.**
+
+P&L is now carried on the position and realised at its EXIT date, so the equity
+a trade is sized on contains every result known on its entry date and nothing
+else. Anything still open at the sample end settles in exit order rather than
+vanishing. The per-year table counts and pays a trade in the year it CLOSED, or
+its two columns describe different trades.
+
+Pinned three ways in `longs_only.selftest()` and falsified by restoring the
+entry-time booking: the overlapping-trade case (10,400.00, not 10,395.00), the
+deployment ratio (never above the 100% the constraint enforced — this is what
+"101% of equity" in the old run actually was), and the still-open-at-end case.
+
+**OWED: `python longs_only.py` in a session that can reach Yahoo.**
+`results/portfolio_replay_run1.txt` is marked VOID in place and states that the
+code has moved underneath it. Every number in it changes — four curves, both
+CAGRs, both drawdowns, and the "49% survives" claim about the break-even rule.
+Until that run exists, quote nothing from it.
+
 
 **Found 2026-09-16 by review; see `results/code_review_2026-09-16.md` (H2).**
 
@@ -661,7 +721,27 @@ containment as the `stop`/`orig_stop` regression in #89.
 
 ---
 
-## 19. An EXIT_SIGNALLED position is never monitored again, and there is no way back
+## 19. ~~An EXIT_SIGNALLED position is never monitored again~~ — CLOSED 2026-09-16
+
+**Owner picked the fail-safe design 2026-09-16.** An `EXIT_SIGNALLED` position
+stays monitored and re-alerts only on a reason that OUTRANKS the one already
+sent, ranked by `check_option_position()`'s own evaluation order
+(`EXIT_PRIORITY`: STOP, TARGET, TIME, HOLD, THESIS).
+
+  - STOP after a declined THESIS **alerts** — the case the gap was losing.
+  - STOP after TARGET **alerts** — you did not take the profit and it turned.
+  - THESIS after STOP, or the same reason twice, stays **silent** — the hourly
+    duplicate `exit_alerted` was added to stop.
+
+The earlier verdict is appended to `exit_history` rather than overwritten: a
+position that went THESIS then STOP is a different history from one that only
+ever stopped. An unrecognised previous reason ranks LOWEST, so a status this
+module does not know cannot suppress a stop.
+
+Pinned by tests that drive `run()` end to end, not the comparator — the bug was
+never in the ranking, it was in which positions `run()` looked at, and a unit
+test on `outranks()` would have passed throughout. Falsified two ways.
+
 
 **Found 2026-09-16 by review; see `results/code_review_2026-09-16.md` (H3).**
 
@@ -692,7 +772,20 @@ property this monitor exists for.
 
 ---
 
-## 20. The earnings blackout is a second duplicated gate implementation
+## 20. ~~The earnings blackout is a second duplicated gate implementation~~ — CLOSED 2026-09-16
+
+**Merged into `market_context.py`, the module that already owns the weekly trend
+and the SPY regime.** Both callers delegate; the window arithmetic exists in one
+place; `check_earnings_gate_shared()` pins all three facts and was falsified
+three ways (single-date read, a caller dropping the delegation, a caller
+re-growing its own window).
+
+**The window semantics already agreed** — app's two branches combined to exactly
+the scanner's single inclusive test — so a constants check would have passed.
+The divergence was in PARSING: yfinance returns "Earnings Date" as a range of
+two estimates more often than not, and app read only the first element. Reading
+every date is the stricter rule and the one kept.
+
 
 **Found 2026-09-16 by review; see `results/code_review_2026-09-16.md` (M3).**
 

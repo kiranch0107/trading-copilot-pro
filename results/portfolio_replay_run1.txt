@@ -1,27 +1,38 @@
 !! VOID — DO NOT QUOTE THESE NUMBERS. Recorded 2026-09-16.
 !!
-!! longs_only.simulate() books each trade's P&L at its ENTRY date, not at its
-!! EXIT date, while the position stays open in the book until it closes. Every
-!! number below is affected:
+!! THE CODE HAS SINCE BEEN FIXED; THESE NUMBERS PREDATE THE FIX and were never
+!! re-run, because the session that fixed it had no market-data access. So this
+!! file does not describe what longs_only.py now produces, and it does not
+!! describe what the account did either. It describes a bug.
 !!
-!!   - Overlapping trades are sized on their neighbours' UNREALISED results
-!!     (peak concurrency in this run is 5), so the compounding looks ahead.
-!!   - The capital constraint tests `deployed + value > equity` against an
-!!     equity inflated by those unrealised gains, so "constrained" is looser
+!! WHAT WAS WRONG. longs_only.simulate() booked each trade's P&L at its ENTRY
+!! date while the position stayed open in the book until it closed, so a
+!! trade's result funded the account before it happened:
+!!
+!!   +5 R entered 01-02 exits 03-01 ; -1 R entered 01-03 exits 03-02
+!!   got     10,395.00   (trade 2 sized on trade 1's unrealised +500)
+!!   correct 10,400.00
+!!
+!! Every number below is affected:
+!!
+!!   - Overlapping trades were sized on their neighbours' UNREALISED results.
+!!     Peak concurrency in this run is 5, so it is not a corner case.
+!!   - The capital constraint tested `deployed + value > equity` against an
+!!     equity inflated by those unrealised gains, so "constrained" was looser
 !!     than it claims and the idealised-vs-constrained gap — the stated
 !!     finding — is understated.
-!!   - The equity curve is indexed by entry order with each trade's full P&L
+!!   - The equity curve was indexed by entry order with each trade's full P&L
 !!     landing at its open, so max DD is not the path the account took.
-!!   - "peak capital deployed 101% of equity" is an artifact of the same thing,
-!!     not real over-deployment: the ratio divides by an equity that has
-!!     already absorbed the new trade's loss.
+!!   - "peak capital deployed 101% of equity" is that artifact, not real
+!!     over-deployment: the ratio divided by an equity that had already
+!!     absorbed the new trade's loss. Post-fix it cannot exceed 100%.
 !!
-!! R-multiples are untouched, so exit_ab, drift_null and the tranche C
-!! confirmation are NOT affected — same containment as the stop/orig_stop
+!! R-multiples were never affected, so exit_ab, drift_null and the tranche C
+!! confirmation still stand — same containment as the stop/orig_stop
 !! regression in #89.
 !!
-!! BACKLOG item 18 has the fix and the reproduction. The fix and the re-run are
-!! one change; this file stays void until that run replaces it.
+!! TO REPLACE THIS FILE: `python longs_only.py` in a session that can reach
+!! Yahoo. BACKLOG item 18 carries the detail.
 
   collecting long trades ...
     1254 long trades

@@ -332,6 +332,85 @@ def check_market_context_shared() -> None:
                 f"so live must use the rule the backtest validated.")
     print("  live SPY regime == backtest.build_regime_series() (the validated rule)")
 
+
+def check_earnings_gate_shared() -> None:
+    """
+    The earnings blackout is ONE implementation, and it reads EVERY date.
+
+    THE BUG THIS PINS. app.py and scanner.py each carried their own copy. The
+    window semantics agreed, so a constants check would have passed — but the
+    PARSING did not: app read only the first element of the calendar's
+    "Earnings Date", scanner iterated all of them. yfinance returns that field
+    as a RANGE of two estimates for one event more often than not, so on a
+    ticker where the blackout matched the second estimate the app said CLEAR
+    and the scanner said BLOCKED, on the same ticker at the same moment.
+
+    Checked three ways, because a source grep alone is what let the last
+    duplicated rule sit here for months:
+      1. both callers delegate (source — app.py cannot be imported, it is a
+         Streamlit script that renders UI and fetches on import);
+      2. neither carries the date-window arithmetic any more;
+      3. the shared rule is DRIVEN, through scanner's real call path, on the
+         exact two-estimate case the two used to disagree on.
+    """
+    import datetime as _dt
+    import market_context as mc
+
+    for path in ("app.py", "scanner.py"):
+        txt = Path(path).read_text()
+        i = txt.index("def check_earnings_blackout(")
+        body = txt[i:i + 2500]
+        if "market_context.get_earnings_blackout" not in body:
+            raise AssertionError(
+                f"{path}: check_earnings_blackout() no longer delegates to "
+                f"market_context.get_earnings_blackout(). Two copies of this "
+                f"gate is how the app and the scanner reached opposite "
+                f"verdicts on the same ticker.")
+        # A reimplementation would have to do the window arithmetic itself.
+        for tell in ("POST_EARNINGS_DAYS <=", "<= EARNINGS_DAYS",
+                     "<= EARNINGS_BLACKOUT_DAYS"):
+            if tell in body:
+                raise AssertionError(
+                    f"{path}: check_earnings_blackout() computes the blackout "
+                    f"window itself ({tell!r}). The window lives in "
+                    f"market_context.earnings_blackout_from_dates() and "
+                    f"nowhere else.")
+        print(f"  {path:12} delegates the earnings gate, carries no window of its own")
+
+    # ── DRIVEN, not grepped: the two-estimate range both callers now share ──
+    import scanner as sc
+    _today = _dt.date(2026, 9, 16)
+    # The EARLIER date is long past and clears; the LATER one is inside the
+    # window. calendar_dates() sorts, so a "first date only" reimplementation
+    # reads the harmless one — which is precisely how app.py used to clear a
+    # ticker the scanner blocked. A fixture ordered the other way would be
+    # rescued by the sort and would pass on the bug it exists to catch.
+    _range = {"Earnings Date": ["2026-08-20", "2026-09-18"]}
+    _real_cal, _real_now = sc._earnings_calendar, sc.datetime
+    try:
+        sc._earnings_calendar = lambda t: _range
+
+        class _Clock:                      # freeze scanner's ET clock
+            @staticmethod
+            def now(tz=None):
+                return _dt.datetime(2026, 9, 16, 12, 0)
+        sc.datetime = _Clock
+        ok, why = sc.check_earnings_blackout("ZZ")
+    finally:
+        sc._earnings_calendar, sc.datetime = _real_cal, _real_now
+
+    if ok:
+        raise AssertionError(
+            f"the earnings gate cleared a ticker whose SECOND calendar estimate "
+            f"(2026-09-18) is 2 days out, inside the 3-day blackout: {why!r}. "
+            f"Reading only the first date is exactly what app.py used to do.")
+    # And the fixture must depend on that second date, or it proves nothing.
+    if not mc.earnings_blackout_from_dates([_dt.date(2026, 8, 20)], _today)[0]:
+        raise AssertionError(
+            "the fixture's EARLIER date already blocks, so this check would "
+            "pass even on the single-date bug it exists to catch")
+    print(f"  driven: blocks on the later estimate too — {why}")
+
     # ADX must not have been reintroduced as a gate. Uses market_context's own
     # verified low-ADX fixture (ADX ~11) — an earlier fixture here measured
     # ADX 26, above the old threshold, so it passed whether or not the gate
@@ -1872,6 +1951,56 @@ def check_duplicated_constants_agree() -> None:
     print(f"  {len(dupes)} constants duplicated across {total} definitions, all agreeing")
 
 
+def check_forward_log_single_writer() -> None:
+    """
+    Exactly ONE module appends to the forward log, and the workflow commits it.
+
+    THE CONSTRAINT. forward_log.append() takes `seq = len(rows) + 1` and
+    `prev = rows[-1]["hash"]`, so two processes appending from the same starting
+    file produce rows with the SAME seq and the SAME prev. Git merges both and
+    the result does not verify — permanently, because the log is append-only and
+    the hashes are computed over the seq, so it cannot be renumbered to repair.
+
+    scanner.py is the writer (GitHub Actions, commits after each scan). app.py
+    runs on Streamlit Cloud, a different machine, so it must never append —
+    which is why record_outcome() still has no caller. That is a decision about
+    who owns the chain, not a wiring gap; BACKLOG 17 carries it.
+
+    AND THE COMMIT MUST EXIST. The log lives on an ephemeral runner. Without the
+    workflow committing it, every row is destroyed with the container — which is
+    exactly the state this repo was in from the day the log was added until
+    2026-09-16: a tamper-evident record with no data and no anchor.
+    """
+    writers = []
+    for p in sorted(Path(".").glob("*.py")):
+        if p.name in ("forward_log.py", "consistency_check.py"):
+            continue
+        txt = p.read_text()
+        if "forward_log.record_signal" in txt or "forward_log.record_outcome" in txt \
+                or "forward_log.append" in txt:
+            writers.append(p.name)
+    if writers != ["scanner.py"]:
+        raise AssertionError(
+            f"the forward log must have exactly one writer and it must be "
+            f"scanner.py; found {writers or 'none'}. Two writers produce rows "
+            f"with the same seq and prev, and the merged chain does not verify "
+            f"— permanently, because an append-only log cannot be renumbered.")
+    print(f"  one writer: {writers[0]}")
+
+    wf = Path(".github/workflows/scanner.yml").read_text()
+    if "forward_log.jsonl" not in wf:
+        raise AssertionError(
+            "scanner.yml does not commit forward_log.jsonl. The runner is "
+            "ephemeral, so every signal the log records is destroyed with the "
+            "container — and a hash chain cannot detect its own tail being "
+            "cut, so git is its only anchor. .gitignore says exactly this.")
+    if "git add" not in wf or "forward_log.jsonl" not in wf.split("git add", 1)[1][:120]:
+        raise AssertionError(
+            "scanner.yml mentions forward_log.jsonl but does not `git add` it "
+            "— a file that is never staged is never committed.")
+    print("  scanner.yml stages and commits forward_log.jsonl (its only anchor)")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -1880,8 +2009,10 @@ CHECKS = [
     ("app.py defaults derive from signal_core",    check_app_defaults_derived),
     ("backtest.evaluate_signal callers correct",   check_backtest_callers),
     ("weekly trend + SPY regime are one rule",     check_market_context_shared),
+    ("earnings gate is one rule, reads every date", check_earnings_gate_shared),
     ("capital never gates an alert",             check_capital_never_gates_alerts),
     ("forward log carries no test data",         check_forward_log_has_no_test_data),
+    ("forward log has one writer, and is committed", check_forward_log_single_writer),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),

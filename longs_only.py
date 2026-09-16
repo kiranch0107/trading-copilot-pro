@@ -99,7 +99,35 @@ def simulate(trades: list[dict], *, account: float, risk_pct: float,
 
     for t in trades:
         ed = str(t.get("entry_date"))
-        # retire positions that closed before this entry
+        # ── REALISE THE P&L OF EVERYTHING THAT CLOSED BEFORE THIS ENTRY ──
+        #
+        # THE BUG THIS FIXES. `equity += pnl` used to run in the iteration that
+        # OPENED the position, while the position stayed in open_pos until its
+        # exit date. So a trade's result funded the account before it happened:
+        #
+        #   +5 R entered 01-02, exits 03-01 ; -1 R entered 01-03, exits 03-02
+        #   got     10,395.00   (trade 2 sized on 10,500 -- trade 1's
+        #                        unrealised +500, two months before it closed)
+        #   correct 10,400.00
+        #
+        # Three consequences, all of them in results/portfolio_replay_run1.txt:
+        # the compounding looked ahead (peak concurrency in that run is 5); the
+        # capital constraint tested `deployed + value > equity` against an
+        # equity inflated by unrealised gains, so "constrained" was looser than
+        # it claimed and the idealised-vs-constrained gap -- the module's whole
+        # finding -- was understated; and `curve` was indexed by entry order
+        # with each trade's full P&L landing at its open, so max drawdown was
+        # not the path the account took. The module calls drawdown "the number
+        # worth trusting most in this file".
+        #
+        # Closing first also means the equity a trade is sized on includes every
+        # result that was actually known on its entry date, and nothing else.
+        for p in [p for p in open_pos if p["exit_date"] <= ed]:
+            equity += p["pnl"]
+            wins += int(p["pnl"] > 0)
+            curve.append(equity)
+            per_year[p["exit_date"][:4]]["pnl"] += p["pnl"]
+            per_year[p["exit_date"][:4]]["n"] += 1
         open_pos = [p for p in open_pos if p["exit_date"] > ed]
         deployed = sum(p["value"] for p in open_pos)
 
@@ -132,18 +160,27 @@ def simulate(trades: list[dict], *, account: float, risk_pct: float,
                 skipped += 1
                 continue
 
+        # P&L is CARRIED on the position and realised at its exit date above,
+        # not booked here. `taken` counts the ENTRY decision; the per-year table
+        # counts and pays a trade in the year it CLOSED, or its two columns
+        # would describe different trades.
         pnl = float(t["r"]) * risk_dollars * scale
-        equity += pnl
         taken += 1
-        wins += int(pnl > 0)
-        curve.append(equity)
-        open_pos.append({"exit_date": str(t.get("exit_date", ed)), "value": value})
+        open_pos.append({"exit_date": max(str(t.get("exit_date", ed)), ed),
+                         "value": value, "pnl": pnl})
         deployed_now = sum(p["value"] for p in open_pos)
         peak_deployed = max(peak_deployed, 100.0 * deployed_now / equity)
         peak_concurrent = max(peak_concurrent, len(open_pos))
-        yr = ed[:4]
-        per_year[yr]["pnl"] += pnl
-        per_year[yr]["n"] += 1
+
+    # Whatever is still open at the end of the sample settles now, in exit
+    # order — otherwise the final equity silently drops the last trades, which
+    # is the same class of silent loss as the `continue` above.
+    for p in sorted(open_pos, key=lambda x: x["exit_date"]):
+        equity += p["pnl"]
+        wins += int(p["pnl"] > 0)
+        curve.append(equity)
+        per_year[p["exit_date"][:4]]["pnl"] += p["pnl"]
+        per_year[p["exit_date"][:4]]["n"] += 1
 
     arr = np.array(curve, dtype=float)
     peak = np.maximum.accumulate(arr)
@@ -438,6 +475,49 @@ def selftest() -> int:
         f"a trade with entry == stop was dropped without being counted: {_u}")
     assert _u["taken"] == 1, _u["taken"]
     print("unusable risk    : entry == stop is counted, not silently dropped")
+
+    # ── P&L IS REALISED AT THE EXIT DATE, NOT THE ENTRY DATE ──
+    #
+    # THE BUG THIS PINS. `equity += pnl` ran in the iteration that OPENED the
+    # position while the position stayed open in the book, so a trade's result
+    # funded the account before it happened. The replay reported a CAGR and a
+    # max drawdown built on it, and the module calls drawdown "the number worth
+    # trusting most in this file".
+    _ov = [{"entry_date": "2020-01-02", "exit_date": "2020-03-01",
+            "entry": 100.0, "stop": 98.0, "r": 5.0, "trend": "Bullish"},
+           {"entry_date": "2020-01-03", "exit_date": "2020-03-02",
+            "entry": 100.0, "stop": 98.0, "r": -1.0, "trend": "Bullish"}]
+    _r = simulate(_ov, account=10_000, risk_pct=1.0, constrained=False)
+    assert abs(_r["equity"] - 10_400.0) < 1e-6, (
+        f"equity {_r['equity']:.2f}, expected 10400.00. The second trade was "
+        f"sized on the first's UNREALISED +500, two months before it closed — "
+        f"that is lookahead in the compounding.")
+    assert _r["unusable"] == 0
+    print(f"realisation      : overlapping trades settle at their EXIT dates "
+          f"(equity {_r['equity']:,.2f}, not 10,395.00)")
+
+    # Deployment can no longer exceed the equity the constraint checked against.
+    # "peak capital deployed 101% of equity" in portfolio_replay_run1 was this
+    # artifact: the ratio divided by an equity that had already absorbed the
+    # new trade's loss.
+    _losers = [{"entry_date": f"2020-01-0{i}", "exit_date": "2020-06-01",
+                "entry": 100.0, "stop": 96.0, "r": -1.0, "trend": "Bullish"}
+               for i in range(1, 6)]
+    _c = simulate(_losers, account=10_000, risk_pct=1.0, constrained=True)
+    assert _c["peak_deployed_pct"] <= 100.0 + 1e-9, (
+        f"peak deployment {_c['peak_deployed_pct']:.1f}% of equity, but the "
+        f"constraint refuses anything over 100% — the ratio is being taken "
+        f"against an equity that already moved")
+    print(f"deployment       : peak {_c['peak_deployed_pct']:.0f}% of equity, "
+          f"never above the ceiling the constraint enforced")
+
+    # Nothing open at the end may be silently dropped.
+    _open_end = [{"entry_date": "2020-01-02", "exit_date": "2099-01-01",
+                  "entry": 100.0, "stop": 98.0, "r": 2.0, "trend": "Bullish"}]
+    _e = simulate(_open_end, account=10_000, risk_pct=1.0, constrained=False)
+    assert abs(_e["equity"] - 10_200.0) < 1e-6, (
+        f"a trade still open at the sample end was dropped: {_e['equity']}")
+    print("sample end       : still-open trades settle rather than vanish")
 
     print("=" * 72)
     print("All self-tests passed.")
