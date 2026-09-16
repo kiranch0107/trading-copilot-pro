@@ -322,7 +322,14 @@ ADX_MIN       = st.sidebar.number_input("ADX minimum",              value=int(_D
 EARNINGS_DAYS      = int(st.sidebar.number_input("Earnings blackout days",      value=3,   min_value=0, max_value=30))
 POST_EARNINGS_DAYS = int(st.sidebar.number_input("Post-earnings cooling (days)", value=1,   min_value=0, max_value=7,
     help="Also block signals N days AFTER earnings (avoids IV crush residual)"))
-BUDGET_MAX    = st.sidebar.number_input("Budget max (option mid)",   value=2.00, min_value=0.01, step=0.10)
+BUDGET_MAX    = st.sidebar.number_input("Budget max (option mid, per share)",
+                   value=2.00, min_value=0.01, step=0.10,
+                   help="The quoted MID, which is per share. One contract "
+                        "costs this x 100, so 2.00 here means $200 a "
+                        "contract. Separate from the account-level premium "
+                        "budget in risk_params (5% of the account); this one "
+                        "only labels a contract as a budget pick, it gates "
+                        "nothing. size_gate() is the gate.")
 MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",   value=12,   min_value=1,
     help="Minimum days-to-expiry to consider. Your swing target (2.5× ATR) usually needs "
          "~8 sessions to play out — a 1-2 DTE contract will lose to theta even if the "
@@ -1905,7 +1912,9 @@ with TAB_STOCK:
                                 )
 
                             if opt["is_budget"]:
-                                st.success(f"💸 Budget pick — \\${opt['mid']}/contract (under \\${BUDGET_MAX:.2f})")
+                                st.success(f"💸 Budget pick — mid \\${opt['mid']:.2f}/share = "
+                                           f"\\${opt['mid'] * 100:,.0f}/contract "
+                                           f"(under your \\${BUDGET_MAX:.2f}/share cap)")
                             if not r.get("all_pass", True):
                                 st.warning("⚠️ Not all filters pass — trade at your own discretion.")
 
@@ -2079,7 +2088,8 @@ with TAB_STOCK:
                             st.caption("Scalp targets are intraday — tight stops, monitor closely.")
 
                 with stab5:
-                    st.markdown(f"### 💸 Options under ${BUDGET_MAX:.2f}/contract")
+                    st.markdown(f"### 💸 Options under \\${BUDGET_MAX:.2f}/share "
+                                f"(\\${BUDGET_MAX * 100:,.0f}/contract)")
                     if r.get("blocked"):
                         st.warning("A valid swing setup is needed.")
                     else:
@@ -2094,7 +2104,9 @@ with TAB_STOCK:
                             )
                             st.caption("Budget options carry higher gamma risk — size accordingly.")
                         else:
-                            st.info(f"Best contract is \\${opt['mid']}/contract — above \\${BUDGET_MAX:.2f}. "
+                            st.info(f"Best contract is \\${opt['mid']:.2f}/share "
+                                    f"(\\${opt['mid'] * 100:,.0f}/contract) — above your "
+                                    f"\\${BUDGET_MAX:.2f}/share cap. "
                                     "Try a wider strike or longer expiry.")
 
                 st.divider()

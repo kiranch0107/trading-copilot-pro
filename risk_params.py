@@ -113,12 +113,20 @@ MAX_POSITION_PCT = 25.0
 # THE FULL SWEEP, and it is the reason the ceiling is a loss cap:
 #
 #     TP     win%   avg win   avg loss   realised   realised BE   expectancy   PF
-#     +50   32.7%    +74.4%    -46.7%     1.59:1        38.6%       -7.11%   0.77
-#     +75   26.9%   +103.8%    -45.7%     2.27:1        30.6%       -5.54%   0.83
-#    +100   24.9%   +120.0%    -45.1%     2.66:1        27.3%       -4.07%   0.88
-#    +150   22.1%   +135.4%    -44.6%     3.04:1        24.8%       -4.80%   0.86
-#    +200   21.9%   +143.0%    -44.6%     3.21:1        23.8%       -3.58%   0.90
-#    +300   21.9%   +144.7%    -44.6%     3.24:1        23.6%       -3.21%   0.91
+#     +50   32.7%    +74.4%    -46.7%     1.59:1        38.6%       -7.10%   0.77
+#     +75   26.9%   +103.8%    -45.7%     2.27:1        30.6%       -5.48%   0.83
+#    +100   24.9%   +120.0%    -45.1%     2.66:1        27.3%       -3.99%   0.88
+#    +150   22.1%   +135.4%    -44.6%     3.04:1        24.8%       -4.82%   0.86
+#    +200   21.9%   +143.0%    -44.6%     3.21:1        23.8%       -3.52%   0.90
+#    +300   21.9%   +144.7%    -44.6%     3.24:1        23.6%       -3.14%   0.91
+#
+# THE EXPECTANCY COLUMN IS RECOMPUTED FROM THE ROW, not carried from the run
+# that produced it. It used to read -4.07% at TP+100 where measured_option_edge()
+# returns -3.99% from the same three numbers, and -3.21% vs -3.14% at TP+300 --
+# small, but a table that disagrees with the function callers actually read is
+# the same defect as a duplicated constant, and this file exists to stop that.
+# Every value here is now exactly what measured_option_edge() computes; the
+# selftest asserts it.
 #
 # NO structure clears. Every row falls short of its own REALISED breakeven, and
 # the realised payoff is well below the nominal one because the DTE-7 floor and
@@ -415,6 +423,31 @@ def check_option_cost(entry_premium: float, contracts: float,
                         f"your {bpct:g}% premium budget.")}
 
 
+def _selftest_sweep_table() -> None:
+    """The expectancy column in the comment table IS measured_option_edge().
+
+    It drifted once already (-4.07% recorded where the function computes
+    -3.99%). Small, but a table that disagrees with the function callers read is
+    a duplicated constant wearing prose, and this file exists to stop exactly
+    that. Parsed out of this module's own source so the two cannot separate.
+    """
+    import re as _re
+    src = __import__("pathlib").Path(__file__).read_text(encoding="utf-8")
+    rows = _re.findall(
+        r"^#\s*\+(\d+)\s+[\d.]+%\s+\+[\d.]+%\s+-[\d.]+%\s+[\d.]+:1\s+"
+        r"[\d.]+%\s+([-+][\d.]+)%", src, _re.M)
+    assert len(rows) == len(OPT_SWEEP_BY_TP), (
+        f"parsed {len(rows)} sweep rows, expected {len(OPT_SWEEP_BY_TP)} — the "
+        f"table moved and this check stopped matching it")
+    for tp_s, exp_s in rows:
+        want = measured_option_edge(float(tp_s))["expectancy_pct"]
+        assert abs(float(exp_s) - want) < 0.005, (
+            f"TP+{tp_s}: the table says {exp_s}% but measured_option_edge() "
+            f"computes {want:+.2f}% from the same row. Callers read the "
+            f"function; the table is what a human reads.")
+    print(f"  sweep table: {len(rows)} expectancy values == measured_option_edge()")
+
+
 def _selftest_direction() -> None:
     """The gate blocks shorts, passes longs, and never blocks silently."""
     assert LONGS_ONLY is True, "the live system is longs-only; see drift_null"
@@ -439,6 +472,7 @@ def _selftest_direction() -> None:
 
 
 def selftest() -> int:
+    _selftest_sweep_table()
     _selftest_direction()
     assert DEFAULT_ACCOUNT_SIZE > 0
     assert 0 < DEFAULT_RISK_PCT <= 10, \

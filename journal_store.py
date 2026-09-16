@@ -447,27 +447,39 @@ def journal_stats(journal: list, mode: str | None = None) -> dict:
     if gp == 0: gp = sum(j["actual_rr"] for j in wins if j["actual_rr"] > 0)
     if gl == 0: gl = abs(sum(j["actual_rr"] for j in losses if j["actual_rr"] < 0))
     pf = round(gp/gl, 2) if gl else float("inf")
-    outcomes    = [j["outcome"] for j in sorted(journal, key=lambda x: x.get("closed", ""))]
+    # ORDER BY WHEN THE TRADE ACTUALLY CLOSED, not when the row was written.
+    #
+    # close_position() accepts a back-dated `closed_at` for a trade logged after
+    # the fact, and nothing read it: both the streak and the equity curve sorted
+    # on `closed`, which is always "now". So a trade closed last week, logged
+    # today, was plotted today — and a curve that reorders trades is a different
+    # path from the one the account took. Falls back to `closed` when there is
+    # no `closed_at`, which is every row written before the field existed.
+    def _closed_key(j):
+        return str(j.get("closed_at") or j.get("closed") or "")
+
+    outcomes    = [j["outcome"] for j in sorted(journal, key=_closed_key)]
     streak      = 0
     streak_type = outcomes[-1] if outcomes else ""
     for o in reversed(outcomes):
         if o == streak_type: streak += 1
         else: break
     # FIX #5: build equity curve for chart
-    sorted_j = sorted(journal, key=lambda x: x.get("closed", ""))
+    sorted_j = sorted(journal, key=_closed_key)
     cum_r    = 0.0
     cum_usd  = 0.0
     eq_curve = []
     eq_usd   = []
     for j in sorted_j:
         cum_r += j["actual_rr"]
-        eq_curve.append({"date": j["closed"][:10], "Cumulative R": round(cum_r, 2)})
+        eq_curve.append({"date": _closed_key(j)[:10],
+                         "Cumulative R": round(cum_r, 2)})
         # A dollar curve alongside the R one. The R curve rises while the
         # account falls whenever the losses land on the larger positions, which
         # is exactly what happened across the blended journal: +1.55R, -$132.
         if j.get("pnl_usd") is not None:
             cum_usd += j["pnl_usd"]
-            eq_usd.append({"date": j["closed"][:10],
+            eq_usd.append({"date": _closed_key(j)[:10],
                            "Cumulative $": round(cum_usd, 2)})
     # ── DOLLARS — the figure that is actually true ──
     # pnl_usd is absent on share trades (add_journal_trade never recorded a

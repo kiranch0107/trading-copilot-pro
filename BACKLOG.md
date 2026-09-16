@@ -656,7 +656,27 @@ it is not what the field name says.
 
 ---
 
-## 18. `longs_only.simulate()` books P&L at entry — `portfolio_replay_run1` is void
+## 18. ~~`longs_only.simulate()` books P&L at entry~~ — CODE FIXED 2026-09-16; RE-RUN OWED
+
+**The accounting is fixed and pinned. The published numbers are not yet replaced.**
+
+P&L is now carried on the position and realised at its EXIT date, so the equity
+a trade is sized on contains every result known on its entry date and nothing
+else. Anything still open at the sample end settles in exit order rather than
+vanishing. The per-year table counts and pays a trade in the year it CLOSED, or
+its two columns describe different trades.
+
+Pinned three ways in `longs_only.selftest()` and falsified by restoring the
+entry-time booking: the overlapping-trade case (10,400.00, not 10,395.00), the
+deployment ratio (never above the 100% the constraint enforced — this is what
+"101% of equity" in the old run actually was), and the still-open-at-end case.
+
+**OWED: `python longs_only.py` in a session that can reach Yahoo.**
+`results/portfolio_replay_run1.txt` is marked VOID in place and states that the
+code has moved underneath it. Every number in it changes — four curves, both
+CAGRs, both drawdowns, and the "49% survives" claim about the break-even rule.
+Until that run exists, quote nothing from it.
+
 
 **Found 2026-09-16 by review; see `results/code_review_2026-09-16.md` (H2).**
 
