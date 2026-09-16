@@ -575,7 +575,47 @@ that distinguishes a confirmed record from a stale one.
 
 ---
 
-## 17. The forward log records into a void — and could not be settled if it did
+## 17. The forward log — 3 of 4 closed 2026-09-16; outcomes still open
+
+**CLOSED: it persists, and it records signals rather than scans.**
+
+  - `record_signal()` now requires the SIGNAL BAR's date and dedupes on
+    `(ticker, trend, bar_date)`. The scanner runs three times a day and
+    `drop_partial_bar()` means all three read the same settled bar, so one
+    signal was writing three rows a day. The dedupe is in the module, not the
+    caller, so a second caller cannot reintroduce it.
+  - `scanner.yml` now stages and commits `forward_log.jsonl`. **Order mattered:**
+    committing before the dedupe would have written those triplicates into an
+    append-only chain that cannot be cleaned, only abandoned.
+  - `check_forward_log_single_writer()` pins both facts.
+  - `_log("taken")` runs before the cooldown and before `send_alert()`, so it
+    means "the rules produced a tradeable signal", not "a message went out".
+    That is the right semantic for this log; it is now written down where the
+    caller sees it, rather than left to be rediscovered from a mismatched rate.
+
+**STILL OPEN: `record_outcome()` has no caller, and wiring it is a DESIGN
+DECISION, not a missing line.**
+
+`append()` takes `seq = len(rows)+1` and `prev = rows[-1]["hash"]`, so two
+processes appending from the same file produce rows with the SAME seq and prev.
+Git merges both and the chain does not verify — **permanently**, because an
+append-only log whose hashes cover the seq cannot be renumbered to repair it.
+Demonstrated in `forward_log.selftest()`.
+
+The obvious caller is `journal_store.close_position()`, which runs in the app on
+**Streamlit Cloud** — a different machine from the scanner's Actions runner. So
+it cannot simply append. Three routes, and one must be chosen:
+
+  1. the scanner attaches outcomes, reading closed trades from the journal;
+  2. the app keeps its own chain file and the two are reconciled offline;
+  3. the log moves somewhere with a single writer and real appends.
+
+**A second question to settle first: WHICH R.** `close_position()` computes a
+return on PREMIUM; a signal row's `setup` carries entry/stop/target on the
+UNDERLYING. Those are different denominators, and recording one against the
+other is the same basis error that put a TP+100 win rate against a TP+200
+breakeven in `risk_params.py`. Whatever calls it must carry the basis on the row.
+
 
 **Found 2026-09-16 by review; see `results/code_review_2026-09-16.md` (H1).**
 

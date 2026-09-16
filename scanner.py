@@ -609,11 +609,30 @@ def analyze(df: pd.DataFrame, ticker: str,
             "longs_only": risk_params.LONGS_ONLY}
 
     def _log(decision: str, reason: str) -> None:
+        # "taken" MEANS "THE RULES PRODUCED A TRADEABLE SIGNAL", not "a Telegram
+        # message went out". This runs before run()'s alert cooldown and before
+        # send_alert(), so a signal suppressed as a 4-hour duplicate, or lost to
+        # a Telegram outage, is still recorded as taken.
+        #
+        # That is the right semantic for a record of what the RULES produced --
+        # which is what this log is for -- but it is not what the word implies,
+        # so it is written down here rather than left to be rediscovered from a
+        # rate that does not match the alerts received.
+        #
         # Never let a logging failure lose an alert. The record matters; it
         # does not matter more than the trade.
         try:
-            forward_log.record_signal(ticker, r["trend"], _setup, decision,
-                                      reason, _cfg)
+            # THE SIGNAL BAR'S DATE, not the time of the scan. This module runs
+            # three times a trading day and drop_partial_bar() removes today's
+            # in-progress bar, so all three runs evaluate THE SAME SETTLED BAR.
+            # Without this the log recorded one row per SCAN — three per signal
+            # per day — in a chain that is append-only and cannot be corrected.
+            # record_signal() dedupes on it and returns None for a repeat.
+            _bar = sc._bar_dates(df, None).max().date()
+            if forward_log.record_signal(ticker, r["trend"], _setup, decision,
+                                         reason, _cfg, bar_date=_bar) is None:
+                logger.debug("%s — %s bar %s already in the forward log",
+                             ticker, r["trend"], _bar)
         except Exception as exc:                       # noqa: BLE001
             logger.warning("%s — forward log write failed: %s", ticker, exc)
 
@@ -802,7 +821,14 @@ def _selftest_body() -> int:
     # mistake repeatedly — a guard aimed at the producer while the break sat in
     # the consumer. Drive the real function and read what comes back.
     import pandas as _pd
-    _frame = _pd.DataFrame({"Close": [100.0] * (MIN_BARS_AFTER_WARMUP + 5)})
+    # A REAL DATE INDEX. This was a bare RangeIndex, so _bar_dates() read the
+    # row numbers as epoch nanoseconds and every bar came back 1970-01-01 — fine
+    # while nothing looked at the date, useless the moment the forward log
+    # started keying on it. Production frames always carry a DatetimeIndex
+    # (compute() runs on yfinance bars); the fixture now does too.
+    _frame = _pd.DataFrame(
+        {"Close": [100.0] * (MIN_BARS_AFTER_WARMUP + 5)},
+        index=_pd.bdate_range("2026-01-05", periods=MIN_BARS_AFTER_WARMUP + 5))
 
     def _canned(trend):
         return {"blocked": False, "ticker": "ZZ", "trend": trend,
@@ -846,16 +872,52 @@ def _selftest_body() -> int:
         forward_log.LOG = _tmp
         globals()["get_weekly_trend"] = lambda t: "Bullish"
         globals()["check_earnings_blackout"] = lambda t: (True, "n/a")
-        for _trend, _hq in (("Bullish", True), ("Bearish", True),
-                            ("Bullish", False)):
+        # DISTINCT TICKERS, because a signal's identity is
+        # (ticker, trend, bar date) and these are three different signals.
+        # They used to share "ZZ" and one frame, which the dedupe now — quite
+        # correctly — collapses into one row.
+        for _tk, _trend, _hq in (("ZA", "Bullish", True),
+                                 ("ZB", "Bearish", True),
+                                 ("ZC", "Bullish", False)):
             _c = dict(_canned(_trend), high_quality=_hq)
             sc.evaluate = lambda *a, **k: _c
-            analyze(_frame, "ZZ")
+            analyze(_frame, _tk)
         _rows = forward_log.read_all(_tmp)
         assert len(_rows) == 3, (
             f"three signals fired and {len(_rows)} were logged. The ones that "
             f"never became alerts are exactly the ones that make the record "
             f"worth having")
+
+        # ── ONE ROW PER SIGNAL BAR, NOT ONE PER SCAN ──
+        #
+        # THE BUG THIS PINS. This module runs three times a trading day and
+        # drop_partial_bar() removes today's in-progress bar, so all three runs
+        # evaluate THE SAME SETTLED BAR. run()'s 4-hour cooldown does not help:
+        # it is checked AFTER analyze() has already written. So one signal
+        # produced three identical rows a day, in a chain that is append-only
+        # and cannot be corrected afterwards.
+        _c = dict(_canned("Bullish"), high_quality=True)
+        sc.evaluate = lambda *a, **k: _c
+        for _ in range(3):                      # three scans, one bar
+            analyze(_frame, "ZD")
+        _zd = [x for x in forward_log.read_all(_tmp) if x["ticker"] == "ZD"]
+        assert len(_zd) == 1, (
+            f"three scans of one settled bar wrote {len(_zd)} rows. The log "
+            f"would count scans, not signals, and inflate any rate taken from "
+            f"it roughly threefold")
+        assert _zd[0]["bar_date"] == str(sc._bar_dates(_frame, None).max().date()), (
+            f"the row must carry the SIGNAL BAR's date, not the scan time: "
+            f"{_zd[0].get('bar_date')}")
+        # A genuinely NEW bar is a new signal and must still be recorded.
+        _next = _frame.copy()
+        _next.index = _next.index + _pd.Timedelta(days=1)
+        analyze(_next, "ZD")
+        assert len([x for x in forward_log.read_all(_tmp)
+                    if x["ticker"] == "ZD"]) == 2, (
+            "the next bar is a new signal; deduping it away would make the log "
+            "record one row per setup forever")
+        print("forward log, dedupe     : 3 scans of one bar -> 1 row; "
+              "the next bar -> a new row")
         _by = {(x["trend"], x["decision"]) for x in _rows}
         assert ("Bullish", "taken") in _by, _by
         assert ("Bearish", "skipped") in _by, "the direction skip was not logged"

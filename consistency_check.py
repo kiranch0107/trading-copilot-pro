@@ -1951,6 +1951,56 @@ def check_duplicated_constants_agree() -> None:
     print(f"  {len(dupes)} constants duplicated across {total} definitions, all agreeing")
 
 
+def check_forward_log_single_writer() -> None:
+    """
+    Exactly ONE module appends to the forward log, and the workflow commits it.
+
+    THE CONSTRAINT. forward_log.append() takes `seq = len(rows) + 1` and
+    `prev = rows[-1]["hash"]`, so two processes appending from the same starting
+    file produce rows with the SAME seq and the SAME prev. Git merges both and
+    the result does not verify — permanently, because the log is append-only and
+    the hashes are computed over the seq, so it cannot be renumbered to repair.
+
+    scanner.py is the writer (GitHub Actions, commits after each scan). app.py
+    runs on Streamlit Cloud, a different machine, so it must never append —
+    which is why record_outcome() still has no caller. That is a decision about
+    who owns the chain, not a wiring gap; BACKLOG 17 carries it.
+
+    AND THE COMMIT MUST EXIST. The log lives on an ephemeral runner. Without the
+    workflow committing it, every row is destroyed with the container — which is
+    exactly the state this repo was in from the day the log was added until
+    2026-09-16: a tamper-evident record with no data and no anchor.
+    """
+    writers = []
+    for p in sorted(Path(".").glob("*.py")):
+        if p.name in ("forward_log.py", "consistency_check.py"):
+            continue
+        txt = p.read_text()
+        if "forward_log.record_signal" in txt or "forward_log.record_outcome" in txt \
+                or "forward_log.append" in txt:
+            writers.append(p.name)
+    if writers != ["scanner.py"]:
+        raise AssertionError(
+            f"the forward log must have exactly one writer and it must be "
+            f"scanner.py; found {writers or 'none'}. Two writers produce rows "
+            f"with the same seq and prev, and the merged chain does not verify "
+            f"— permanently, because an append-only log cannot be renumbered.")
+    print(f"  one writer: {writers[0]}")
+
+    wf = Path(".github/workflows/scanner.yml").read_text()
+    if "forward_log.jsonl" not in wf:
+        raise AssertionError(
+            "scanner.yml does not commit forward_log.jsonl. The runner is "
+            "ephemeral, so every signal the log records is destroyed with the "
+            "container — and a hash chain cannot detect its own tail being "
+            "cut, so git is its only anchor. .gitignore says exactly this.")
+    if "git add" not in wf or "forward_log.jsonl" not in wf.split("git add", 1)[1][:120]:
+        raise AssertionError(
+            "scanner.yml mentions forward_log.jsonl but does not `git add` it "
+            "— a file that is never staged is never committed.")
+    print("  scanner.yml stages and commits forward_log.jsonl (its only anchor)")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -1962,6 +2012,7 @@ CHECKS = [
     ("earnings gate is one rule, reads every date", check_earnings_gate_shared),
     ("capital never gates an alert",             check_capital_never_gates_alerts),
     ("forward log carries no test data",         check_forward_log_has_no_test_data),
+    ("forward log has one writer, and is committed", check_forward_log_single_writer),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),
