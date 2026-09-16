@@ -575,21 +575,165 @@ that distinguishes a confirmed record from a stale one.
 
 ---
 
+## 17. The forward log records into a void — and could not be settled if it did
+
+**Found 2026-09-16 by review; see `results/code_review_2026-09-16.md` (H1).**
+
+`forward_log.py` is the answer to "there is no clean data left". Four
+independent defects mean it produces nothing.
+
+1. **Never persisted.** `scanner.yml` commits `scanner_state.json` and nothing
+   else, so `forward_log.jsonl` dies with the Actions runner. The file is absent
+   from the repo. `.gitignore` states the opposite intent verbatim — "Git is the
+   external anchor: committing the log after each scan makes a truncation
+   visible as a deletion in the diff" — and there is no such step.
+2. **Logged per scan, not per bar.** The cron fires three times a day and
+   `drop_partial_bar()` means all three read the SAME settled bar, so one signal
+   writes three identical `taken` rows daily. The 4h cooldown does not dedupe
+   it: `recently_alerted()` is checked in `run()`, AFTER `analyze()` has already
+   written.
+3. **No signal bar date on the row.** `_setup` carries no date and `ts` is the
+   wall-clock write time, so duplicates cannot be collapsed afterwards and no
+   row can be joined to its bar.
+4. **`record_outcome()` has zero callers.** Nothing attaches an outcome to a
+   logged signal. The record can never answer its own question.
+
+**DO NOT FIX (1) FIRST.** Persisting now would commit three duplicate rows per
+signal per day into an APPEND-ONLY hash chain, which by construction cannot be
+cleaned — the log would have to be abandoned and restarted, spending the one
+advantage a forward record has. Order:
+
+1. Add the signal bar date to `_setup` (`df.index[-1]`, already in hand).
+2. Dedupe on `(ticker, trend, bar_date)` inside `record_signal()` — in the
+   module, not the caller, so a second caller cannot reintroduce it.
+3. Wire `record_outcome()` into `journal_store.close_position()`.
+4. THEN add the commit step to `scanner.yml`.
+
+Also decide what `taken` means. `_log("taken", "")` runs before the cooldown
+check and before `send_alert()`, so it currently means "would have alerted".
+That is arguably the right semantic for measuring what the RULES produced, but
+it is not what the field name says.
+
+---
+
+## 18. `longs_only.simulate()` books P&L at entry — `portfolio_replay_run1` is void
+
+**Found 2026-09-16 by review; see `results/code_review_2026-09-16.md` (H2).**
+
+`simulate()` walks trades in ENTRY-date order and does `equity += pnl` in the
+iteration that OPENS the position, while keeping it in `open_pos` until its
+`exit_date`. A trade's result funds the account before it has happened.
+
+Reproduced offline, two overlapping trades on a $10,000 account at 1% risk:
+
+```
+r=+5.0 entered 01-02 exits 03-01 ;  r=-1.0 entered 01-03 exits 03-02
+got      10,395.00     (trade 2 sized on 10,500 — trade 1's unrealised +500)
+correct  10,400.00     (P&L booked at exit)
+```
+
+Three consequences, all present in `results/portfolio_replay_run1.txt`:
+
+- **Compounding lookahead.** Peak concurrency in that run is 5, so every
+  overlapping trade is sized on the unrealised results of its neighbours.
+- **The capital constraint is looser than it claims.** `deployed + value >
+  equity` tests against an equity inflated by open positions' unrealised gains.
+  The idealised-vs-constrained gap is the module's stated finding and it is
+  understated.
+- **Drawdown is mis-dated and mis-sized.** `curve` is indexed by entry order
+  with each trade's full P&L landing at its open. The module calls drawdown
+  "the number worth trusting most in this file".
+
+`peak capital deployed 101% of equity` in that run is a symptom of the same
+mechanism, not real over-deployment: `peak_deployed` divides by an equity that
+has ALREADY absorbed the new trade's loss.
+
+**The fix and the re-run are one change.** Realise P&L on the exit-date event
+and build the curve on those events. Every number in
+`results/portfolio_replay_run1.txt` moves — four curves, both CAGRs, both
+drawdowns, and the "49% survives" claim about the break-even rule. Do not ship
+the code without the re-run; a committed result that disagrees with the code
+that produced it is worse than either alone.
+
+**Containment, for the record:** R-multiples are untouched, so `exit_ab`,
+`drift_null` and the tranche C confirmation are unaffected — the same
+containment as the `stop`/`orig_stop` regression in #89.
+
+---
+
+## 19. An EXIT_SIGNALLED position is never monitored again, and there is no way back
+
+**Found 2026-09-16 by review; see `results/code_review_2026-09-16.md` (H3).**
+
+`exit_monitor.run()` selects `status == "OPEN"` and skips everything else. The
+first rule to fire flips the position to `EXIT_SIGNALLED` and it leaves
+monitoring permanently. `app.py` lists those positions under "close these" with
+no dismiss and no re-arm, and nothing in the repo ever sets `status` back to
+`OPEN` — the only assignment is in `journal_store.open_option_position()`.
+
+The failure case is ordinary. Rule priority is STOP, TARGET, TIME, HOLD,
+THESIS. THESIS fires on one close through EMA20 and HOLD on a session count;
+both are judgement calls the owner may reasonably decline. The moment either
+fires, **the STOP rule is dead for the life of that position** — on a long
+option where the premium is the entire maximum loss.
+
+Same shape as the gap that widened the exit-monitor cron (a position last
+checked Friday, exited at −71.7% against a −50% rule), except unbounded.
+
+Two designs, and the choice is the owner's:
+
+- Keep monitoring `EXIT_SIGNALLED` positions for HIGHER-PRIORITY reasons only —
+  a STOP after a THESIS re-alerts, a THESIS after a THESIS does not; or
+- Add an explicit "keep it open" control that restores `status: OPEN` and clears
+  `exit_alerted`, making an override a logged act.
+
+The first fails safe without requiring the owner to be present, which is the
+property this monitor exists for.
+
+---
+
+## 20. The earnings blackout is a second duplicated gate implementation
+
+**Found 2026-09-16 by review; see `results/code_review_2026-09-16.md` (M3).**
+
+`app.check_earnings_blackout()` and `scanner.check_earnings_blackout()` are
+independent implementations of one rule, and they already differ: **app reads
+only the FIRST earnings date** (`get_next_earnings()` returns a single value)
+while **scanner iterates every date** in the calendar. On a ticker whose
+calendar returns more than one, the two gates disagree — the app-vs-scanner
+divergence `signal_core.py` was created to end, in a gate nobody moved.
+
+`consistency_check` pins `is_market_open()` across four copies, `compute()`
+across modules, and the unsettled-bar decision across five call sites. Nothing
+pins this one.
+
+The durable fix is the one already applied twice here: one implementation,
+inputs injected by the caller (each fetches through a different rate limiter),
+both callers importing it, and a `check_` function that pins it.
+
+---
+
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 22 cross-module
-  invariants (22 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 31 cross-module
+  invariants (31 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip
   it.
 - `app.py` and `scanner.py` are **CRLF**; `signal_core.py`, `backtest.py` and
   `consistency_check.py` are LF. Edit CRLF files with `newline=''`.
-- Costs are single-sourced in `risk_params.py`. `MAX_OPTION_SPREAD_PCT = 8.0` is
-  **derived** from `OPT_WIN_RATE = 0.238`, not fitted — at an 8% round trip the
-  breakeven win rate is 23.3% against a measured 23.8%. If `OPT_WIN_RATE` is
-  ever re-measured, re-derive the ceiling rather than keeping 8.
-  `check_cost_gates_shared()` enforces the single source.
+- Costs are single-sourced in `risk_params.py`. This bullet used to say
+  `MAX_OPTION_SPREAD_PCT = 8.0` is "**derived** from `OPT_WIN_RATE = 0.238` —
+  at an 8% round trip the breakeven win rate is 23.3% against a measured
+  23.8%". **That derivation was refuted in the module on 2026-09-10 and this
+  copy survived it.** It compared a win rate measured at TP+100 against a
+  breakeven computed at TP+200. At the measured basis an 8% round trip needs
+  **38.9%** against a measured **24.9%**, and NO spread clears it. The ceiling
+  is a **loss-minimising cost cap**, not the point where the arithmetic turns —
+  tightening a cost cannot overfit, because it does not touch the signal. Read
+  `risk_params.py` for the full account. `check_cost_gates_shared()` enforces
+  the single source.
 - Backtest windows are **relative to today** — `backtest.py` passes
   `period=f"{years}y"` to yfinance. A "10-year" run means today minus 10 years,
   so which regimes a half contains shifts as time passes. State the absolute

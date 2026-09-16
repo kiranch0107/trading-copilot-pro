@@ -1,3 +1,28 @@
+!! VOID — DO NOT QUOTE THESE NUMBERS. Recorded 2026-09-16.
+!!
+!! longs_only.simulate() books each trade's P&L at its ENTRY date, not at its
+!! EXIT date, while the position stays open in the book until it closes. Every
+!! number below is affected:
+!!
+!!   - Overlapping trades are sized on their neighbours' UNREALISED results
+!!     (peak concurrency in this run is 5), so the compounding looks ahead.
+!!   - The capital constraint tests `deployed + value > equity` against an
+!!     equity inflated by those unrealised gains, so "constrained" is looser
+!!     than it claims and the idealised-vs-constrained gap — the stated
+!!     finding — is understated.
+!!   - The equity curve is indexed by entry order with each trade's full P&L
+!!     landing at its open, so max DD is not the path the account took.
+!!   - "peak capital deployed 101% of equity" is an artifact of the same thing,
+!!     not real over-deployment: the ratio divides by an equity that has
+!!     already absorbed the new trade's loss.
+!!
+!! R-multiples are untouched, so exit_ab, drift_null and the tranche C
+!! confirmation are NOT affected — same containment as the stop/orig_stop
+!! regression in #89.
+!!
+!! BACKLOG item 18 has the fix and the reproduction. The fix and the re-run are
+!! one change; this file stays void until that run replaces it.
+
   collecting long trades ...
     1254 long trades
   benchmark SPY ...

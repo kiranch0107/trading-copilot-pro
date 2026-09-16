@@ -490,7 +490,22 @@ def capture_entry_features(ticker: str) -> dict:
 
         # Relative strength vs SPY over 20 sessions. Recorded, not filtered on.
         try:
+            # SPY MUST BE DROPPED TO THE SAME BAR THE TICKER IS ON.
+            #
+            # `df` above went through drop_partial_bar(); get_data() does
+            # not. Mid-session that made rs_20d compare the ticker's return
+            # to YESTERDAY'S settled close against SPY's return to the LIVE
+            # price, over windows offset from each other by one bar. This is
+            # the same unsettled-bar defect signal_core.drop_unsettled()
+            # exists to end; it reached this path because the feature
+            # snapshot fetches a second series and only guarded the first.
+            #
+            # Collect-only today. It is also the field a later study would
+            # slice on, and a captured feature cannot be recomputed after
+            # the fact.
             spy = get_data("SPY")
+            if spy is not None:
+                spy, _ = drop_partial_bar(spy)
             if spy is not None and len(spy) > 21 and len(df) > 21:
                 t_ret = float(df["Close"].iloc[-1]) / float(df["Close"].iloc[-21]) - 1
                 s_ret = float(spy["Close"].iloc[-1]) / float(spy["Close"].iloc[-21]) - 1
@@ -2142,7 +2157,11 @@ with TAB_POSITIONS:
     if signalled:
         st.markdown("### 🔔 Exit signalled — close these")
         for p in signalled:
-            icon = {"TARGET":"🎯","STOP":"🛑","TIME":"⏳","THESIS":"📉"}.get(
+            # HOLD was missing, so a max-hold exit — one of the five
+            # reasons exit_monitor.format_alert() emits — rendered as a
+            # generic warning here. Kept in the same order as that map.
+            icon = {"TARGET":"🎯","STOP":"🛑","TIME":"⏳","HOLD":"📆",
+                    "THESIS":"📉"}.get(
                 p.get("exit_reason"), "⚠️")
             with st.container(border=True):
                 st.markdown(
@@ -2263,16 +2282,42 @@ with TAB_POSITIONS:
     with r1:
         rule_tp = st.number_input("Take profit +%", min_value=0, value=200, step=25,
                                   key="op_tp",
-                                  help="Exit when the premium gains this %. 0 disables.\n\n"
-                                       "DEFAULT IS 200. At TP+50/SL-50 the "
-                                       "payoff is 1:1, which needs a 50% win rate just to "
-                                       "break even — but this entry signal wins ~40% of the "
-                                       "time, giving -0.10 expected value per unit risked "
-                                       "BEFORE costs. TP+100/SL-50 is 2:1, breakeven at "
-                                       "33%, so the same signal turns positive. A "
-                                       "trend-following entry needs asymmetric exits; "
-                                       "capping winners at +50% throws away the property "
-                                       "that makes it work.")
+                                  help=(
+                                      "Exit when the premium gains this %. 0 disables.\n\n"
+                                      # THE TOOLTIP USED TO SELL A LOSING SETTING.
+                                      #
+                                      # It read: "this entry signal wins ~40% of the time
+                                      # ... TP+100/SL-50 is 2:1, breakeven at 33%, so the
+                                      # same signal turns positive." 40% is the SHARE
+                                      # backtest's win rate. risk_params.py names that exact
+                                      # substitution as the error that "made losing
+                                      # configurations look profitable", and the EV panel
+                                      # rendered a few lines below this widget already says
+                                      # every measured level is negative. The tooltip was the
+                                      # surviving copy, on the control that sets the rule.
+                                      #
+                                      # Read from risk_params rather than retyped, so the
+                                      # numbers cannot drift from the panel again.
+                                      f"DEFAULT IS 200, and it is NOT a profitable setting "
+                                      f"— no measured take-profit is. option_backtest.py "
+                                      f"--sweep measured every level at SL-50: TP+100 wins "
+                                      f"{risk_params.OPT_SWEEP_BY_TP[100.0][0]:.1f}% against "
+                                      f"a REALISED breakeven of "
+                                      f"{risk_params.realised_breakeven_wr(100):.1f}%, and "
+                                      f"TP+200 wins "
+                                      f"{risk_params.OPT_SWEEP_BY_TP[200.0][0]:.1f}% against "
+                                      f"{risk_params.realised_breakeven_wr(200):.1f}%. Every "
+                                      f"row in the sweep is negative.\n\n"
+                                      f"What the ratio still buys is a SMALLER LOSS, not a "
+                                      f"profit: expectancy runs "
+                                      f"{risk_params.measured_option_edge(50)['expectancy_pct']:+.2f}% "
+                                      f"of premium at TP+50 and "
+                                      f"{risk_params.measured_option_edge(200)['expectancy_pct']:+.2f}% "
+                                      f"at TP+200, because a wider target relative to the "
+                                      f"stop lowers the breakeven win rate. A trend-following "
+                                      f"entry needs asymmetric exits; capping winners at "
+                                      f"+50% throws away the property that makes it work. "
+                                      f"The rules limit damage — they do not create an edge."))
     with r2:
         rule_sl = st.number_input("Stop loss −%", min_value=0, max_value=100, value=50,
                                   step=10, key="op_sl",
