@@ -56,13 +56,12 @@ second writer does not risk a conflict; it destroys the chain.
 
 scanner.py is the writer. It runs on GitHub Actions and commits the file after
 each scan. app.py runs on Streamlit Cloud, a DIFFERENT machine reaching the repo
-through the Contents API, so it must NOT append here — which is why
-record_outcome() still has no caller (BACKLOG 17). Attaching outcomes needs a
-decision about who owns the chain, not a wiring change:
+through the Contents API, so it must NOT append here.
 
-  - have the scanner attach outcomes, reading closed trades from the journal; or
-  - give the app its own chain file and reconcile the two offline; or
-  - move the log somewhere with a single writer and real appends.
+SETTLED 2026-09-16, by the owner: the SCANNER attaches outcomes too. It reads
+closed trades out of trade_journal.json (which the app writes and commits) and
+appends their outcome rows itself — see attach_outcomes(). The app still never
+touches this file, so the single-writer rule holds with outcomes in place.
 
 consistency_check.check_forward_log_single_writer() fails CI if a second module
 starts writing.
@@ -254,8 +253,9 @@ def record_signal(ticker: str, trend: str, setup: dict, decision: str,
     }, path=path)
 
 
-def record_outcome(ref_seq: int, outcome: str, r: float,
+def record_outcome(ref_seq: int, outcome: str, r: float, basis: str,
                    exit_price: float | None = None,
+                   trade_id: str | None = None, mode: str | None = None,
                    path: Path | None = None) -> dict:
     """
     A settled trade, as a NEW row referencing the signal by sequence number.
@@ -263,18 +263,32 @@ def record_outcome(ref_seq: int, outcome: str, r: float,
     Never an edit. The original row keeps saying exactly what was known when it
     was written, and the chain stays verifiable.
 
-    NO CALLER YET, DELIBERATELY. See EXACTLY ONE WRITER in the module docstring:
-    the obvious caller is journal_store.close_position(), which runs in the app
-    on a different machine from the scanner, and a second writer destroys the
-    chain rather than merely conflicting with it.
+    CALLED BY THE SCANNER, via attach_outcomes(). Owner's decision, 2026-09-16.
+    That keeps the single-writer rule (see the module docstring): the app never
+    appends here, it only writes trade_journal.json, which the scanner reads.
 
-    There is a second, independent problem to settle before anything calls this:
-    WHICH R. close_position() computes a return on PREMIUM; the `setup` on a
-    signal row carries entry/stop/target on the UNDERLYING. Those are different
-    denominators, and recording one against the other is the same basis error
-    that put a TP+100 win rate against a TP+200 breakeven in risk_params.py.
-    Whatever calls this should carry the basis on the row.
+    `basis` IS REQUIRED AND HAS NO DEFAULT. `r` is meaningless without it.
+    close_position() computes a return on PREMIUM; a signal row's `setup`
+    carries entry/stop/target on the UNDERLYING. Those are different
+    denominators, and recording one against the other is the same error that put
+    a TP+100 win rate against a TP+200 breakeven in risk_params.py. A default
+    would let a caller record the wrong one silently, which is the whole failure
+    mode — so there is no default.
+
+    `trade_id` is the journal row's id, and it makes attachment idempotent: the
+    scanner re-reads the journal on every run, and without it a trade would get
+    a second outcome row on the next scan.
+
+    `mode` is paper/live, carried rather than filtered, because journal_store
+    keeps those apart for good reason and an analysis here must be able to too.
     """
+    BASES = ("premium", "stop_distance")
+    if basis not in BASES:
+        raise ValueError(
+            f"basis must be one of {BASES}, not {basis!r}. An R with no stated "
+            f"denominator is the error risk_params.py already paid for: a "
+            f"return on premium and a stop-distance R are not comparable and "
+            f"must never be summed.")
     rows = read_all(path)
     ref = next((x for x in rows
                 if x.get("seq") == ref_seq and x.get("kind") == "signal"), None)
@@ -294,11 +308,170 @@ def record_outcome(ref_seq: int, outcome: str, r: float,
             f"seq {ref_seq} already has an outcome. A second one would let a "
             f"result be revised after the fact, which is what append-only is "
             f"for")
+    if trade_id and any(x.get("kind") == "outcome" and x.get("trade_id") == trade_id
+                        for x in rows):
+        raise ValueError(
+            f"trade {trade_id} already has an outcome row. The scanner re-reads "
+            f"the journal every run, so without this a settled trade would be "
+            f"recorded again on every scan")
     return append("outcome", {
         "ref_seq": ref_seq, "ticker": ref.get("ticker"),
-        "outcome": outcome, "r": round(float(r), 4),
+        "outcome": outcome, "r": round(float(r), 4), "basis": basis,
+        "trade_id": trade_id, "mode": mode,
         "exit_price": round(float(exit_price), 4) if exit_price else None,
     }, path=path)
+
+
+# ---------------------------------------------------------------------------
+# Attaching outcomes — THE SCANNER'S JOB, by the owner's decision (2026-09-16)
+# ---------------------------------------------------------------------------
+#
+# Of the three routes in BACKLOG 17, this is route 1: the scanner reads closed
+# trades out of trade_journal.json and appends their outcomes here. The app
+# never appends — it only writes the journal, through the Contents API — so the
+# single-writer rule that the chain depends on is preserved.
+#
+# THE HARD PART IS NOT THE APPEND, IT IS THE MATCH. A signal row knows
+# (underlying, direction, signal bar). A journal row knows a composite option
+# ticker ("NKE 2026-10-02 35P"), a direction, and when the position was opened.
+# Joining them is a guess unless the rules are strict, and a wrong guess writes
+# a PERMANENT row: the log is append-only, so a mis-attached outcome cannot be
+# corrected, only contradicted by a later note nobody will read.
+#
+# So this refuses far more than it accepts, and reports every refusal.
+
+SETTLED = ("WIN", "LOSS", "BREAKEVEN")
+
+
+def _journal_date(row: dict):
+    """The date a journal row's position was OPENED, as a date."""
+    import datetime as _dt
+    raw = str(row.get("date") or "").replace(" ET", "").strip()
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return _dt.datetime.strptime(raw[:16] if len(raw) >= 16 else raw,
+                                         fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def attach_outcomes(journal: list, path: Path | None = None,
+                    max_lag_days: int = 5) -> dict:
+    """
+    Append an outcome row for every settled journal trade that maps to exactly
+    one un-settled `taken` signal. Returns a report; never raises on a row.
+
+    WHAT IS REFUSED, AND WHY EACH ONE MATTERS
+    -----------------------------------------
+    reconstructed  `source_backfilled` rows are owner RECOLLECTION, not capture
+                   (BACKLOG 2 says so and says to exclude them). They also
+                   predate this log entirely, so any match would be spurious.
+    not_signal     `source` is discretionary or missing. There is no signal to
+                   attach to, and inventing one puts a hypothetical in the
+                   record.
+    unsettled      outcome is not WIN/LOSS/BREAKEVEN — nothing to record yet.
+    no_match       no `taken` signal for that underlying and direction within
+                   `max_lag_days` before the position opened.
+    ambiguous      MORE THAN ONE candidate. Refused outright rather than
+                   resolved by "nearest", because a wrong attachment is
+                   permanent and a missing one is merely missing.
+    already        the signal already has an outcome, or this trade_id does.
+
+    R IS RECORDED ON THE PREMIUM BASIS, and labelled. `actual_rr` from the
+    journal is (exit - entry) / entry on the OPTION premium. It is NOT the
+    stop-distance R the signal's setup implies, and the two must never be summed.
+    The underlying R is not recoverable here: close_position() writes stop and
+    target as 0 for option rows, so premium is the only basis that exists.
+    """
+    import datetime as _dt
+    rows = read_all(path)
+    taken = [r for r in rows if r.get("kind") == "signal"
+             and r.get("decision") == "taken"]
+    settled_seqs = {r.get("ref_seq") for r in rows if r.get("kind") == "outcome"}
+    settled_trades = {r.get("trade_id") for r in rows if r.get("kind") == "outcome"}
+
+    report = {"attached": 0, "reconstructed": 0, "not_signal": 0,
+              "unsettled": 0, "no_match": 0, "ambiguous": 0, "already": 0,
+              "detail": []}
+
+    for row in journal or []:
+        tid = row.get("id")
+        if row.get("outcome") not in SETTLED:
+            report["unsettled"] += 1
+            continue
+        if tid in settled_trades:
+            report["already"] += 1
+            continue
+        if row.get("source_backfilled"):
+            report["reconstructed"] += 1
+            continue
+        if row.get("source") != "signal":
+            report["not_signal"] += 1
+            continue
+
+        underlying = str(row.get("ticker") or "").split()[0].upper()
+        opened = _journal_date(row)
+        if not underlying or opened is None:
+            report["no_match"] += 1
+            report["detail"].append(f"{tid}: no usable ticker or open date")
+            continue
+
+        cands = []
+        for sig in taken:
+            if sig.get("seq") in settled_seqs:
+                continue
+            if str(sig.get("ticker", "")).upper() != underlying:
+                continue
+            if sig.get("trend") != row.get("trend"):
+                continue
+            try:
+                bar = _dt.date.fromisoformat(str(sig.get("bar_date")))
+            except (TypeError, ValueError):
+                continue
+            lag = (opened - bar).days
+            # The signal must PRECEDE the trade. A bar dated after the position
+            # was opened cannot have caused it, and matching one would read the
+            # record backwards.
+            if 0 <= lag <= max_lag_days:
+                cands.append(sig)
+
+        if not cands:
+            report["no_match"] += 1
+            report["detail"].append(
+                f"{tid}: no taken {row.get('trend')} signal for {underlying} "
+                f"within {max_lag_days}d before {opened}")
+            continue
+        if len(cands) > 1:
+            # NEVER resolved by "nearest". Two signals on the same name and
+            # side inside a few days is exactly when a heuristic picks wrong,
+            # and the row it writes cannot be taken back.
+            report["ambiguous"] += 1
+            report["detail"].append(
+                f"{tid}: {len(cands)} candidate signals "
+                f"({', '.join(str(c['bar_date']) for c in cands)}) — refused "
+                f"rather than guessed")
+            continue
+
+        sig = cands[0]
+        try:
+            record_outcome(sig["seq"], str(row["outcome"]).lower(),
+                           float(row.get("actual_rr") or 0.0),
+                           basis="premium",
+                           exit_price=row.get("exit_price"),
+                           trade_id=tid, mode=row.get("mode"), path=path)
+        except ValueError as e:
+            report["already"] += 1
+            report["detail"].append(f"{tid}: {e}")
+            continue
+        settled_seqs.add(sig["seq"])
+        settled_trades.add(tid)
+        report["attached"] += 1
+        report["detail"].append(
+            f"{tid}: attached to seq {sig['seq']} "
+            f"({underlying} {sig['trend']} bar {sig['bar_date']})")
+
+    return report
 
 
 def summary(path: Path | None = None) -> dict:
@@ -460,19 +633,20 @@ def selftest() -> int:
     s1 = record_signal("AAA", "Bullish", setup, "taken", "", cfg, bar_date=BAR, path=tmp)
     s2 = record_signal("BBB", "Bullish", setup, "skipped", "no slot", cfg,
                        bar_date=BAR, path=tmp)
-    o = record_outcome(s1["seq"], "win", 3.0, 106.0, path=tmp)
+    o = record_outcome(s1["seq"], "win", 3.0, "stop_distance",
+                       exit_price=106.0, path=tmp)
     assert o["kind"] == "outcome" and o["ref_seq"] == s1["seq"]
     assert read_all(tmp)[0]["setup"] == setup, (
         "recording an outcome modified the original signal row; outcomes must "
         "be appended, never edited in")
     for bad, why in ((99, "nothing to attach"), (s2["seq"], "was skipped")):
         try:
-            record_outcome(bad, "win", 1.0, path=tmp)
+            record_outcome(bad, "win", 1.0, "premium", path=tmp)
             raise SystemExit(f"outcome accepted for seq {bad} ({why})")
         except ValueError:
             pass
     try:
-        record_outcome(s1["seq"], "loss", -1.0, path=tmp)
+        record_outcome(s1["seq"], "loss", -1.0, "premium", path=tmp)
         raise SystemExit("a second outcome was accepted for one signal")
     except ValueError as e:
         assert "already has an outcome" in str(e), e
@@ -589,6 +763,123 @@ def selftest() -> int:
         "constraint in the module docstring is obsolete and should be removed"
     print("single writer    : two writers collide on seq+prev and the merge "
           "does NOT verify")
+
+    # ── ATTACHING OUTCOMES — what it accepts, and everything it refuses ──
+    #
+    # A mis-attached outcome is PERMANENT: the log is append-only, so a wrong
+    # row cannot be corrected, only contradicted by a note nobody reads. So the
+    # refusals matter more than the accept, and each is tested separately.
+    ao = Path(tempfile.mkdtemp()) / "ao.jsonl"
+    sig = record_signal("NKE", "Bearish", setup, "taken", "", cfg,
+                        bar_date="2026-09-10", path=ao)
+
+    def _trade(**kw):
+        base = {"id": "T1", "ticker": "NKE 2026-10-02 35P", "trend": "Bearish",
+                "date": "2026-09-11 11:56 ET", "outcome": "WIN",
+                "actual_rr": 0.62, "source": "signal", "mode": "live"}
+        base.update(kw)
+        return base
+
+    r = attach_outcomes([_trade()], path=ao)
+    assert r["attached"] == 1, r
+    _out = [x for x in read_all(ao) if x["kind"] == "outcome"][0]
+    assert _out["ref_seq"] == sig["seq"] and _out["trade_id"] == "T1"
+    assert _out["basis"] == "premium", (
+        "actual_rr is a return on PREMIUM; recording it unlabelled, or as a "
+        "stop-distance R, is the basis error risk_params.py already paid for")
+    assert _out["mode"] == "live"
+    print(f"attach           : journal trade -> seq {sig['seq']}, "
+          f"basis {_out['basis']}")
+
+    # IDEMPOTENT. The scanner re-reads the journal on every run.
+    r2 = attach_outcomes([_trade()], path=ao)
+    assert r2["attached"] == 0 and r2["already"] == 1, r2
+    assert len([x for x in read_all(ao) if x["kind"] == "outcome"]) == 1
+    print("attach, re-run   : no second row — the scanner reads the journal "
+          "every scan")
+
+    # ── THE REFUSALS ──
+    ao2 = Path(tempfile.mkdtemp()) / "ao2.jsonl"
+    record_signal("NKE", "Bearish", setup, "taken", "", cfg,
+                  bar_date="2026-09-10", path=ao2)
+
+    # Reconstructed provenance is owner RECOLLECTION (BACKLOG 2), and predates
+    # this log entirely. Every journal row on file today is one of these.
+    assert attach_outcomes([_trade(source_backfilled=True)],
+                          path=ao2)["reconstructed"] == 1
+    # A discretionary trade has no signal to attach to.
+    assert attach_outcomes([_trade(source="discretionary")],
+                          path=ao2)["not_signal"] == 1
+    assert attach_outcomes([_trade(outcome="OPEN")], path=ao2)["unsettled"] == 1
+    # Wrong direction, wrong name, and a signal AFTER the trade opened.
+    assert attach_outcomes([_trade(trend="Bullish")], path=ao2)["no_match"] == 1
+    assert attach_outcomes([_trade(ticker="AAPL 2026-10-02 35P")],
+                          path=ao2)["no_match"] == 1
+    assert attach_outcomes([_trade(date="2026-09-09 10:00 ET")],
+                          path=ao2)["no_match"] == 1, \
+        "a signal dated AFTER the position opened cannot have caused it"
+    assert attach_outcomes([_trade(date="2026-09-30 10:00 ET")],
+                          path=ao2)["no_match"] == 1, \
+        "a signal three weeks before the trade is not evidence it caused it"
+    assert not [x for x in read_all(ao2) if x["kind"] == "outcome"], \
+        "a refusal must write NOTHING"
+    print("refusals         : reconstructed, discretionary, unsettled, wrong "
+          "name/side, signal after the trade, stale signal")
+
+    # AMBIGUITY IS REFUSED, NEVER RESOLVED BY "NEAREST".
+    ao3 = Path(tempfile.mkdtemp()) / "ao3.jsonl"
+    record_signal("NKE", "Bearish", setup, "taken", "", cfg,
+                  bar_date="2026-09-09", path=ao3)
+    record_signal("NKE", "Bearish", setup, "taken", "", cfg,
+                  bar_date="2026-09-10", path=ao3)
+    r3 = attach_outcomes([_trade()], path=ao3)
+    assert r3["ambiguous"] == 1 and r3["attached"] == 0, r3
+    assert not [x for x in read_all(ao3) if x["kind"] == "outcome"], \
+        "an ambiguous match wrote a row — a wrong attachment here is permanent"
+    print("ambiguity        : two candidates -> refused and reported, "
+          "not resolved by nearest")
+
+    # IDEMPOTENCY IS TWO LAYERS, and both are tested because the outer one
+    # hides the inner. attach_outcomes() skips a trade_id it has already seen,
+    # so removing record_outcome()'s own guard changes nothing above — which
+    # means that guard was untested until this call drove it directly. It is
+    # the one that protects a future second caller.
+    #
+    # Driven against a DIFFERENT signal row, deliberately. Re-using sig["seq"]
+    # trips the ref_seq guard first, and both messages contain "already has an
+    # outcome" — so that version of this test passed whether or not the
+    # trade_id guard existed. A second signal row isolates it.
+    _sig2 = record_signal("NKE", "Bearish", setup, "taken", "", cfg,
+                          bar_date="2026-08-01", path=ao)
+    try:
+        record_outcome(_sig2["seq"], "win", 0.62, "premium", trade_id="T1",
+                       path=ao)
+    except ValueError as e:
+        assert "trade T1 already has an outcome row" in str(e), e
+        print("idempotency      : both layers — attach_outcomes skips, and "
+              "record_outcome refuses the same trade under a NEW seq")
+    else:
+        raise AssertionError(
+            "record_outcome recorded trade T1 a second time under a different "
+            "signal; without this guard one trade can settle many signals")
+
+    # A SKIPPED signal can never take an outcome, even by a clean match.
+    ao4 = Path(tempfile.mkdtemp()) / "ao4.jsonl"
+    record_signal("NKE", "Bearish", setup, "skipped", "no room", cfg,
+                  bar_date="2026-09-10", path=ao4)
+    r4 = attach_outcomes([_trade()], path=ao4)
+    assert r4["attached"] == 0 and r4["no_match"] == 1, r4
+    print("skipped signals  : never take an outcome — a hypothetical result "
+          "is not a result")
+
+    # basis has no default, and a bogus one is refused.
+    try:
+        record_outcome(1, "win", 1.0, "vibes", path=ao4)
+    except ValueError as e:
+        assert "basis must be one of" in str(e)
+        print("basis            : required, and only a known denominator")
+    else:
+        raise AssertionError("record_outcome accepted an unknown basis")
 
     print("=" * 72)
     print("All self-tests passed.")

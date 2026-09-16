@@ -575,7 +575,41 @@ that distinguishes a confirmed record from a stale one.
 
 ---
 
-## 17. The forward log — 3 of 4 closed 2026-09-16; outcomes still open
+## 17. ~~The forward log records into a void~~ — CLOSED 2026-09-16
+
+It persists, it records signals rather than scans, and outcomes attach.
+
+  - `record_signal()` requires the SIGNAL BAR's date and dedupes on
+    `(ticker, trend, bar_date)`. Three scans a day of one settled bar used to
+    write three rows. The dedupe is in the module, not the caller.
+  - `scanner.yml` stages and commits `forward_log.jsonl`. **Order mattered:**
+    committing before the dedupe would have written triplicates into an
+    append-only chain that can only be abandoned, never cleaned.
+  - **Owner chose route 1, 2026-09-16: the SCANNER attaches outcomes.** It reads
+    `trade_journal.json` (which the app writes through the Contents API) and
+    appends outcome rows itself, so the app never touches the log and the
+    single-writer rule holds. `check_forward_log_single_writer()` pins it,
+    including `attach_outcomes` as a write.
+
+**The match refuses far more than it accepts, because a wrong row is
+permanent.** An append-only log cannot correct a mis-attached outcome, only
+contradict it in a note nobody reads. Refused: reconstructed provenance
+(`source_backfilled` is owner recollection — BACKLOG 2 says to exclude it),
+discretionary trades, unsettled outcomes, a signal dated *after* the position
+opened, a signal outside the 5-day window, skipped signals, and **any ambiguous
+match** — two candidates are refused outright rather than resolved by
+"nearest", which is exactly when a heuristic picks wrong.
+
+**The basis question is settled by making it explicit.** `record_outcome()` now
+requires `basis` with no default. `actual_rr` is a return on PREMIUM; a signal's
+setup is on the UNDERLYING. The underlying R is not recoverable — `close_position()`
+writes stop and target as 0 for option rows — so premium is the only basis that
+exists, and it is labelled rather than silently summed with stop-distance R.
+
+**On the journal as it stands today: 0 attached, 8 refused as reconstructed, 1 as
+discretionary.** That is correct — every row on file predates the log. The
+mechanism starts producing evidence from the next signal-sourced trade.
+
 
 **CLOSED: it persists, and it records signals rather than scans.**
 
