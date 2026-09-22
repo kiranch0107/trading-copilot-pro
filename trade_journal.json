@@ -245,5 +245,41 @@
     "outcome": "WIN",
     "actual_rr": 0.0,
     "notes": "zero risk"
+  },
+  {
+    "id": "OPT_NKE_1789142211",
+    "date": "2026-09-11 11:56 ET",
+    "closed": "2026-09-22 11:53 ET",
+    "mode": "live",
+    "source": "signal",
+    "traded_at": "2026-09-11 11:56 ET",
+    "closed_at": "2026-09-22 11:53 ET",
+    "ticker": "NKE 2026-10-02 35P",
+    "trend": "Bearish",
+    "entry": 0.94,
+    "stop": 0,
+    "target": 0,
+    "planned_rr": 0,
+    "exit_price": 0.98,
+    "outcome": "WIN",
+    "actual_rr": 0.04,
+    "contracts": 1.0,
+    "pnl_usd": 4.0,
+    "entry_features": {
+      "adx": 23.345,
+      "rsi": 33.6839,
+      "atr": 1.0406,
+      "close": 36.62,
+      "ema20": 38.884,
+      "ema50": 40.4952,
+      "volume": 29844900.0,
+      "vol_avg20": 29111430.0,
+      "rvol": 1.025,
+      "ext_atr": -2.176,
+      "rs_20d": -0.0706,
+      "regime": "Bull",
+      "captured": "2026-09-11 11:56 ET"
+    },
+    "notes": "Manual exit"
   }
 ]
