@@ -281,5 +281,41 @@
       "captured": "2026-09-11 11:56 ET"
     },
     "notes": "Manual exit"
+  },
+  {
+    "id": "OPT_AAPL_1790004030",
+    "date": "2026-09-21 11:20 ET",
+    "closed": "2026-09-22 11:53 ET",
+    "mode": "live",
+    "source": "discretionary",
+    "traded_at": "2026-09-21 11:20 ET",
+    "closed_at": "2026-09-22 11:53 ET",
+    "ticker": "AAPL 2026-10-16 360C",
+    "trend": "Bullish",
+    "entry": 1.47,
+    "stop": 0,
+    "target": 0,
+    "planned_rr": 0,
+    "exit_price": 2.52,
+    "outcome": "WIN",
+    "actual_rr": 0.71,
+    "contracts": 1.0,
+    "pnl_usd": 105.0,
+    "entry_features": {
+      "adx": 16.594,
+      "rsi": 64.3,
+      "atr": 7.3044,
+      "close": 336.13,
+      "ema20": 325.0024,
+      "ema50": 317.5967,
+      "volume": 86433100.0,
+      "vol_avg20": 43475500.0,
+      "rvol": 1.988,
+      "ext_atr": 1.523,
+      "rs_20d": 0.0785,
+      "regime": "Bull",
+      "captured": "2026-09-21 11:20 ET"
+    },
+    "notes": "Manual exit"
   }
 ]
