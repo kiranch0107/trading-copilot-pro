@@ -1,1 +1,42 @@
-[]
+[
+  {
+    "id": "OPT_AAPL_1790191869",
+    "ticker": "AAPL",
+    "right": "CALL",
+    "strike": 355.0,
+    "expiry": "2026-10-09",
+    "contracts": 1.0,
+    "entry_premium": 1.11,
+    "rules": {
+      "tp_pct": 200,
+      "sl_pct": 50,
+      "dte_exit": 7,
+      "max_hold_bars": 30,
+      "invalidate_ema": true
+    },
+    "entry_features": {
+      "adx": 17.4002,
+      "rsi": 66.3661,
+      "atr": 7.2534,
+      "close": 338.98,
+      "ema20": 326.3336,
+      "ema50": 318.4352,
+      "volume": 34999200.0,
+      "vol_avg20": 42889375.0,
+      "rvol": 0.816,
+      "ext_atr": 1.744,
+      "rs_20d": 0.0831,
+      "regime": "Bull",
+      "captured": "2026-09-23 15:31 ET"
+    },
+    "notes": "Actual trade, manual entry on 9/23",
+    "opened": "2026-09-23 15:31 ET",
+    "opened_epoch": 1790191869.2984757,
+    "mode": "live",
+    "source": "discretionary",
+    "traded_at": "2026-09-23 15:31 ET",
+    "last_check_epoch": 1790191869.2984757,
+    "status": "OPEN",
+    "exit_alerted": false
+  }
+]
