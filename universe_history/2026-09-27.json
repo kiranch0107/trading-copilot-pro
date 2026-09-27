@@ -1,0 +1,75 @@
+{
+  "as_of": "2026-09-27",
+  "taken_at": "2026-09-27T17:12:51",
+  "tickers": [
+    "MPC",
+    "PSX",
+    "CRM",
+    "CRWD",
+    "TMO",
+    "AMD",
+    "PFE",
+    "NVDA"
+  ],
+  "passed_gates": 56,
+  "pool_size": 83,
+  "sector_mix": {
+    "Energy": 2,
+    "Tech": 2,
+    "Health": 2,
+    "Semis": 2
+  },
+  "rs_lookback": 63,
+  "top_n": 8,
+  "max_per_sector": 2,
+  "detail": [
+    {
+      "ticker": "MPC",
+      "rs": 49.08,
+      "price": 393.52,
+      "dollar_vol_m": 1242.8
+    },
+    {
+      "ticker": "PSX",
+      "rs": 43.18,
+      "price": 255.75,
+      "dollar_vol_m": 886.2
+    },
+    {
+      "ticker": "CRM",
+      "rs": 41.96,
+      "price": 234.02,
+      "dollar_vol_m": 3641.9
+    },
+    {
+      "ticker": "CRWD",
+      "rs": 38.04,
+      "price": 252.13,
+      "dollar_vol_m": 2840.7
+    },
+    {
+      "ticker": "TMO",
+      "rs": 25.76,
+      "price": 675.0,
+      "dollar_vol_m": 1383.7
+    },
+    {
+      "ticker": "AMD",
+      "rs": 15.1,
+      "price": 630.63,
+      "dollar_vol_m": 11677.7
+    },
+    {
+      "ticker": "PFE",
+      "rs": 12.22,
+      "price": 28.67,
+      "dollar_vol_m": 942.8
+    },
+    {
+      "ticker": "NVDA",
+      "rs": 11.09,
+      "price": 225.07,
+      "dollar_vol_m": 25739.0
+    }
+  ]
+}
