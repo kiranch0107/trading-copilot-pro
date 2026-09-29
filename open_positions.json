@@ -35,9 +35,14 @@
     "mode": "live",
     "source": "discretionary",
     "traded_at": "2026-09-23 15:31 ET",
-    "last_check_epoch": 1790358419.4439194,
-    "status": "OPEN",
-    "exit_alerted": false
+    "last_check_epoch": 1790706506.2057574,
+    "status": "EXIT_SIGNALLED",
+    "exit_alerted": true,
+    "exit_reason": "STOP",
+    "exit_detail": "Premium -82.0% (limit \u221250%)",
+    "exit_premium": 0.2,
+    "exit_pnl_pct": -82.0,
+    "exit_detected": "2026-09-29 14:28 ET"
   },
   {
     "id": "OPT_NVDA_1790695592",
@@ -75,7 +80,7 @@
     "mode": "live",
     "source": "discretionary",
     "traded_at": "2026-09-29 11:26 ET",
-    "last_check_epoch": 1790695592.0833464,
+    "last_check_epoch": 1790706506.2057574,
     "status": "OPEN",
     "exit_alerted": false
   }
