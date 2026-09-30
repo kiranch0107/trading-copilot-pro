@@ -83,5 +83,45 @@
     "last_check_epoch": 1790792226.9116666,
     "status": "OPEN",
     "exit_alerted": false
+  },
+  {
+    "id": "OPT_PFE_1790796185",
+    "ticker": "PFE",
+    "right": "CALL",
+    "strike": 29.0,
+    "expiry": "2026-10-16",
+    "contracts": 1.0,
+    "entry_premium": 0.43,
+    "rules": {
+      "tp_pct": 200,
+      "sl_pct": 50,
+      "dte_exit": 7,
+      "max_hold_bars": 30,
+      "invalidate_ema": true
+    },
+    "entry_features": {
+      "adx": 32.3185,
+      "rsi": 67.0221,
+      "atr": 0.5031,
+      "close": 28.72,
+      "ema20": 28.0516,
+      "ema50": 27.2709,
+      "volume": 33304600.0,
+      "vol_avg20": 32861000.0,
+      "rvol": 1.013,
+      "ext_atr": 1.329,
+      "rs_20d": 0.0104,
+      "regime": "Bull",
+      "captured": "2026-09-30 15:23 ET"
+    },
+    "notes": "Actual trade on 9/30",
+    "opened": "2026-09-30 15:23 ET",
+    "opened_epoch": 1790796185.8670754,
+    "mode": "live",
+    "source": "discretionary",
+    "traded_at": "2026-09-30 15:23 ET",
+    "last_check_epoch": 1790796185.8670754,
+    "status": "OPEN",
+    "exit_alerted": false
   }
 ]
