@@ -863,8 +863,11 @@ first. Reality has no such floor.
 **Direction of the bias, stated honestly.** The target side has the mirror
 defect — a bar gapping past the target fills at the target when a real limit
 would fill better — so this is not purely one-directional. But the two are very
-unequal in practice: the stop sits at 1.25 × ATR and the target at 4.0 × ATR, and
-an overnight gap through 1.25 ATR is ordinary while one through 4 ATR is rare.
+unequal in practice: **the record's** stop sits at 1.0 × ATR and its target at
+3.0 × ATR (`bt.DEFAULTS`; the live 1.25 / 4.0 is a different configuration — see
+item 23), and an overnight gap through 1.0 ATR is ordinary while one through
+3 ATR is rare. *(Corrected 2026-10-07: this originally quoted the live geometry.
+The argument strengthens — a 1.0 ATR stop is easier to gap through.)*
 The net effect flatters the strategy, and it flatters the LEFT TAIL specifically
 — which is the part `longs_only.py` calls "the number worth trusting most in
 this file".
@@ -897,6 +900,161 @@ and the open. Mirror it on the target with the better of the two. Then re-run
 reproduces, and it will show exactly how much of the recorded edge was this.
 
 Expect the expectancy to get worse, not better. That is the point.
+
+---
+
+## 22. The unattended system runs at 14–23% of its schedule and reports success
+
+**Found 2026-10-07 from GitHub's own run list; see `results/code_review_2026-10-07.md` (C1).**
+
+| workflow | scheduled | in session | since 10-02 |
+|---|---:|---:|---|
+| Trading Scanner | 48 | **11 (23%)** | **0 of 3 trading days** |
+| Exit Monitor | 112 | **16 (14%)** | 1/day; 0 on 10-05 |
+
+GitHub's scheduler delivers runs 2–4 h late and drops slots. A run landing after
+16:00 ET hits the market-hours guard, runs "Skip notice", and the workflow reports
+`success`. The 11:07 ET scanner slot has fired **zero** times in three weeks. The
+monitor's only in-session run on FOMC day was 13:28 ET — before the decision.
+AAPL 355C was found at −82% on its fourth check in six days; PFE 29C at −81% on
+its second.
+
+**`is_total_outage()` cannot see this** — it fires on tickers failing *inside* a
+run, and a run that never scans is invisible to it. Silence identical to a quiet
+market, which is the failure this repo names as its worst.
+
+External cause confirmed: GitHub community #207346 and #206019 report dropped and
+delayed scheduled runs since 2026-08-26, manual dispatch unaffected.
+
+**Remedy, in order:**
+1. External trigger (any cron host) calling `workflow_dispatch` on both
+   workflows; keep `schedule` as backup. The inputs already exist.
+2. A positive heartbeat — item 26 — and an alert when no in-session scan has
+   happened for N trading days.
+3. The coverage table above as a weekly script, so this is measured, not noticed.
+
+None of this makes the stop a stop. It makes the silence audible.
+
+---
+
+## 23. The live config and the research config are different, and nothing pins them
+
+**Found 2026-10-07; see `results/code_review_2026-10-07.md` (H1).**
+
+| | `adx_min` | stop | target | `volume_mult` | regime |
+|---|---|---|---|---|---|
+| **live** (`signal_core.DEFAULTS`) | 35 | 1.25 | 4.0 | 1.2 | on |
+| **record** (`bt.DEFAULTS`) | 25 | 1.0 | 3.0 | 1.0 | off |
+
+`record_recheck.py:91` builds every recorded cut from `bt.DEFAULTS`. So the
+1,386-trade record and everything derived from it — `longshort_split`,
+`drift_null`, `exit_ab`, `atr_stop_test`, `inverted_arm`, `longs_only`, tranche C
+— measure a configuration the scanner does not run. The scanner runs the OOS
+`FROZEN` config, which failed. Neither supports trading; the decision is
+unchanged. But the forward log records the *live* config's signals, and the two
+cannot be compared without stating this.
+
+`bt.DEFAULTS`'s comments say `# app.py default`. They are stale.
+`check_duplicated_constants` matches `NAME = value` at module level and cannot see
+a dict literal. **Fix:** a `check_` that asserts either `bt.DEFAULTS` ==
+`signal_core.DEFAULTS` on the shared keys, or that the divergence is declared in
+one named constant with a reason — then decide which config the *next* research
+run should use, and say so in its pre-registration.
+
+---
+
+## 24. The alert tier is gated on refuted features, and the forward test is starving
+
+**Found 2026-10-07; see `results/code_review_2026-10-07.md` (H2, H5).**
+
+17 base signals in three weeks on 8 tickers; **0 taken**. 13 blocked by
+`ADX < 35`, 4 by the volume ≥ 1.2× leg of "Strong". `adx_retest.py` found ADX adds
+nothing; `rvol_confirm_run1.md` found RVOL refuted out-of-sample. TMO logged a
+Bullish setup on 8 consecutive bars (ADX 30.7 → 43.1, RSI 67 → 75) and never
+alerted — blocked by ADX until it crossed 35, then by volume.
+
+This is not "the gates are wrong because they filter noise" — removing them yields
+more signals of the same measured non-edge. It is that **the forward log is the
+only remaining route to evidence, and gating its intake on refuted features
+starves it.** At 0 taken per 3 weeks it will not reach BACKLOG 13's power in years.
+
+Compounding it: the universe is 8 names and rotated **7 of 8** in three weeks
+(09-27 swapped 4). AMD, CRWD, NVDA were in for exactly one week; their signals
+appear and the names leave. `churn_tracker.verdict()` flags only a mean interval
+turnover > 50% and has no cumulative view. BACKLOG's own arithmetic says ~50
+tickers are needed.
+
+**Decision for the owner, not a fix:** the forward log can record the *base*
+signal (every row it already writes) and tag the HQ tier as a field, rather than
+gate on it — the record then measures what the rules produce and what the gate
+would have selected, without the gate deciding what gets recorded. Pre-register
+before changing.
+
+---
+
+## 25. The option engine prices every contract at one constant, guessed IV
+
+**Found 2026-10-07; see `results/code_review_2026-10-07.md` (H3).**
+
+`simulate_option_trade()`: `iv = realised_vol(20d) × 1.15`, held constant for the
+life of the trade. No vol-of-vol, no IV crush, no skew, no term structure.
+`vrp_measurement.md` later measured +3.63 vol points — **on SPX** — and states
+that it does not transfer to single names. `option_backtest.py` runs on seven
+single names and does not cite the measurement.
+
+Downstream: `OPT_WIN_RATE = 0.249`, the realised-breakeven table, the spread
+ceiling's rationale, the app's EV panel. The two live positions that went from a
+−50% rule to −82% realised are the premium gap a constant-IV path cannot produce.
+
+**Fix requires market data and a design choice:** at minimum, record the IV
+assumption on every option-backtest result and derive `iv_mult` from a single-name
+measurement rather than SPX. A path-dependent IV (even a simple spot–vol
+correlation) changes every option number in the repo; the fix and the re-run are
+one change.
+
+---
+
+## 26. The forward log cannot tell "no signal" from "no scan"
+
+**Found 2026-10-07; see `results/code_review_2026-10-07.md` (H4).**
+
+Bars 09-30, 10-02, 10-05, 10-06 have no rows — not because nothing fired, because
+the scan that would have evaluated each bar landed after the close and skipped. A
+missing row means either, and the record built to be the clean record cannot say
+which.
+
+**Fix:** a `scan` row per executed run — bar evaluated, tickers, n_signals,
+config fingerprint. Absence of signal becomes a positive fact; absence of scan
+becomes visible; item 22 gets its heartbeat. Small, offline-testable, and it is
+the dedupe's natural companion: `record_signal` already keys on the bar.
+
+---
+
+## 27. Infrastructure and statistical-method debt
+
+**Found 2026-10-07; see `results/code_review_2026-10-07.md` (M1–M6).**
+
+- **Production runs versions CI never tested.** `requirements.txt` pins
+  `yfinance==1.6.0`, `pandas==3.0.5`; `scanner.yml` and `exit-monitor.yml` do
+  `pip install yfinance pandas …` unpinned and got 1.7.0 / 3.0.6 on 10-02. Install
+  from `requirements.txt` in both.
+- **The price fallback has never been active.** `TIINGO_API_KEY` is empty in both
+  workflows. Yahoo is the single point of failure for scanner, monitor and app.
+- **`market_context` imports `backtest`**, so the scanner's import closure includes
+  a 2,197-line research module. Move `build_regime_series` to `market_context`
+  (or a tiny shared module) and have `backtest` import it, not the reverse.
+- **No DSR/PBO on the selection step.** The Aug 2026 sweep tried ~60 configs on
+  5y × 7 tickers; Bailey & López de Prado's guidance is ≤45 before overfit is
+  expected. Holm is applied within later studies, never to the sweep that chose
+  the live parameters. Confirmatory — the OOS failed — but it is the one
+  undocumented statistical act in a pre-registered project.
+- **`oos_validate.two_point_variance()`** rebuilds variance from WR/E/PF and
+  admits it inflates the t-stat; `bt.run()` returns per-trade R. Compute it.
+- **Node 20 deprecation** on `actions/checkout@v4`, `actions/setup-python@v5`.
+- **`attach_outcomes` nags** the NKE `no_match` every run forever; add an age
+  cutoff. **`scanner_state.json`** never prunes. **Win rate counts dust** (NKE +0.04
+  is a WIN; the 0.05 R floor applies to PF only). **Stale `# app.py default`**
+  comments on `bt.DEFAULTS`.
 
 ---
 
