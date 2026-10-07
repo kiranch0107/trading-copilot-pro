@@ -1980,7 +1980,8 @@ def check_forward_log_single_writer() -> None:
         # outcome rows (BACKLOG 17). Leaving it out would let a second module
         # start writing through the one entry point this check did not name.
         if any(f"forward_log.{fn}" in txt for fn in
-               ("record_signal", "record_outcome", "append", "attach_outcomes")):
+               ("record_signal", "record_outcome", "append", "attach_outcomes",
+                "record_scan")):
             writers.append(p.name)
     if writers != ["scanner.py"]:
         raise AssertionError(
@@ -2004,6 +2005,56 @@ def check_forward_log_single_writer() -> None:
     print("  scanner.yml stages and commits forward_log.jsonl (its only anchor)")
 
 
+def check_unattended_workflows_pinned_and_alarmed() -> None:
+    """
+    The two unattended workflows install the versions CI tests, and the
+    scanner's silence alarm runs on EVERY run.
+
+    THE TWO BUGS THIS PINS (BACKLOG 22, 27). scanner.yml and exit-monitor.yml
+    ran `pip install yfinance pandas ...` UNPINNED, and on 2026-10-02 installed
+    yfinance 1.7.0 / pandas 3.0.6 while tests.yml ran against requirements.txt's
+    1.6.0 / 3.0.5. The live money path ran versions no selftest had seen.
+    `-c requirements.txt` installs only the named packages at the pinned
+    versions, so pins have one home.
+
+    And from 09-16 to 10-07 GitHub's scheduler delivered the scanner in
+    session on 11 of 48 slots; each late run skipped at the market-hours guard
+    and reported success, and nothing could say the scanner had gone quiet.
+    `scanner.py --coverage` is the alarm. It is only an alarm if it runs on the
+    runs that CANNOT scan, which is why its step must be `if: always()` --
+    a conditional step is the silence this exists to end.
+    """
+    for wf in ("scanner.yml", "exit-monitor.yml"):
+        txt = Path(".github/workflows", wf).read_text()
+        installs = [l.strip() for l in txt.splitlines()
+                    if l.strip().startswith("run: pip install")]
+        assert installs, f"{wf}: no pip install line found"
+        for line in installs:
+            if "-r requirements.txt" in line:
+                continue
+            assert "-c requirements.txt" in line, (
+                f"{wf} installs unpinned: `{line}`. Production ran yfinance "
+                f"1.7.0 against a tested 1.6.0 this way. Use "
+                f"`pip install -c requirements.txt <pkgs>` so the versions CI "
+                f"tests are the versions money runs on.")
+        print(f"  {wf:18} installs pinned to requirements.txt")
+
+    txt = Path(".github/workflows/scanner.yml").read_text()
+    i = txt.find("name: Check scan coverage")
+    assert i > 0, ("scanner.yml has no 'Check scan coverage' step. Without it a "
+                   "late run skips, reports success, and nothing says the "
+                   "scanner went quiet -- which it did for three trading days.")
+    block = txt[i:i + 900]
+    assert "if: always()" in block, (
+        "the coverage step is conditional. It must be `if: always()` -- it "
+        "only earns its place on the runs that cannot scan.")
+    assert "scanner.py --coverage" in block, "the coverage step does not run --coverage"
+    src = Path("scanner.py").read_text()
+    assert '"--coverage"' in src and "def coverage_check" in src, \
+        "scanner.py no longer provides --coverage"
+    print("  scanner.yml        runs the silence alarm on every run (if: always())")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -2016,6 +2067,7 @@ CHECKS = [
     ("capital never gates an alert",             check_capital_never_gates_alerts),
     ("forward log carries no test data",         check_forward_log_has_no_test_data),
     ("forward log has one writer, and is committed", check_forward_log_single_writer),
+    ("unattended workflows pinned + silence alarm",   check_unattended_workflows_pinned_and_alarmed),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),

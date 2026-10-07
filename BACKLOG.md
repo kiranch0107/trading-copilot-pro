@@ -903,7 +903,39 @@ Expect the expectancy to get worse, not better. That is the point.
 
 ---
 
-## 22. The unattended system runs at 14–23% of its schedule and reports success
+## 22. The unattended system runs at 14–23% of its schedule — CODE SIDE CLOSED 2026-10-07; EXTERNAL TRIGGER IS THE OWNER'S
+
+**Done in the repo (PR #96):**
+
+- `scanner.py --coverage` — the alarm for silence. Reads the committed forward log's
+  last `scan` row and the position file's `last_check_epoch`; pages once a day when
+  no scan has evaluated a bar for 2 trading days or an open position has gone a
+  session unchecked. **Runs on every workflow run via `if: always()`**, including
+  the late ones that cannot scan — which is the only place an alarm for a skipped
+  run can live. Against the real state on 10-07 it fires.
+- Both crons doubled to two slots an hour (`7,37` / `0,30`). More slots are more
+  chances; the guard discards the late ones; `concurrency` serialises collisions.
+- The Option A runbook is in `scanner.yml`'s comments, next to the existing
+  one-time setup. **The dispatch endpoint was proven from an API token on 10-07:
+  created and started in the same second**, against scheduled runs 2–4 h late.
+- `check_unattended_workflows_pinned_and_alarmed()` pins the alarm step to
+  `always()`; falsified.
+
+**Still the owner's, and the part that actually fixes the cadence:** a fine-grained
+PAT (this repo only, Actions: read+write) in an HTTP cron service, three jobs for
+`scanner.yml` at 11:07/13:07/15:07 America/New_York and hourly 09:30–16:00 for
+`exit-monitor.yml`. Until then coverage stays ~1 run/day — but it is now *audible*.
+
+**Open design question, deliberately not decided here:** the guard refuses to
+scan after 16:00 ET, yet for a daily-bar signal post-close is the best time —
+today's bar is settled and `drop_partial_bar` already keeps it. A 16:00–18:00
+*recording* window (alerts still gated to market hours, since option quotes go
+stale) would have turned most of the 11 wasted runs into logged bars.
+
+---
+
+### The finding as recorded on 2026-10-07
+
 
 **Found 2026-10-07 from GitHub's own run list; see `results/code_review_2026-10-07.md` (C1).**
 
@@ -1014,7 +1046,14 @@ one change.
 
 ---
 
-## 26. The forward log cannot tell "no signal" from "no scan"
+## 26. ~~The forward log cannot tell "no signal" from "no scan"~~ — CLOSED 2026-10-07
+
+`forward_log.record_scan()` writes one `scan` row per bar evaluated, per run —
+bar, tickers, n_signals, config. **Never deduped**: two scans of one bar are two
+facts, and each is evidence the scanner ran. Written on dry runs too. `last_scan()`
+is what the item-22 alarm reads. `summary()` reports `scans` and `bars_scanned`.
+Falsified by removing the call from `run()`.
+
 
 **Found 2026-10-07; see `results/code_review_2026-10-07.md` (H4).**
 
@@ -1034,10 +1073,10 @@ the dedupe's natural companion: `record_signal` already keys on the bar.
 
 **Found 2026-10-07; see `results/code_review_2026-10-07.md` (M1–M6).**
 
-- **Production runs versions CI never tested.** `requirements.txt` pins
-  `yfinance==1.6.0`, `pandas==3.0.5`; `scanner.yml` and `exit-monitor.yml` do
-  `pip install yfinance pandas …` unpinned and got 1.7.0 / 3.0.6 on 10-02. Install
-  from `requirements.txt` in both.
+- ~~**Production runs versions CI never tested.**~~ **DONE 2026-10-07.** Both
+  workflows now `pip install -c requirements.txt <pkgs>` — a constraints file, so
+  only the named packages install, at the pinned versions, and pins have one home.
+  `check_unattended_workflows_pinned_and_alarmed()` enforces it; falsified.
 - **The price fallback has never been active.** `TIINGO_API_KEY` is empty in both
   workflows. Yahoo is the single point of failure for scanner, monitor and app.
 - **`market_context` imports `backtest`**, so the scanner's import closure includes

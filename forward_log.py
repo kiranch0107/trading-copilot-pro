@@ -253,6 +253,39 @@ def record_signal(ticker: str, trend: str, setup: dict, decision: str,
     }, path=path)
 
 
+def record_scan(bar_date, tickers: list, n_signals: int, cfg: dict,
+                path: Path | None = None) -> dict:
+    """
+    One row per EXECUTED scan: "this bar was evaluated, on these names, and
+    this many signals fired." Never deduped — every real scan is a fact.
+
+    WHY THIS EXISTS. Between 09-16 and 10-07 the log had no rows for bars
+    09-30, 10-02, 10-05 and 10-06. Not because nothing fired — because the
+    scan that would have evaluated each bar landed after the close and was
+    skipped, and GitHub reported the workflow as `success`. A missing signal
+    row meant EITHER "quiet market" OR "no scan ran", and the record built to
+    be the clean record could not say which.
+
+    With this row, absence of signal is a positive fact ("scanned, nothing"),
+    and absence of scan is visible ("no scan row for this bar"). It is also
+    the heartbeat scan_coverage() reads to alert when the scanner has gone
+    silent — the failure this repo names as its worst, and the one it was in
+    for three weeks.
+    """
+    return append("scan", {
+        "bar_date": str(bar_date)[:10],
+        "tickers": sorted(str(t) for t in tickers),
+        "n_signals": int(n_signals),
+        "config": config_fingerprint(cfg),
+    }, path=path)
+
+
+def last_scan(path: Path | None = None) -> dict | None:
+    """The most recent scan row, or None if the log has never recorded one."""
+    rows = [r for r in read_all(path) if r.get("kind") == "scan"]
+    return rows[-1] if rows else None
+
+
 def record_outcome(ref_seq: int, outcome: str, r: float, basis: str,
                    exit_price: float | None = None,
                    trade_id: str | None = None, mode: str | None = None,
@@ -478,12 +511,15 @@ def summary(path: Path | None = None) -> dict:
     rows = read_all(path)
     sigs = [r for r in rows if r.get("kind") == "signal"]
     outs = [r for r in rows if r.get("kind") == "outcome"]
+    scans = [r for r in rows if r.get("kind") == "scan"]
     taken = [s for s in sigs if s.get("decision") == "taken"]
     skipped = [s for s in sigs if s.get("decision") == "skipped"]
     settled = [o for o in outs if o.get("r") is not None]
     configs = sorted({s.get("config") for s in sigs if s.get("config")})
     return {
-        "rows": len(rows), "signals": len(sigs), "taken": len(taken),
+        "rows": len(rows), "scans": len(scans),
+        "bars_scanned": len({x.get("bar_date") for x in scans}),
+        "signals": len(sigs), "taken": len(taken),
         "skipped": len(skipped), "settled": len(settled),
         "open": len(taken) - len(settled),
         "mean_r": (sum(o["r"] for o in settled) / len(settled)
@@ -880,6 +916,34 @@ def selftest() -> int:
         print("basis            : required, and only a known denominator")
     else:
         raise AssertionError("record_outcome accepted an unknown basis")
+
+    # ── SCAN ROWS: "scanned, nothing fired" is a fact, not an absence ──
+    #
+    # Bars 09-30, 10-02, 10-05, 10-06 had no rows for three weeks and the log
+    # could not say whether the market was quiet or the scanner never ran. It
+    # was the scanner. A scan row makes silence distinguishable from a miss.
+    sl = Path(tempfile.mkdtemp()) / "scan.jsonl"
+    assert last_scan(sl) is None, "an empty log has no last scan"
+    s1 = record_scan("2026-10-06", ["TMO", "PFE"], 0, cfg, path=sl)
+    s2 = record_scan("2026-10-06", ["TMO", "PFE"], 0, cfg, path=sl)
+    assert s1["seq"] == 1 and s2["seq"] == 2, \
+        "two scans of one bar are TWO facts — scan rows are never deduped, " \
+        "because each is evidence the scanner ran"
+    assert s1["kind"] == "scan" and s1["tickers"] == ["PFE", "TMO"]
+    assert last_scan(sl)["seq"] == 2
+    record_scan("2026-10-07 15:07:00", ["TMO"], 1, cfg, path=sl)
+    assert last_scan(sl)["bar_date"] == "2026-10-07", \
+        "a timestamp must key on its DAY, like record_signal"
+    assert not verify(sl), verify(sl)
+    sm = summary(sl)
+    assert sm["scans"] == 3 and sm["bars_scanned"] == 2 and sm["signals"] == 0, sm
+    # A scan row must never be mistaken for a signal by anything downstream.
+    record_signal("TMO", "Bullish", setup, "taken", "", cfg,
+                  bar_date="2026-10-07", path=sl)
+    assert attach_outcomes([], path=sl)["attached"] == 0
+    assert summary(sl)["signals"] == 1 and summary(sl)["scans"] == 3
+    print("scan rows        : per-run heartbeat, never deduped, keyed on the "
+          "day, invisible to signal/outcome logic")
 
     print("=" * 72)
     print("All self-tests passed.")

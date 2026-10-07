@@ -55,13 +55,51 @@ on:
     #   15:07 UTC = 11:07am EDT / 10:07am EST
     #   17:07 UTC =  1:07pm EDT / 12:07pm EST
     #   19:07 UTC =  3:07pm EDT /  2:07pm EST
-    - cron: '7 15,17,19 * * 1-5'
+    # TWO slots an hour, every session hour, not three a day. GitHub's
+    # scheduler delivered the 15:07 UTC slot ZERO times between 09-16 and
+    # 10-07 and the other two 2-4 h late; 11 of 48 scheduled runs scanned.
+    # More slots are more chances. The market-hours guard discards the late
+    # ones and `concurrency` serialises any that collide, so redundancy here
+    # costs nothing but a few seconds of skipped runs.
+    #
+    # THIS IS THE BACKUP. The primary trigger is external -- see
+    # "RELIABLE SCHEDULING" below. `schedule` on its own is not reliable and
+    # has not been since 2026-08-26.
+    - cron: '7,37 15,16,17,18,19 * * 1-5'
 
     # DO NOT use a post-close cron such as '15 20 * * 1-5' (4:15pm ET). The
     # guard step requires 9:30-16:00 ET, so a 16:15 run is skipped as
     # market-closed and never scans. A previous comment here recommended
     # exactly that; it would have run daily and produced nothing.
 
+  # ── RELIABLE SCHEDULING — the external trigger (BACKLOG 22) ─────────────
+  #
+  # GitHub's `schedule` has delivered this workflow in session on 23% of its
+  # slots since 2026-08-26 (community discussions #207346, #206019), with
+  # every skipped run reporting `success`. `workflow_dispatch` is unaffected:
+  # a dispatch on 2026-10-07 was created and started in the same second.
+  #
+  # So the PRIMARY trigger is an external HTTP cron calling this endpoint:
+  #
+  #   POST https://api.github.com/repos/kiranch0107/trading-copilot-pro/actions/workflows/scanner.yml/dispatches
+  #   Authorization: Bearer <fine-grained PAT>
+  #   Accept: application/vnd.github+json
+  #   Body: {"ref":"main"}
+  #
+  # ONE-TIME SETUP (owner):
+  #   1. GitHub -> Settings -> Developer settings -> Fine-grained tokens.
+  #      Repository access: ONLY this repo. Permission: Actions -> Read and
+  #      write. Nothing else. The token lives in the cron service, never here.
+  #   2. On any HTTP cron service that can set headers (cron-job.org is the
+  #      usual free one), create three jobs with the request above at
+  #      11:07, 13:07, 15:07 in timezone America/New_York, Mon-Fri. Setting
+  #      the timezone there ends the UTC/DST problem every comment in this
+  #      file has fought.
+  #   3. Do the same for exit-monitor.yml, hourly 09:30-16:00 ET.
+  #   4. Keep the `schedule` block above as the backup.
+  #
+  # Dispatch without `inputs` takes the defaults below (force=false), so the
+  # market-hours guard still applies. `concurrency` makes a double-fire safe.
   workflow_dispatch:               # manual run, always allowed
     inputs:
       log_level:
@@ -90,9 +128,37 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # CHECKOUT AND INSTALL ON EVERY RUN, INCLUDING THE ONES THAT CANNOT SCAN.
+      #
+      # The guard used to run before checkout "so a closed-market slot costs a
+      # few seconds instead of a full install". That saved seconds and cost
+      # three weeks: a late run skipped everything, reported success, and
+      # nothing could tell the owner the scanner had gone quiet. The coverage
+      # step below needs the repo (it reads the committed forward log and
+      # position file) and runs on EVERY run, so the install is unconditional.
+      # Public repo; the minutes are free.
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # full history so `git pull --rebase` works
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      # PINNED TO requirements.txt via a constraints file. This line used to
+      # read `pip install yfinance pandas ta requests pytz` -- unpinned -- and
+      # on 2026-10-02 it installed yfinance 1.7.0 / pandas 3.0.6 while the
+      # selftests in tests.yml ran against the pinned 1.6.0 / 3.0.5. The live
+      # money path was running versions CI had never seen. `-c` installs ONLY
+      # the named packages, at requirements.txt's versions, so there is one
+      # place pins live (BACKLOG 27).
+      - name: Install dependencies
+        run: pip install -c requirements.txt yfinance pandas ta requests pytz
+
       # ── Guard: is the US market actually open right now? ──
-      # Runs before checkout so a closed-market slot costs a few seconds
-      # instead of a full install.
       - name: Check market hours
         id: market
         run: |
@@ -138,24 +204,7 @@ jobs:
 
       - name: Skip notice
         if: steps.market.outputs.open != 'true' && inputs.force != true
-        run: echo "Market closed — nothing to scan. Exiting without using data quota."
-
-      - name: Checkout code
-        if: steps.market.outputs.open == 'true' || inputs.force == true
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0     # full history so `git pull --rebase` works
-
-      - name: Setup Python
-        if: steps.market.outputs.open == 'true' || inputs.force == true
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: pip
-
-      - name: Install dependencies
-        if: steps.market.outputs.open == 'true' || inputs.force == true
-        run: pip install yfinance pandas ta requests pytz
+        run: echo "Market closed — scan skipped. The coverage check below still runs."
 
       - name: Run scanner
         if: steps.market.outputs.open == 'true' || inputs.force == true
@@ -176,6 +225,23 @@ jobs:
           USE_DYNAMIC_UNIVERSE: '1'
           LOG_LEVEL: ${{ inputs.log_level || 'INFO' }}
         run: python scanner.py
+
+      # ── THE ALARM FOR SILENCE — runs on EVERY run, scanned or not ──
+      #
+      # is_total_outage() fires when every ticker fails INSIDE a run. It cannot
+      # see a run that never scans. This reads the committed forward log's last
+      # `scan` row and the position file's last_check_epoch, and pages (once a
+      # day) when no scan has evaluated a bar for 2 trading days or an open
+      # position has gone a session unchecked. A late run that cannot scan can
+      # still say the scanner has gone quiet -- which, from 10-02 to 10-07, it
+      # had, with every run reporting success. No market data needed.
+      - name: Check scan coverage
+        if: always() && !inputs.dry_run
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          USE_DYNAMIC_UNIVERSE: '1'
+        run: python scanner.py --coverage
 
       - name: Persist alert cooldown state and the forward log
         # TWO files, and the second was missing — which made the forward log
@@ -198,7 +264,7 @@ jobs:
         # (this workflow runs three times, and drop_partial_bar() means all
         # three read the same settled bar) into an APPEND-ONLY chain that cannot
         # be cleaned afterwards — only abandoned. The dedupe landed first.
-        if: steps.market.outputs.open == 'true' || inputs.force == true
+        if: always()
         run: |
           if [[ -n "$(git status --porcelain scanner_state.json forward_log.jsonl)" ]]; then
             git config user.name  "trading-scanner"
