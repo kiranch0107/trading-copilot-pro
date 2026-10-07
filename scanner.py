@@ -46,7 +46,7 @@ import json
 import os
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -733,6 +733,12 @@ def run(args) -> int:
         logger.info("SPY regime: %s",
                     (spy_regime or {}).get("regime", "unavailable"))
 
+    # THE BAR EACH TICKER WAS EVALUATED ON, so the run can record a `scan`
+    # heartbeat per bar at the end. Normally one bar per run; tracked as a dict
+    # because a frame that lags a day (a stale snapshot, a late Yahoo bar)
+    # would otherwise be recorded under the wrong date.
+    bars_scanned: dict = {}
+
     for tk in WATCHLIST:
         try:
             time.sleep(FETCH_GAP_SEC)
@@ -748,9 +754,17 @@ def run(args) -> int:
             cdf, dropped = sc.drop_partial_bar(cdf, now=datetime.now(ET))
             if dropped:
                 logger.debug("%s — dropped today's partial bar", tk)
+            try:
+                _bar = str(sc._bar_dates(cdf, None).max().date())
+                bars_scanned.setdefault(_bar, {"tickers": [], "signals": 0})
+                bars_scanned[_bar]["tickers"].append(tk)
+            except Exception:                              # noqa: BLE001
+                _bar = None
             r = analyze(cdf, tk, spy_regime=spy_regime)
             if not r:
                 continue
+            if _bar:
+                bars_scanned[_bar]["signals"] += 1
 
             if recently_alerted(state, tk, r["trend"]):
                 logger.info("%s %s qualifies but alerted within %dh — suppressed.",
@@ -827,6 +841,28 @@ def run(args) -> int:
             logger.warning("Total scan outage, but an outage alert was sent "
                            "within %dh — suppressed.", ALERT_COOLDOWN_HRS)
 
+    # ── RECORD THAT THIS SCAN HAPPENED ──
+    #
+    # One `scan` row per bar evaluated. Without it a bar with no signal row
+    # meant EITHER "quiet market" OR "no scan ran" — and for three weeks the
+    # second was true on 1 in 4 trading days while every workflow run reported
+    # success. This is the heartbeat coverage_check() reads.
+    #
+    # Written on dry runs too: a dry run still evaluated the bar. Skipped only
+    # when nothing was scanned at all — "scanned zero tickers" is an outage
+    # (handled above), not a heartbeat.
+    for _bar, _info in sorted(bars_scanned.items()):
+        try:
+            forward_log.record_scan(_bar, _info["tickers"], _info["signals"],
+                                    {"adx_min": PARAMS.adx_min,
+                                     "min_rr": PARAMS.min_rr,
+                                     "atr_stop_mult": PARAMS.atr_stop_mult,
+                                     "atr_tgt_mult": PARAMS.atr_tgt_mult,
+                                     "weekly_confirm": PARAMS.weekly_confirm,
+                                     "longs_only": risk_params.LONGS_ONLY})
+        except Exception as _exc:                          # noqa: BLE001
+            logger.warning("forward log: scan row for %s failed: %s", _bar, _exc)
+
     if not args.dry_run:
         save_state(state)
 
@@ -835,6 +871,116 @@ def run(args) -> int:
     if failed:
         logger.warning("Failed tickers: %s", ", ".join(failed))
     return 0
+
+
+# ══════════════════════════════════════════════════════════════════
+# COVERAGE — the alarm for silence
+# ══════════════════════════════════════════════════════════════════
+# is_total_outage() fires when every ticker fails INSIDE a run. It cannot see a
+# run that never scans — and from 09-16 to 10-07 GitHub's scheduler delivered
+# the scanner in session on 11 of 48 scheduled slots and the exit monitor on 16
+# of 112, each late run skipping at the market-hours guard and reporting
+# success. Three straight trading days passed with no scan and nothing said so.
+# This runs on EVERY workflow run, including the ones that cannot scan, and
+# reads the committed state the last real run left behind.
+
+NO_SCAN_ALERT_SESSIONS = 2     # alert once this many trading days pass unscanned
+STALE_POSITION_SESSIONS = 1    # an open position unchecked for this many sessions
+COVERAGE_COOLDOWN_HRS = 20     # one nag a day, not one per late run
+
+
+def trading_days_between(start: date, end: date) -> int:
+    """Completed trading sessions after `start` up to and including `end`."""
+    if end <= start:
+        return 0
+    n, cur = 0, start
+    while cur < end:
+        cur += timedelta(days=1)
+        if cur.weekday() >= 5 or cur.strftime("%Y-%m-%d") in MARKET_HOLIDAYS:
+            continue
+        n += 1
+    return n
+
+
+def coverage_report(now: datetime | None = None,
+                    positions_path: Path | None = None) -> dict:
+    """
+    What the committed state says about whether the unattended system has been
+    running. Pure read; the alerting decision is coverage_check()'s.
+
+      last_scan_bar       bar date of the last `scan` row, or None
+      sessions_unscanned  trading days since that bar whose bar no scan has
+                          evaluated (the scanner reads the last SETTLED bar, so
+                          on a run day the newest possible bar is yesterday's)
+      stale_positions     OPEN / EXIT_SIGNALLED positions whose last_check_epoch
+                          is STALE_POSITION_SESSIONS or more sessions old
+    """
+    now = now or datetime.now(ET)
+    today = now.date()
+    last = forward_log.last_scan()
+    if last and last.get("bar_date"):
+        last_bar = date.fromisoformat(last["bar_date"])
+        unscanned = max(0, trading_days_between(last_bar, today) - 1)
+    else:
+        last_bar, unscanned = None, None
+
+    stale = []
+    p = positions_path or Path("open_positions.json")
+    try:
+        for pos in (json.loads(p.read_text()) if p.exists() else []):
+            if pos.get("status") not in ("OPEN", "EXIT_SIGNALLED"):
+                continue
+            ep = pos.get("last_check_epoch")
+            if not ep:
+                stale.append((pos.get("ticker"), None))
+                continue
+            checked = datetime.fromtimestamp(float(ep), ET).date()
+            gap = trading_days_between(checked, today)
+            if gap >= STALE_POSITION_SESSIONS:
+                stale.append((pos.get("ticker"), gap))
+    except Exception as e:                                 # noqa: BLE001
+        logger.warning("coverage: could not read positions: %s", e)
+
+    return {"last_scan_bar": str(last_bar) if last_bar else None,
+            "sessions_unscanned": unscanned, "stale_positions": stale,
+            "today": str(today)}
+
+
+def coverage_check(state: dict, now: datetime | None = None,
+                   dry_run: bool = False) -> bool:
+    """Alert if the system has gone silent. Returns True if an alert was sent."""
+    rep = coverage_report(now)
+    lines = []
+    if rep["sessions_unscanned"] is None:
+        lines.append("The forward log has NO scan row at all — the scanner "
+                     "has never recorded a completed scan.")
+    elif rep["sessions_unscanned"] >= NO_SCAN_ALERT_SESSIONS:
+        lines.append(f"No scan has run for {rep['sessions_unscanned']} trading "
+                     f"day(s) — last bar evaluated was {rep['last_scan_bar']}.")
+    if rep["stale_positions"]:
+        bits = ", ".join(f"{t} ({'never' if g is None else f'{g} session(s)'})"
+                         for t, g in rep["stale_positions"])
+        lines.append(f"Open position(s) not checked by the exit monitor: {bits}.")
+    if not lines:
+        logger.info("coverage: OK — last scan bar %s, %s session(s) unscanned, "
+                    "no stale positions", rep["last_scan_bar"],
+                    rep["sessions_unscanned"])
+        return False
+    last_alert = float(state.get("SCANNER:COVERAGE", 0) or 0)
+    if (time.time() - last_alert) < COVERAGE_COOLDOWN_HRS * 3600:
+        logger.warning("coverage: PROBLEM, alert suppressed by cooldown — %s",
+                       " ".join(lines))
+        return False
+    msg = ("⚠️ SCANNER COVERAGE\n" + "\n".join(lines) +
+           "\n\nA workflow run can report success while skipping the scan — a "
+           "late run hits the market-hours guard. This is NOT 'no setups'; it "
+           "means the system is not looking. See BACKLOG 22.")
+    logger.warning("coverage: %s", " ".join(lines))
+    if send_alert(msg, dry_run=dry_run):
+        if not dry_run:
+            state["SCANNER:COVERAGE"] = time.time()
+        return True
+    return False
 
 
 def _selftest_body() -> int:
@@ -1018,6 +1164,127 @@ def _selftest_body() -> int:
         "the outage alert must fire again once the cooldown has elapsed"
     print(f"outage alert cooldown   : one per {ALERT_COOLDOWN_HRS}h, then re-arms")
 
+    # ══════════════════════════════════════════════════════════════
+    # COVERAGE — the alarm for silence (BACKLOG 22 / 26)
+    # ══════════════════════════════════════════════════════════════
+    import tempfile as _tf2, pathlib as _pl2, json as _json2
+    from datetime import datetime as _dt2, date as _d2
+
+    # trading_days_between: weekends and holidays are not sessions
+    assert trading_days_between(_d2(2026, 10, 2), _d2(2026, 10, 5)) == 1, \
+        "Fri -> Mon is ONE session, not three days"
+    assert trading_days_between(_d2(2026, 9, 4), _d2(2026, 9, 8)) == 1, \
+        "Fri -> Tue across Labor Day (09-07) is ONE session"
+    assert trading_days_between(_d2(2026, 10, 7), _d2(2026, 10, 7)) == 0
+    print("sessions between        : weekends and holidays excluded")
+
+    _tmpl = _pl2.Path(_tf2.mkdtemp()) / "cov.jsonl"
+    _real_log2 = forward_log.LOG
+    _real_send2 = globals()["send_alert"]
+    _sent: list = []
+    try:
+        forward_log.LOG = _tmpl
+        globals()["send_alert"] = lambda m, dry_run=False: (_sent.append(m) or True)
+        _now = _dt2(2026, 10, 7, 12, 0, tzinfo=ET)
+        _pos = _pl2.Path(_tf2.mkdtemp()) / "pos.json"
+
+        # No scan row at all -> the report says so, the check alerts.
+        _pos.write_text("[]")
+        _rep = coverage_report(now=_now, positions_path=_pos)
+        assert _rep["sessions_unscanned"] is None and _rep["last_scan_bar"] is None
+        # A run that scanned bar 10-06 on 10-07: 0 unscanned (yesterday is the
+        # newest bar a scan can evaluate).
+        forward_log.record_scan("2026-10-06", ["TMO"], 0, {"k": 1})
+        _rep = coverage_report(now=_now, positions_path=_pos)
+        assert _rep["sessions_unscanned"] == 0, _rep
+        # THE THREE-WEEK FAILURE, reproduced: last scan evaluated 10-01, today is
+        # 10-07 -> bars 10-02, 10-05, 10-06 unscanned = 3 sessions.
+        _tmpl.write_text("")
+        forward_log.record_scan("2026-10-01", ["TMO"], 2, {"k": 1})
+        _rep = coverage_report(now=_now, positions_path=_pos)
+        assert _rep["sessions_unscanned"] == 3, _rep
+        print("coverage report         : none / current / 3 sessions silent")
+
+        # Stale position: checked 10-02, today 10-07 -> 3 sessions.
+        _ep = _dt2(2026, 10, 2, 14, 0, tzinfo=ET).timestamp()
+        _pos.write_text(_json2.dumps([
+            {"ticker": "PFE", "status": "EXIT_SIGNALLED", "last_check_epoch": _ep},
+            {"ticker": "NVDA", "status": "OPEN", "last_check_epoch": _now.timestamp()},
+            {"ticker": "OLD", "status": "CLOSED", "last_check_epoch": _ep},
+            {"ticker": "NEW", "status": "OPEN"}]))
+        _rep = coverage_report(now=_now, positions_path=_pos)
+        assert ("PFE", 3) in _rep["stale_positions"], _rep
+        assert ("NEW", None) in _rep["stale_positions"], "never-checked is stale"
+        assert all(t != "NVDA" for t, _ in _rep["stale_positions"]), \
+            "a position checked today is not stale"
+        assert all(t != "OLD" for t, _ in _rep["stale_positions"]), \
+            "a CLOSED position is nobody's to check"
+        print("stale positions         : 3 sessions and never-checked flagged; "
+              "today and CLOSED not")
+
+        # coverage_check: alerts, then cooldown, then dry-run leaves no state.
+        # Point it at the temp positions file by monkeypatching the default.
+        import scanner as _self
+        _orig_cr = _self.coverage_report
+        _self.coverage_report = lambda now=None: _orig_cr(now=now, positions_path=_pos)
+        globals()["coverage_report"] = _self.coverage_report
+        try:
+            _st: dict = {}
+            assert coverage_check(_st, now=_now) is True and len(_sent) == 1
+            assert "No scan has run for 3 trading day" in _sent[0], _sent[0]
+            assert "PFE (3 session" in _sent[0], _sent[0]
+            assert "SCANNER:COVERAGE" in _st, "the alert must be recorded for cooldown"
+            assert coverage_check(_st, now=_now) is False and len(_sent) == 1, \
+                "a second check inside the cooldown must not re-page"
+            _st2: dict = {}
+            assert coverage_check(_st2, now=_now, dry_run=True) is True
+            assert "SCANNER:COVERAGE" not in _st2, "dry run must not touch state"
+            # And a healthy state is silent.
+            _tmpl.write_text("")
+            forward_log.record_scan("2026-10-06", ["TMO"], 0, {"k": 1})
+            _pos.write_text("[]")
+            _n = len(_sent)
+            assert coverage_check({}, now=_now) is False and len(_sent) == _n
+            print("coverage check          : pages once, cools down 20h, dry-run "
+                  "stateless, silent when healthy")
+        finally:
+            _self.coverage_report = _orig_cr
+            globals()["coverage_report"] = _orig_cr
+
+        # ── run() WRITES A SCAN ROW — the heartbeat is produced, not just read ──
+        _tmpl.write_text("")
+        import pandas as _pd2
+        _bars = _pd2.bdate_range("2026-08-01", periods=MIN_BARS_AFTER_WARMUP + 20)
+        _fr = _pd2.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0,
+                              "Close": 100.0, "Volume": 1e6}, index=_bars)
+        _g = globals()
+        _saved = {k: _g[k] for k in ("get_data", "compute", "analyze",
+                                     "get_spy_regime", "save_state", "load_state",
+                                     "WATCHLIST", "FETCH_GAP_SEC")}
+        try:
+            _g["get_data"] = lambda tk: _fr
+            _g["compute"] = lambda df: df
+            _g["analyze"] = lambda df, tk, spy_regime=None: None
+            _g["get_spy_regime"] = lambda: None
+            _g["save_state"] = lambda st: None
+            _g["load_state"] = lambda: {}
+            _g["WATCHLIST"] = ["AAA", "BBB"]
+            _g["FETCH_GAP_SEC"] = 0
+            import argparse as _ap2
+            run(_ap2.Namespace(force=True, dry_run=True))
+        finally:
+            _g.update(_saved)
+        _rows = forward_log.read_all(_tmpl)
+        _scans = [r for r in _rows if r["kind"] == "scan"]
+        assert len(_scans) == 1, f"one bar scanned -> one scan row, got {len(_scans)}"
+        assert _scans[0]["tickers"] == ["AAA", "BBB"] and _scans[0]["n_signals"] == 0
+        assert _scans[0]["bar_date"] == str(_bars[-1].date()), _scans[0]
+        print(f"run() heartbeat         : one scan row, bar {_scans[0]['bar_date']}, "
+              f"2 tickers, 0 signals (written on a dry run too)")
+    finally:
+        forward_log.LOG = _real_log2
+        globals()["send_alert"] = _real_send2
+
     print("\nAll self-tests passed.")
     return 0
 
@@ -1030,9 +1297,22 @@ def parse_args():
                    help="Run even when the market is closed")
     p.add_argument("--selftest", action="store_true",
                    help="Run offline checks and exit (no network, no alerts)")
+    p.add_argument("--coverage", action="store_true",
+                   help="Check whether the unattended system has been running "
+                        "(last scan row, unchecked positions) and alert if not. "
+                        "No market data; runs on every workflow run, including "
+                        "the ones that cannot scan.")
     return p.parse_args()
 
 
 if __name__ == "__main__":
     _args = parse_args()
-    raise SystemExit(selftest() if _args.selftest else run(_args))
+    if _args.selftest:
+        raise SystemExit(selftest())
+    if _args.coverage:
+        _st = load_state()
+        coverage_check(_st, dry_run=_args.dry_run)
+        if not _args.dry_run:
+            save_state(_st)
+        raise SystemExit(0)
+    raise SystemExit(run(_args))

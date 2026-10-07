@@ -72,7 +72,18 @@ on:
     # This does NOT make the stop a stop. Nine polls a day cannot act on an
     # overnight gap, a weekend, or a holiday, and on a long option the premium
     # is the entire risk. It is an alert, and the app now says so.
-    - cron: "0 13,14,15,16,17,18,19,20,21 * * 1-5"
+    # TWO slots an hour. GitHub's scheduler delivered this workflow in
+    # session on 16 of 112 slots between 09-16 and 10-07 -- once a day, mid
+    # afternoon -- and a live position was found at -82% against a -50% rule
+    # on its fourth check in six days. More slots are more chances; the
+    # script's own market-hours check discards the late ones.
+    #
+    # THIS IS THE BACKUP. The primary trigger is external -- see scanner.yml
+    # "RELIABLE SCHEDULING": the same POST to
+    #   .../actions/workflows/exit-monitor.yml/dispatches
+    # hourly 09:30-16:00 America/New_York, Mon-Fri. A dispatch is created and
+    # started in the same second; `schedule` has not been since 2026-08-26.
+    - cron: "0,30 13,14,15,16,17,18,19,20,21 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -114,7 +125,9 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install yfinance pandas pytz requests
+        # Pinned to requirements.txt via a constraints file -- see scanner.yml
+        # for why. This installed yfinance 1.7.0 on 10-02 against a tested 1.6.0.
+        run: pip install -c requirements.txt yfinance pandas pytz requests
 
       - name: Run exit monitor
         env:
