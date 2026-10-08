@@ -1126,9 +1126,18 @@ before changing.
 
 ---
 
-## 25. The option engine prices every contract at one constant, guessed IV
+## 25. The option engine prices every contract at one constant, guessed IV — PRE-REGISTERED 2026-10-08
 
 **Found 2026-10-07; see `results/code_review_2026-10-07.md` (H3).**
+
+**Pre-registered in `results/option_iv_preregistration.md` (2026-10-08, before
+any run).** Two measurements on two clocks: **Part A**, a sensitivity sweep at
+`iv_mult` 1.00 / 1.15 / 1.30 / 1.50 on the laptop, read for ranking and sign
+invariance and the range of `OPT_WIN_RATE`; **Part B**, a forward single-name
+premium from daily ATM-IV snapshots, first read at six months with its SE.
+Historical single-name IV is not available from this data source, which is
+why B is forward. A path-dependent IV model is explicitly out of scope.
+Amendable in a dated section until the first run is committed.
 
 `simulate_option_trade()`: `iv = realised_vol(20d) × 1.15`, held constant for the
 life of the trade. No vol-of-vol, no IV crush, no skew, no term structure.
