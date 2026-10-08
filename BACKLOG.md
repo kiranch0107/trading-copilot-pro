@@ -1180,7 +1180,7 @@ the dedupe's natural companion: `record_signal` already keys on the bar.
 
 ---
 
-## 28. The forward record has intake and no grading
+## 28. ~~The forward record has intake and no grading~~ — BOTH PIECES BUILT 2026-10-08
 
 **Opened 2026-10-08 with the decision on 24.** Piece 1 is pre-registered in
 `results/forward_grading_preregistration.md` (2026-10-08, before any code) and
@@ -1190,8 +1190,15 @@ the dedupe's natural companion: `record_signal` already keys on the bar.
 has no pooled mean. `check_outcome_bases_never_pooled()` pins it. The first
 run happens on the next scanner dispatch; its rows are then written up as
 `results/forward_grading_run1.txt` from the committed log. The document is
-frozen from that first row. Piece 2 (the signal key on the journal row) is
-still open.
+frozen from that first row. **Piece 2 BUILT 2026-10-08:** every Telegram alert
+prints `Signal bar: YYYY-MM-DD`; the app's three logging sites pass
+`signal_key` (the scan-result quick log derives it from the frame, the manual
+form and the contract checker ask for the date when the source is "system
+signal"); `open_option_position()` stores it, `close_position()` carries it to
+the journal row, and `attach_outcomes()` matches a keyed row EXACTLY — a key
+naming a skipped, missing or later-bar signal is refused with the reason, and
+an unkeyed row falls back to the five-day heuristic unchanged.
+`check_signal_key_round_trip()` pins the chain end to end. Item closed.
 
 Outcome rows exist only through `attach_outcomes()`, which matches journal
 trades the owner actually took. Base signals are not alerted, so they are not
@@ -1220,8 +1227,8 @@ Two pieces, each needing its own pre-registration before a row is written:
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 38 cross-module
-  invariants (38 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 39 cross-module
+  invariants (39 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip

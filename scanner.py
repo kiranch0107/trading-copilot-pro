@@ -696,6 +696,13 @@ def analyze(df: pd.DataFrame, ticker: str,
                  if not (f or {}).get("pass")]
     _setup["hq_fail"] = _hq_fail
     _hq = bool(r["high_quality"])
+    # THE SIGNAL BAR'S DATE, once, for the row and for the alert. The alert
+    # prints it so the owner can log the trade against exactly this signal
+    # (journal_store.open_option_position(signal_key=...), BACKLOG 28).
+    try:
+        _bar_date = str(sc._bar_dates(df, None).max().date())
+    except Exception:                                  # noqa: BLE001
+        _bar_date = None
 
     def _log(decision: str, reason: str) -> None:
         # "taken" MEANS "THE RULES PRODUCED A TRADEABLE SIGNAL", not "a Telegram
@@ -757,6 +764,9 @@ def analyze(df: pd.DataFrame, ticker: str,
         "target": r["target"], "rr": r["rr"], "rsi": r["rsi"],
         "adx": r["adx"], "atr": r["atr"],
         "filters_pass": r["filters_pass"], "filters_total": r["filters_total"],
+        "bar_date": _bar_date,
+        "signal_key": (forward_log.signal_key(ticker, r["trend"], _bar_date)
+                       if _bar_date else None),
     }
 
 def selftest() -> int:
@@ -900,6 +910,9 @@ def run(args) -> int:
                 f"{r['ticker']} → {r['trend']} ({r['strength']})",
                 f"Price: {r['price']} | RR: {r['rr']} | ADX: {r['adx']} | RSI: {r['rsi']}",
                 f"Underlying: entry {r['entry']} | stop {r['stop']} | target {r['target']}",
+                f"Signal bar: {r.get('bar_date') or '?'} — enter this date when "
+                f"you log the trade as a system signal, so its outcome attaches "
+                f"to exactly this signal.",
             ]
 
             # Chain fetch happens here — AFTER the cooldown check — so
@@ -1253,6 +1266,10 @@ def _selftest_body() -> int:
             "a base signal below the tier must still NOT produce an alert payload"
         assert _byt["ZA"]["decision"] == "taken" and _byt["ZA"]["hq"] is True \
             and _byt["ZA"]["setup"]["hq_fail"] == [] and _ret["ZA"] is not None
+        assert _ret["ZA"]["bar_date"] == _byt["ZA"]["bar_date"] \
+            and _ret["ZA"]["signal_key"] == _byt["ZA"]["key"], (
+            "the alert payload must carry the row's bar date and key, so the "
+            "owner can log the trade against exactly this signal")
         assert _byt["ZB"]["decision"] == "skipped" and _ret["ZB"] is None, \
             "the direction gate still skips shorts; it rests on a measurement"
 

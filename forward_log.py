@@ -635,6 +635,14 @@ def attach_outcomes(journal: list, path: Path | None = None,
                    attach to, and inventing one puts a hypothetical in the
                    record.
     unsettled      outcome is not WIN/LOSS/BREAKEVEN — nothing to record yet.
+    BY KEY FIRST. A journal row that carries `signal_key` (the app writes it
+    when the owner logs a trade as a system signal and names the signal bar;
+    BACKLOG 28 piece 2) is matched EXACTLY to the taken signal with that key.
+    No lag window, no candidate search, no ambiguity. A key that names a
+    skipped signal, a signal not in the log, or a bar after the position was
+    opened is a `no_match` and says so. Rows without a key fall through to
+    the heuristic below, unchanged.
+
     predates_log   the position was opened before the log's first signal bar.
                    Nothing could have been recorded for it, so it is counted
                    and NOT reported as a failure — the first journal rows
@@ -701,13 +709,46 @@ def attach_outcomes(journal: list, path: Path | None = None,
             report["no_match"] += 1
             report["detail"].append(f"{tid}: no usable ticker or open date")
             continue
-        if log_start is None or opened < log_start:
+
+        key = str(row.get("signal_key") or "").strip()
+        if key:
+            keyed = [s for s in rows if s.get("kind") == "signal"
+                     and s.get("key") == key]
+            if not keyed:
+                report["no_match"] += 1
+                report["detail"].append(f"{tid}: signal_key {key!r} is not in the log")
+                continue
+            sig = keyed[0]
+            if sig.get("decision") != "taken":
+                report["no_match"] += 1
+                report["detail"].append(
+                    f"{tid}: signal_key {key!r} names a {sig.get('decision')} "
+                    f"signal ({sig.get('reason')})")
+                continue
+            if sig.get("seq") in settled_seqs:
+                report["already"] += 1
+                continue
+            try:
+                sig_bar = _dt.date.fromisoformat(str(sig.get("bar_date")))
+            except (TypeError, ValueError):
+                sig_bar = None
+            if sig_bar is not None and opened < sig_bar:
+                report["no_match"] += 1
+                report["detail"].append(
+                    f"{tid}: signal_key {key!r} is a bar AFTER the position "
+                    f"opened ({opened})")
+                continue
+            cands = [sig]
+        elif log_start is None or opened < log_start:
             # Counted, not reported: there is no action that resolves it.
             report["predates_log"] += 1
             continue
+        else:
+            cands = None
 
-        cands = []
-        for sig in taken:
+        for sig in (taken if cands is None else []):
+            if cands is None:
+                cands = []
             if sig.get("seq") in settled_seqs:
                 continue
             if str(sig.get("ticker", "")).upper() != underlying:
@@ -1341,6 +1382,30 @@ def selftest() -> int:
         "an ambiguous match wrote a row — a wrong attachment here is permanent"
     print("ambiguity        : two candidates -> refused and reported, "
           "not resolved by nearest")
+
+    # ...UNLESS THE JOURNAL ROW SAYS WHICH ONE. The same two candidates, and
+    # a signal_key picks the 09-10 bar exactly (BACKLOG 28 piece 2).
+    r3k = attach_outcomes([_trade(signal_key="NKE|Bearish|2026-09-10")], path=ao3)
+    assert r3k["attached"] == 1 and r3k["ambiguous"] == 0, r3k
+    _ok = [x for x in read_all(ao3) if x["kind"] == "outcome"]
+    assert len(_ok) == 1 and _ok[0]["ref_seq"] == 2, _ok
+    # A key that names a skipped signal, a missing one, or a bar after the
+    # trade opened is refused and says why; none writes a row.
+    record_signal("NKE", "Bearish", setup, "skipped", "direction gate", cfg,
+                  bar_date="2026-09-11", path=ao3)
+    for _k, _why in (("NKE|Bearish|2026-09-11", "names a skipped signal"),
+                     ("NKE|Bearish|2026-08-01", "is not in the log"),
+                     ("NKE|Bearish|2026-09-09", None)):
+        _rk = attach_outcomes([_trade(id=f"T-{_k}", signal_key=_k,
+                                      date="2026-09-08 10:00 ET")], path=ao3)
+        assert _rk["attached"] == 0 and _rk["no_match"] == 1, (_k, _rk)
+        assert _why is None or any(_why in d for d in _rk["detail"]), (_k, _rk["detail"])
+    assert any("AFTER the position opened" in d for d in
+               attach_outcomes([_trade(id="T-late", signal_key="NKE|Bearish|2026-09-09",
+                                       date="2026-09-08 10:00 ET")], path=ao3)["detail"])
+    assert len([x for x in read_all(ao3) if x["kind"] == "outcome"]) == 1
+    print("signal key       : exact match beats ambiguity; skipped / missing / "
+          "later-bar keys refused with the reason")
 
     # IDEMPOTENCY IS TWO LAYERS, and both are tested because the outer one
     # hides the inner. attach_outcomes() skips a trade_id it has already seen,
