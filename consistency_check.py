@@ -2055,6 +2055,114 @@ def check_unattended_workflows_pinned_and_alarmed() -> None:
     print("  scanner.yml        runs the silence alarm on every run (if: always())")
 
 
+def check_research_config_divergence_declared() -> None:
+    """
+    backtest.DEFAULTS (the research config) and signal_core.DEFAULTS (the live
+    config) differ, and every difference is written down in ONE place.
+
+    THE FINDING (BACKLOG 23, review H1). The 1,386-trade record and every study
+    built on it use `dict(bt.DEFAULTS, ...)`: ADX 25, 1.0 / 3.0 ATR, volume 1.0,
+    regime off. The scanner runs signal_core.DEFAULTS: ADX 35, 1.25 / 4.0,
+    volume 1.2, regime on. For a year the research dict's comments said
+    "app.py default" — false, and nothing read them. check_duplicated_constants
+    matches `NAME = value` at module level and cannot see inside a dict literal,
+    so this is the check that can.
+
+    The rule is not "they must agree" — making them agree would move every
+    committed result without a re-run. The rule is that the divergence is
+    DECLARED in backtest.RESEARCH_VS_LIVE, completely and exactly: a shared key
+    that differs must be listed with both values as they are; a listed key must
+    actually differ. Either config can change, but not silently.
+    """
+    import backtest as bt
+    import signal_core as sc
+
+    # The mapping is real: build_signal_params() reads exactly these keys.
+    params = bt.build_signal_params(dict(bt.DEFAULTS))
+    for key, field in bt.CFG_TO_PARAMS.items():
+        assert getattr(params, field) == bt.DEFAULTS[key], (
+            f"backtest.CFG_TO_PARAMS maps cfg[{key!r}] -> SignalParams.{field}, "
+            f"but build_signal_params(DEFAULTS) gives {field}="
+            f"{getattr(params, field)!r} against DEFAULTS[{key!r}]="
+            f"{bt.DEFAULTS[key]!r}. The mapping and the function disagree.")
+
+    differing = {key for key, field in bt.CFG_TO_PARAMS.items()
+                 if bt.DEFAULTS[key] != getattr(sc.DEFAULTS, field)}
+    declared = set(bt.RESEARCH_VS_LIVE)
+
+    undeclared = differing - declared
+    assert not undeclared, (
+        "research and live configs differ on "
+        + ", ".join(f"{k} (research {bt.DEFAULTS[k]!r}, live "
+                    f"{getattr(sc.DEFAULTS, bt.CFG_TO_PARAMS[k])!r})"
+                    for k in sorted(undeclared))
+        + " and backtest.RESEARCH_VS_LIVE does not say so. Declare it with a "
+          "reason, or make them agree AND re-run every result built on "
+          "bt.DEFAULTS — a silent divergence is how the record came to "
+          "describe a configuration the scanner does not run.")
+    stale = declared - differing
+    assert not stale, (
+        f"backtest.RESEARCH_VS_LIVE lists {sorted(stale)} as diverging, but "
+        f"the two configs now agree there. A stale declaration is the same "
+        f"drift as the stale comments it replaced; remove the entry.")
+    for key, (research, live, why) in bt.RESEARCH_VS_LIVE.items():
+        field = bt.CFG_TO_PARAMS[key]
+        assert research == bt.DEFAULTS[key] and live == getattr(sc.DEFAULTS, field), (
+            f"RESEARCH_VS_LIVE[{key!r}] declares research={research!r}, "
+            f"live={live!r}, but the configs hold research="
+            f"{bt.DEFAULTS[key]!r}, live={getattr(sc.DEFAULTS, field)!r}. "
+            f"The declaration must state the values as they ARE.")
+        assert isinstance(why, str) and len(why.strip()) >= 20, (
+            f"RESEARCH_VS_LIVE[{key!r}] has no reason; a divergence without a "
+            f"stated reason is a divergence nobody chose")
+
+    src = Path("backtest.py").read_text()
+    assert "app.py default" not in src, (
+        "backtest.py still says a research value is an app.py default. It is "
+        "not: app.py derives from signal_core.DEFAULTS.")
+    print(f"  {len(differing)} of {len(bt.CFG_TO_PARAMS)} shared keys diverge "
+          f"(research vs live), all declared in backtest.RESEARCH_VS_LIVE")
+
+
+def check_post_close_record_wired() -> None:
+    """
+    The post-close record-only run exists in scanner.py AND scanner.yml.
+
+    WHY IT EXISTS. During the session the scanner evaluates YESTERDAY's bar
+    (drop_partial_bar drops today's in-progress bar), so a signal that forms
+    at today's close is first recorded by tomorrow's 11:07 scan — and if
+    tomorrow's dispatches all miss, by the day after. `--record-only` runs in
+    the two hours after the close, when today's bar is settled, and writes the
+    signal rows and the `scan` heartbeat for it. It sends no trade alert and
+    fetches no chain: the market is shut, so the next session's first scan
+    alerts (the forward log dedupes on bar date; alert cooldown does not read
+    the log). The log gets the bar on the day it closed.
+
+    Half-wired is the failure mode: a flag with no workflow step is a feature
+    that never runs; a workflow step with no flag is a run that scans in the
+    alerting mode after hours.
+    """
+    src = Path("scanner.py").read_text()
+    assert '"--record-only"' in src and "def is_post_close_window" in src, \
+        "scanner.py no longer provides --record-only / is_post_close_window"
+    wf = Path(".github/workflows/scanner.yml").read_text()
+    assert "postclose=" in wf, (
+        "scanner.yml's market-hours guard does not emit a `postclose` output, "
+        "so no step can know it is in the record-only window")
+    i = wf.find("name: Record the closed bar")
+    assert i > 0, "scanner.yml has no 'Record the closed bar' step"
+    block = wf[i:i + 900]
+    assert "scanner.py --record-only" in block, \
+        "the post-close step does not run `scanner.py --record-only`"
+    assert "outputs.postclose == 'true'" in block, \
+        "the post-close step is not gated on the guard's postclose output"
+    j = wf.find("name: Run scanner")
+    assert j > 0 and "outputs.open == 'true'" in wf[j:j + 400], \
+        "the alerting scan step must stay gated on the market being OPEN"
+    print("  scanner.yml        runs --record-only in the post-close window, "
+          "alerting scan stays session-only")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -2068,6 +2176,8 @@ CHECKS = [
     ("forward log carries no test data",         check_forward_log_has_no_test_data),
     ("forward log has one writer, and is committed", check_forward_log_single_writer),
     ("unattended workflows pinned + silence alarm",   check_unattended_workflows_pinned_and_alarmed),
+    ("post-close record-only run is wired",       check_post_close_record_wired),
+    ("research/live config divergence declared",   check_research_config_divergence_declared),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),

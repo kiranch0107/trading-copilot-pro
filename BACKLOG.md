@@ -999,9 +999,19 @@ None of this makes the stop a stop. It makes the silence audible.
 
 ---
 
-## 23. The live config and the research config are different, and nothing pins them
+## 23. The live config and the research config are different, and nothing pins them — PINNED 2026-10-08, DECISION OPEN
 
 **Found 2026-10-07; see `results/code_review_2026-10-07.md` (H1).**
+
+**Code half done 2026-10-08.** `backtest.RESEARCH_VS_LIVE` declares every
+diverging key with both values and a reason; `backtest.CFG_TO_PARAMS` names the
+cfg→`SignalParams` mapping; `check_research_config_divergence_declared()`
+asserts the declaration is complete (a diverging key must be listed), exact
+(listed values must be the values as they are), not stale (a listed key must
+differ), that the mapping matches `build_signal_params()`, and that no comment
+in `backtest.py` calls a research value an app.py default. Falsified five ways.
+The stale comments are gone. **Still open: which config the next research run
+uses.** That is a pre-registration decision (see 24) and belongs to the owner.
 
 | | `adx_min` | stop | target | `volume_mult` | regime |
 |---|---|---|---|---|---|
@@ -1109,9 +1119,12 @@ the dedupe's natural companion: `record_signal` already keys on the bar.
   `check_unattended_workflows_pinned_and_alarmed()` enforces it; falsified.
 - **The price fallback has never been active.** `TIINGO_API_KEY` is empty in both
   workflows. Yahoo is the single point of failure for scanner, monitor and app.
-- **`market_context` imports `backtest`**, so the scanner's import closure includes
-  a 2,197-line research module. Move `build_regime_series` to `market_context`
-  (or a tiny shared module) and have `backtest` import it, not the reverse.
+- ~~**`market_context` imports `backtest`**, so the scanner's import closure includes
+  a 2,197-line research module.~~ **OVERSTATED — corrected 2026-10-08.** The
+  import is inside `market_context.selftest()` only (`market_context.py:489`),
+  not at module level. The scanner's import closure does NOT include `backtest`;
+  the parity check runs under `--selftest` alone. Nothing to move. The review
+  doc carries the same correction in place.
 - **No DSR/PBO on the selection step.** The Aug 2026 sweep tried ~60 configs on
   5y × 7 tickers; Bailey & López de Prado's guidance is ≤45 before overfit is
   expected. Holm is applied within later studies, never to the sweep that chose
@@ -1119,18 +1132,46 @@ the dedupe's natural companion: `record_signal` already keys on the bar.
   undocumented statistical act in a pre-registered project.
 - **`oos_validate.two_point_variance()`** rebuilds variance from WR/E/PF and
   admits it inflates the t-stat; `bt.run()` returns per-trade R. Compute it.
-- **Node 20 deprecation** on `actions/checkout@v4`, `actions/setup-python@v5`.
-- **`attach_outcomes` nags** the NKE `no_match` every run forever; add an age
-  cutoff. **`scanner_state.json`** never prunes. **Win rate counts dust** (NKE +0.04
-  is a WIN; the 0.05 R floor applies to PF only). **Stale `# app.py default`**
-  comments on `bt.DEFAULTS`.
+- ~~**Node 20 deprecation** on `actions/checkout@v4`, `actions/setup-python@v5`.~~
+  **DONE 2026-10-08.** All four workflows now pin the Node 24 majors:
+  `checkout@v5`, `setup-python@v6`, `upload-artifact@v5`.
+- ~~**`attach_outcomes` nags** the NKE `no_match` every run forever; add an age
+  cutoff.~~ **DONE 2026-10-08.** A trade opened before the log's first signal
+  bar is counted under `predates_log` and not reported — there is no action
+  that resolves it. A trade opened on or after the first bar is matched as
+  before. Falsified both ways.
+- ~~**`scanner_state.json`** never prunes.~~ **DONE 2026-10-08.**
+  `scanner.prune_state()` drops epoch stamps older than 30 days (the longest
+  cooldown is 20 h) on every `run()` and `--coverage` pass. Falsified.
+- ~~**Win rate counts dust** (NKE +0.04 is a WIN; the 0.05 R floor applies to PF
+  only).~~ **DONE 2026-10-08.** One floor, `journal_store.DUST_R = 0.05`, for
+  the win rate, the averages and the profit factor: a WIN or LOSS inside ±0.05 R
+  is `dust`, stays in the total and in `total_r`, and is neither a win nor a
+  loss anywhere a rate is computed — the same treatment BREAKEVEN gets. The app
+  says so under the Win Rate metric. Falsified both ways.
+- ~~**Stale `# app.py default`** comments on `bt.DEFAULTS`.~~ **DONE 2026-10-08**
+  — see 23.
+- **Post-close record-only pass, added 2026-10-08** (not a review finding; a
+  consequence of 26). During the session every scan evaluates *yesterday's* bar,
+  so a signal that forms at the close was first recorded by the next day's
+  11:07 scan — or later. `scanner.py --record-only` runs in the two hours after
+  the close, when today's bar is settled, and writes its signal rows and `scan`
+  heartbeat; no trade alert, no chain fetch, no cooldown stamp. The next
+  session's first scan alerts as before (the cooldown does not read the log;
+  the log dedupes on bar date). Wired in `scanner.yml` behind the guard's
+  `postclose` output, with a backup `schedule` slot; the primary trigger is a
+  **fourth cron-job.org job at 16:20 America/New_York, Mon–Fri** (owner to
+  create). `check_post_close_record_wired()` pins both halves. Also fixed with
+  it: `n_signals` on the scan row now counts bars on which the rules produced a
+  signal, taken **or** skipped, matching the rows `record_signal()` writes; it
+  used to count only the alert-worthy ones under a name that said otherwise.
 
 ---
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 31 cross-module
-  invariants (31 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 36 cross-module
+  invariants (36 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip

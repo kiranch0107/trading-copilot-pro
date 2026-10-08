@@ -210,6 +210,14 @@ pass — but the harness scrapes stdout with regexes tuned to `tabulate`'s layou
 
 ## M3 — The live scanner's import closure includes the research engine
 
+> **CORRECTION 2026-10-08 — this finding was overstated.** The
+> `import backtest as bt` in `market_context.py` is at line 489, *inside*
+> `selftest()`, not at module level. `scanner → market_context` does **not**
+> pull `backtest` in; the parity check runs only under `--selftest`. Verified
+> by reading the module (`python -c "import scanner, sys; print('backtest' in
+> sys.modules)"` prints `False`). Nothing needs moving. The paragraph below is
+> left as written so the error is visible, per this repo's convention.
+
 `market_context` imports `backtest` for `build_regime_series` parity. So
 `scanner → market_context → backtest` pulls a 2,197-line research module (and
 yfinance through it) into the unattended path at import time. The

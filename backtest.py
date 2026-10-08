@@ -126,23 +126,79 @@ except ImportError:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# CONFIG — defaults mirror app.py's sidebar defaults
+# CONFIG — THE RESEARCH CONFIG. It is NOT the live config, on purpose.
 # ══════════════════════════════════════════════════════════════════════
+# Two of these lines used to claim they were app.py's defaults. They were
+# stale: app.py derives its sidebar from signal_core.DEFAULTS
+# (check_app_defaults_derived pins that), and signal_core.DEFAULTS is what
+# scanner.py and app.py RUN — ADX 35, 1.25 / 4.0 ATR, volume 1.2, SPY regime
+# on. This dict is the pre-sweep configuration the 1,386-trade record was
+# built from, and every study on top of it (record_recheck, longshort_split,
+# drift_null, exit_ab, atr_stop_test, inverted_arm, longs_only, tranche C)
+# builds `dict(bt.DEFAULTS, ...)`. Changing a value here moves every committed
+# number in results/ without a re-run, so the two configs stay different and
+# the difference is DECLARED in RESEARCH_VS_LIVE below, where
+# consistency_check.check_research_config_divergence_declared() can read it.
+# BACKLOG 23 has the full account.
 DEFAULTS = dict(
     tickers       = ["TSLA", "NVDA", "AAPL", "MSFT", "AMZN", "META", "SPY"],
     years         = 5,
-    adx_min       = 25,
-    atr_stop_mult = 1.0,      # app.py default
-    atr_tgt_mult  = 3.0,      # app.py default (updated from 2.5)
-    min_rr        = 0.5,
-    volume_mult   = 1.0,      # for the "Strong" strength tag only
+    adx_min       = 25,       # research; live is 35 — see RESEARCH_VS_LIVE
+    atr_stop_mult = 1.0,      # research; live is 1.25
+    atr_tgt_mult  = 3.0,      # research; live is 4.0 (updated from 2.5)
+    min_rr        = 0.5,      # same as live
+    volume_mult   = 1.0,      # for the "Strong" strength tag only; live is 1.2
     max_hold      = 20,       # bars to hold before timeout mark-to-market
     slippage_bps  = 2.0,      # per side, in basis points of price
     commission    = 0.0,      # $ per trade (round trip), for share trades
-    use_regime    = False,    # approximate SPY 200-SMA macro filter
-    use_weekly    = False,    # weekly-timeframe alignment filter
+    use_regime    = False,    # approximate SPY 200-SMA macro filter; live is on
+    use_weekly    = False,    # weekly-timeframe alignment filter; same as live
     cooldown_bars = 3,        # bars to wait after a trade before re-entering
 )
+
+# cfg key -> SignalParams field. The keys of this dict are exactly the ones
+# build_signal_params() reads; the consistency check proves that by building
+# params from DEFAULTS and comparing field by field.
+CFG_TO_PARAMS = {
+    "adx_min":       "adx_min",
+    "atr_stop_mult": "atr_stop_mult",
+    "atr_tgt_mult":  "atr_tgt_mult",
+    "min_rr":        "min_rr",
+    "volume_mult":   "volume_mult",
+    "use_weekly":    "weekly_confirm",
+    "use_regime":    "spy_regime_on",
+}
+
+# THE DECLARED DIVERGENCE: cfg key -> (research value, live value, why).
+#
+# The check asserts this is COMPLETE and EXACT: every shared key on which
+# DEFAULTS and signal_core.DEFAULTS disagree must be listed with the values
+# as they are, and a key listed here must actually differ. So a change to
+# either config that is not also written down here fails CI, and a stale
+# entry fails CI — the old comments drifted for a year because nothing read
+# them.
+#
+# Which config the NEXT research run uses is the owner's call and belongs in
+# that run's pre-registration (BACKLOG 23, 24). This table only makes the
+# question impossible to miss.
+RESEARCH_VS_LIVE = {
+    "adx_min": (25, 35.0,
+                "the record was built pre-sweep at 25; the sweep's 35 was "
+                "OOS-tested as FROZEN and failed (-0.014 R, PF 0.98)"),
+    "atr_stop_mult": (1.0, 1.25,
+                      "record geometry is 1.0 / 3.0; live is 1.25 / 4.0 "
+                      "(same 3.2 R:R, wider stop)"),
+    "atr_tgt_mult": (3.0, 4.0,
+                     "record target is 3.0 ATR; live is 4.0 — moved with the "
+                     "stop so the geometric R:R stays 3.2 (see atr_stop_mult)"),
+    "volume_mult": (1.0, 1.2,
+                    "live 'Strong' tag needs 1.2x average volume; RVOL was "
+                    "refuted as a feature (BACKLOG 15) but the tag gates the "
+                    "alert tier (BACKLOG 24)"),
+    "use_regime": (False, True,
+                   "the record ignores the SPY 200-SMA regime; the scanner "
+                   "applies it"),
+}
 
 WARMUP_BARS       = 100       # matches app.py INDICATOR_WARMUP_BARS
 MIN_BARS_AFTER    = 40        # matches app.py MIN_BARS_AFTER_WARMUP

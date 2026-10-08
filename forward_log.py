@@ -404,6 +404,11 @@ def attach_outcomes(journal: list, path: Path | None = None,
                    attach to, and inventing one puts a hypothetical in the
                    record.
     unsettled      outcome is not WIN/LOSS/BREAKEVEN — nothing to record yet.
+    predates_log   the position was opened before the log's first signal bar.
+                   Nothing could have been recorded for it, so it is counted
+                   and NOT reported as a failure — the first journal rows
+                   predate the log by weeks, and reporting them as `no_match`
+                   on every scan was a nag that could never be resolved.
     no_match       no `taken` signal for that underlying and direction within
                    `max_lag_days` before the position opened.
     ambiguous      MORE THAN ONE candidate. Refused outright rather than
@@ -423,10 +428,22 @@ def attach_outcomes(journal: list, path: Path | None = None,
              and r.get("decision") == "taken"]
     settled_seqs = {r.get("ref_seq") for r in rows if r.get("kind") == "outcome"}
     settled_trades = {r.get("trade_id") for r in rows if r.get("kind") == "outcome"}
+    # THE LOG'S FIRST BAR. A trade opened before it has nothing to match and
+    # is not a mismatch — it is simply older than the record.
+    log_start = None
+    for r in rows:
+        if r.get("kind") != "signal":
+            continue
+        try:
+            b = _dt.date.fromisoformat(str(r.get("bar_date")))
+        except (TypeError, ValueError):
+            continue
+        if log_start is None or b < log_start:
+            log_start = b
 
     report = {"attached": 0, "reconstructed": 0, "not_signal": 0,
-              "unsettled": 0, "no_match": 0, "ambiguous": 0, "already": 0,
-              "detail": []}
+              "unsettled": 0, "predates_log": 0, "no_match": 0, "ambiguous": 0,
+              "already": 0, "detail": []}
 
     for row in journal or []:
         tid = row.get("id")
@@ -448,6 +465,10 @@ def attach_outcomes(journal: list, path: Path | None = None,
         if not underlying or opened is None:
             report["no_match"] += 1
             report["detail"].append(f"{tid}: no usable ticker or open date")
+            continue
+        if log_start is None or opened < log_start:
+            # Counted, not reported: there is no action that resolves it.
+            report["predates_log"] += 1
             continue
 
         cands = []
@@ -836,6 +857,11 @@ def selftest() -> int:
 
     # ── THE REFUSALS ──
     ao2 = Path(tempfile.mkdtemp()) / "ao2.jsonl"
+    # An unrelated earlier row fixes the log's first bar at 09-01, so a trade
+    # opened 09-09 is INSIDE the log's span and its refusal below is a real
+    # no_match, not "older than the record".
+    record_signal("XOM", "Bullish", setup, "skipped", "fixture", cfg,
+                  bar_date="2026-09-01", path=ao2)
     record_signal("NKE", "Bearish", setup, "taken", "", cfg,
                   bar_date="2026-09-10", path=ao2)
 
@@ -861,6 +887,24 @@ def selftest() -> int:
         "a refusal must write NOTHING"
     print("refusals         : reconstructed, discretionary, unsettled, wrong "
           "name/side, signal after the trade, stale signal")
+
+    # OLDER THAN THE RECORD is counted, not reported. The log's first bar in
+    # ao2 is 09-01; a trade opened 08-20 could not have a row and saying
+    # "no_match" about it every scan is a nag nothing can resolve. A trade
+    # opened ON the first bar is inside the record and matched normally.
+    _r_old = attach_outcomes([_trade(date="2026-08-20 10:00 ET")], path=ao2)
+    assert _r_old["predates_log"] == 1 and _r_old["no_match"] == 0, _r_old
+    assert not any("T1" in d for d in _r_old["detail"]), \
+        "a trade older than the log must not appear in the nag list"
+    _r_edge = attach_outcomes([_trade(date="2026-09-01 10:00 ET")], path=ao2)
+    assert _r_edge["predates_log"] == 0, \
+        "a trade opened ON the log's first bar is inside the record"
+    assert not [x for x in read_all(ao2) if x["kind"] == "outcome"]
+    # An EMPTY log predates everything.
+    ao_empty = Path(tempfile.mkdtemp()) / "ao_empty.jsonl"
+    assert attach_outcomes([_trade()], path=ao_empty)["predates_log"] == 1
+    print("predates_log     : older than the first bar -> counted, not nagged; "
+          "on the first bar -> matched normally")
 
     # AMBIGUITY IS REFUSED, NEVER RESOLVED BY "NEAREST".
     ao3 = Path(tempfile.mkdtemp()) / "ao3.jsonl"

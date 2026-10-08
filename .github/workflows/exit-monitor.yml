@@ -112,14 +112,14 @@ jobs:
   monitor:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # A shallow clone (the default, depth 1) has no history to rebase
           # onto, so `git pull --rebase` fails outright. Full history is a
           # couple of seconds for a repo this size.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
