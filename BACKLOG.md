@@ -1126,7 +1126,7 @@ before changing.
 
 ---
 
-## 25. The option engine prices every contract at one constant, guessed IV — PRE-REGISTERED 2026-10-08
+## 25. The option engine prices every contract at one constant, guessed IV — PART A DONE 2026-10-08, PART B TO BUILD
 
 **Found 2026-10-07; see `results/code_review_2026-10-07.md` (H3).**
 
@@ -1137,7 +1137,19 @@ invariance and the range of `OPT_WIN_RATE`; **Part B**, a forward single-name
 premium from daily ATM-IV snapshots, first read at six months with its SE.
 Historical single-name IV is not available from this data source, which is
 why B is forward. A path-dependent IV model is explicitly out of scope.
-Amendable in a dated section until the first run is committed.
+
+**Part A run 2026-10-08 by the owner (`results/option_iv_sensitivity_run1.md`).**
+Ordering of take-profit levels by win rate: invariant across 1.00–1.50.
+Sign of expectancy at TP ≥ +100: **not** invariant — positive at 1.00, negative
+at 1.15 and up. So the verdict on the live TP+200 / SL−50 structure is the
+constant's, not the data's, and is UNMEASURED until Part B reads. +50 and +75
+stay refuted at every multiplier. `OPT_WIN_RATE` at TP+100 / SL−50 spans
+27.7% → 20.6% across the bracket. The multiplier now has one home
+(`risk_params.OPT_IV_MULT`), the table is `OPT_WIN_RATE_BY_IV_MULT`, and
+`check_option_iv_single_source()` pins both to the committed files. The
+pre-registration is frozen from this run. **Part B, the forward single-name
+premium, is the next build:** the daily ATM-IV snapshot in the post-close pass,
+first reading at six months.
 
 `simulate_option_trade()`: `iv = realised_vol(20d) × 1.15`, held constant for the
 life of the trade. No vol-of-vol, no IV crush, no skew, no term structure.
@@ -1286,8 +1298,8 @@ Two pieces, each needing its own pre-registration before a row is written:
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 39 cross-module
-  invariants (39 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 40 cross-module
+  invariants (40 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip

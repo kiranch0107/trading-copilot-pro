@@ -55,6 +55,7 @@ import numpy as np
 import pandas as pd
 
 import backtest as bt          # reuse the SAME validated signal logic
+import risk_params             # the IV multiplier has ONE home (BACKLOG 25)
 
 try:
     from tabulate import tabulate
@@ -442,8 +443,10 @@ def main() -> int:
     ap.add_argument("--sl", type=float, default=50)
     ap.add_argument("--dte-exit", type=int, default=7)
     ap.add_argument("--no-thesis", action="store_true")
-    ap.add_argument("--iv-mult", type=float, default=1.15,
-                    help="IV as a multiple of realised vol (risk premium)")
+    ap.add_argument("--iv-mult", type=float, default=risk_params.OPT_IV_MULT,
+                    help="IV as a multiple of realised vol (risk premium). "
+                         "Default is risk_params.OPT_IV_MULT, the one home for "
+                         "the assumption; every result prints the value used.")
     ap.add_argument("--spread-pct", type=float, default=5.0,
                     help="Round-trip bid-ask cost, %% of premium")
     ap.add_argument("--selftest", action="store_true",
