@@ -690,7 +690,18 @@ it is not what the field name says.
 
 ---
 
-## 18. ~~`longs_only.simulate()` books P&L at entry~~ — CODE FIXED 2026-09-16; RE-RUN OWED
+## 18. ~~`longs_only.simulate()` books P&L at entry~~ — CLOSED 2026-10-08, RE-RUN DONE
+
+**Re-run by the owner 2026-10-08 on a laptop with Yahoo access:
+`results/portfolio_replay_run2.txt`.** On the correct OOS twelve, 10y to
+2026-10-08: idealised +47.7% total (+4.0%/yr, 45.6% DD, 883 trades, 35.4% wins),
+constrained +39.7% (+3.4%/yr, 19.0% DD, 687 trades), SPY +259.6% (+13.7%/yr,
+34.1% DD). The entry-time artifact run 1's banner predicted ("peak capital
+deployed 101%") is gone: 100%. Owning the index was better on both axes. One
+line of that file's prose quoted the record's +0.085 R instead of this run's
++0.076 R; `longs_only.report()` now measures and prints the run's own long edge
+(`long_edge()`), with the record quoted as the record. Run 2 predates the
+gapped-stop fix (21), so it carries that caveat and will be re-run with it.
 
 **The accounting is fixed and pinned. The published numbers are not yet replaced.**
 
@@ -840,9 +851,32 @@ both callers importing it, and a `check_` function that pins it.
 
 ---
 
-## 21. The share backtest fills a gapped stop AT the stop — every loss is floored at −1 R
+## 21. The share backtest fills a gapped stop AT the stop — every loss is floored at −1 R — FIX SHIPPED 2026-10-08, RE-RUN OWED ON THE BRANCH
 
-**Found 2026-09-16 by review. NOT FIXED, deliberately — see the last section.**
+**Found 2026-09-16 by review. Fixed 2026-10-08; the re-run is the owner's next
+local step.**
+
+- **Code.** `simulate_trade()` fills a stop gapped through at the worse of the
+  stop and that bar's open, a target at the better; a touched level with the
+  open inside still fills at the level. Tallied as "gapped through a level" in
+  `run()`'s summary. Same rule as `forward_log.resolve_signal()`. Selftest:
+  −5.00 R on a 90 open against a 98 stop, +5.00 R on a 110 open against a 106
+  target, both sides mirrored, ordinary stop-outs still −1.00 R.
+- **Baseline.** The owner's 2026-10-08 run on unchanged code
+  (`results/record_recheck_baseline_2026-10-08.txt`) could only say DATA
+  CHANGED: the windows are relative to today, so the record's fingerprints are
+  unreproducible three weeks on. Its three fingerprints are now pinned as
+  `record_recheck.BASELINE_2026_10_08`, and `record_recheck` judges a run
+  against whichever pin its fingerprint matches. A re-run on the same laptop
+  hits `.bar_cache/`, reproduces those fingerprints, and reports CODE MOVED
+  against the baseline — the isolated effect of this fix.
+- **Owed, on this PR's branch before merge:** `python record_recheck.py | tee
+  results/record_recheck_gapfill_run1.txt` and `python longs_only.py | tee
+  results/portfolio_replay_run3.txt`, from the laptop that holds the cache.
+- **Every committed result built on the share engine carries a STALE FILL RULE
+  banner** (25 files) rather than a VOID: their findings are signs and
+  dose-responses, which the rule change does not undo, but none of their R is
+  on the current engine. Each is re-run on demand before being relied on.
 
 `simulate_trade()` checks `if lo <= stop` and then exits at `stop`. When a bar
 GAPS THROUGH the stop, a real stop order fills at the OPEN, not at the trigger.

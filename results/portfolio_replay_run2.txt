@@ -1,3 +1,21 @@
+FIRST VALID REPLAY. Run by the owner on 2026-10-08 on a laptop with Yahoo
+access, on main @ 85759eb: the exit-date booking fix of 2026-09-16 (BACKLOG 18)
+is in; the gapped-stop fix (BACKLOG 21) is NOT yet, so every stop in this file
+still fills at the stop. Window: 10y relative to 2026-10-08. Universe: the
+record's OOS twelve (GOOGL AVGO AMD NFLX CRM ADBE QCOM MU ORCL NOW PANW LRCX).
+
+Against the VOID run 1 (2026-09-16, which also used a different and wrong
+12-ticker list -- see record_recheck.py's docstring): idealised +130.2% ->
++47.7% total, constrained +37.6% -> +39.7%, constrained drawdown 21.4% -> 19.0%,
+"peak capital deployed" 101% -> 100%. The 101% was the entry-time booking
+artifact run 1's banner predicted; it is gone.
+
+ONE LINE OF PROSE BELOW IS STALE. "The long side is +0.085 R with a CI of
+[-0.037, +0.206]" is the RECORD's number, hard-coded in longs_only.report() at
+the time of this run, not this run's. This run's long side is +0.076 R over 883
+trades (record_recheck_baseline_2026-10-08.txt, 12t/10y long R). The module
+now computes and prints the measured value; this file predates that.
+
   · SPY: dropped 1 bar(s) dated 2026-10-08 or later — still forming, and unusable by a next-bar-open fill
 ====================================================================================
 LONGS ONLY, IN SHARES — what it would actually have been

@@ -1,3 +1,28 @@
+!! BASELINE, NOT THE GAP-FILL TEST. Run by the owner on 2026-10-08 on a laptop
+!! with Yahoo access, on UNCHANGED code (main @ 85759eb, simulate_trade() still
+!! filling a gapped stop AT the stop). The file was first named
+!! record_recheck_gapfill_run1.txt; the gap fix had not been applied, so it is
+!! renamed to what it is.
+!!
+!! VERDICT IS "DATA CHANGED" BY DESIGN, NOT BY FAULT. The backtest windows are
+!! relative to today (BACKLOG working conventions), so three weeks after the
+!! record was cut the 5y and 10y windows start and end on different bars and
+!! every fingerprint moved. This run cannot say anything about the code.
+!!
+!! WHAT IT IS FOR. The fingerprints below (v2-e817de3bdf479135,
+!! v2-9acbe79f9c98a1dc, v2-2931fe00d85eb037) are now pinned in
+!! record_recheck.BASELINE_2026_10_08, and the bars that produced them sit in
+!! that laptop's .bar_cache/. A re-run there after the gap fix hits the cache,
+!! reproduces these fingerprints, and compares against THIS table -- so the
+!! next verdict isolates the code change. That is BACKLOG 21's test.
+!!
+!! "gapped fills 8 / 18 / 42" is the 2026-09-10 rule (a fill already past its
+!! own levels is no trade). It is not the gapped-STOP rule BACKLOG 21 adds.
+!!
+!! Read against the record: every cut moved a little in the same direction
+!! (fewer trades, lower expectancy), consistent with a shifted window on a
+!! sample whose edge was already inside its own confidence interval.
+
 ==============================================================================
 RECORD RE-CHECK — do the three recorded cuts still hold on today's code?
 ==============================================================================

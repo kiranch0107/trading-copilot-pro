@@ -453,16 +453,43 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
         if fav / risk > mfe:
             mfe, bars_to_mfe = fav / risk, j - entry_i
         mae = min(mae, adv / risk)
+        # A GAPPED LEVEL FILLS AT THE OPEN (BACKLOG 21, fixed 2026-10-08). A
+        # stop is a market order once touched: if the bar OPENS beyond it, the
+        # fill is the open, not the level. Before this every loss was floored
+        # at -1 R whatever the gap -- a long stopped at 98 that opened at 40
+        # booked -1.00 R, not -30 R -- which flattered the left tail of every
+        # result in results/. The target is the mirror (a limit filled at the
+        # open when the open is already beyond it), so wins gain a little
+        # and losses lose a lot more, which is the asymmetry a real book has.
+        # forward_log.resolve_signal() applies the same rule to the live
+        # record; the two engines must not disagree on what a stop costs.
+        op = float(df["Open"].iloc[j])
         if trend == "Bullish":
             if lo <= stop:                       # stop first (conservative)
-                exit_px, outcome, exit_i = stop, "loss", j; break
+                exit_px, outcome, exit_i = min(stop, op), "loss", j
+                if op < stop and tally is not None:
+                    tally["stop filled at the open (gapped through)"] = \
+                        tally.get("stop filled at the open (gapped through)", 0) + 1
+                break
             if hi >= target:
-                exit_px, outcome, exit_i = target, "win", j; break
+                exit_px, outcome, exit_i = max(target, op), "win", j
+                if op > target and tally is not None:
+                    tally["target filled at the open (gapped through)"] = \
+                        tally.get("target filled at the open (gapped through)", 0) + 1
+                break
         else:
             if hi >= stop:
-                exit_px, outcome, exit_i = stop, "loss", j; break
+                exit_px, outcome, exit_i = max(stop, op), "loss", j
+                if op > stop and tally is not None:
+                    tally["stop filled at the open (gapped through)"] = \
+                        tally.get("stop filled at the open (gapped through)", 0) + 1
+                break
             if lo <= target:
-                exit_px, outcome, exit_i = target, "win", j; break
+                exit_px, outcome, exit_i = min(target, op), "win", j
+                if op < target and tally is not None:
+                    tally["target filled at the open (gapped through)"] = \
+                        tally.get("target filled at the open (gapped through)", 0) + 1
+                break
 
         # ── policy actions, AFTER the exit checks for this bar ──
         peak = max(peak, fav / risk)
@@ -1225,6 +1252,17 @@ def run(cfg: dict, policy: dict | None = None) -> list[dict]:
                   f"  ({_gap_stop} past the stop, {_gap_tgt} past the target)")
             print("     (the next open was already beyond the level, so the setup")
             print("      did not exist at the fill price — no trade)")
+
+        # Levels that were gapped THROUGH after the fill and filled at the
+        # open (BACKLOG 21). Printed so a run says how much of its left tail
+        # is beyond -1 R, and record_recheck can tell whether the rule fired.
+        _gs = tally.get("stop filled at the open (gapped through)", 0)
+        _gt = tally.get("target filled at the open (gapped through)", 0)
+        if _gs or _gt:
+            print(f"  gapped through a level    : {_gs + _gt:>6}"
+                  f"  ({_gs} stops filled at the open, {_gt} targets)")
+            print("     (the bar opened beyond the level, so the fill is the open;")
+            print("      a stop here costs MORE than -1 R)")
 
         _cens = tally.get("unfinished at sample end (marked to last close)", 0)
         if _cens:
@@ -2025,6 +2063,42 @@ def selftest() -> int:
     assert sum(_gt.values()) == 4 and len(_gt) == 2, _gt
     print(f"gapped fills            : 4 rejected (2 past stop, 2 past target), "
           f"counted not silent; ordinary stop-outs still fill at -1.00 R")
+
+    # ── a level gapped THROUGH after the fill is filled at the OPEN (BACKLOG 21) ──
+    # Entry bar is clean (opens 100, trades 99-101); the NEXT bar opens beyond
+    # the level. Before 2026-10-08 the long below booked exactly -1.00 R at a
+    # 90 open; a real stop fills at 90, which is -5 R on a 2-point risk.
+    def _gap2(open2, low2, high2, trend, stop, target, tally=None):
+        _df = pd.DataFrame({
+            "Date": pd.bdate_range("2024-01-01", periods=4),
+            "Open": [100.0, 100.0, open2, open2], "High": [100.0, 101.0, high2, high2],
+            "Low": [100.0, 99.0, low2, low2], "Close": [100.0, 100.0, open2, open2]})
+        return simulate_trade(_df, 0, {"trend": trend, "entry": 100.0,
+                                       "stop": stop, "target": target,
+                                       "rr": 3.0}, _gcfg, tally=tally)
+    _t2: dict = {}
+    _ls = _gap2(90.0, 89.0, 91.0, "Bullish", 98.0, 106.0, tally=_t2)
+    assert _ls["filled"] and _ls["outcome"] == "loss" and abs(_ls["r"] + 5.0) < 1e-9, (
+        f"a long whose stop at 98 was gapped to a 90 open must fill at 90 "
+        f"(-5.00 R), got {_ls.get('r')}; filling at the level floors every "
+        f"loss at -1 R (BACKLOG 21)")
+    _lt = _gap2(110.0, 109.0, 111.0, "Bullish", 98.0, 106.0, tally=_t2)
+    assert _lt["outcome"] == "win" and abs(_lt["r"] - 5.0) < 1e-9, \
+        f"a target gapped to a 110 open fills at 110 (+5 R), got {_lt.get('r')}"
+    _ss = _gap2(108.0, 107.0, 109.0, "Bearish", 102.0, 94.0, tally=_t2)
+    assert _ss["outcome"] == "loss" and abs(_ss["r"] + 4.0) < 1e-9, \
+        f"a short stop at 102 gapped to a 108 open fills at 108 (-4 R), got {_ss.get('r')}"
+    _st = _gap2(88.0, 87.0, 89.0, "Bearish", 102.0, 94.0, tally=_t2)
+    assert _st["outcome"] == "win" and abs(_st["r"] - 6.0) < 1e-9, _st
+    assert _t2 == {"stop filled at the open (gapped through)": 2,
+                   "target filled at the open (gapped through)": 2}, _t2
+    # Touched, not gapped: the open is inside the levels, so the fill IS the level.
+    _touch = _gap2(99.0, 97.0, 99.5, "Bullish", 98.0, 106.0, tally=_t2)
+    assert abs(_touch["r"] + 1.0) < 1e-9 and \
+        _t2["stop filled at the open (gapped through)"] == 2, \
+        "a stop touched intrabar with the open inside the levels fills AT the stop"
+    print(f"gapped THROUGH a level  : stop fills at the open (-5.00 R on a 90 "
+          f"open), target at the open (+5.00 R); touched levels fill at the level")
 
     # ── the on-disk bar cache actually caches ──
     # A harness that refetches on every run cannot measure anything smaller

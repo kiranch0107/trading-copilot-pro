@@ -1,3 +1,14 @@
+> **STALE FILL RULE — read with this caveat (BACKLOG 21, fixed 2026-10-08).**
+> Every R in this file was produced while `backtest.simulate_trade()` filled a
+> stop that was gapped THROUGH at the stop, so no loss here is worse than about
+> −1 R. Real stops fill at the open. The engine now does too, and the record's
+> re-run on the fixed code is `results/record_recheck_gapfill_run1.txt` once the
+> owner has run it; the size of the correction is measured there. The FINDINGS
+> in this file (a sign, a dose-response, a refutation) are not voided by the
+> rule change, but no R here is on the current engine, and none should be
+> quoted as if it were. A fresh run on the fixed code is owed for any number
+> below that is relied on.
+
 # ADX re-test: the filter is refuted, and the old headline was noise
 
 **Run 2026-09-10, `python adx_retest.py`, 12 tickers / 10 years, exit 1 — NOT ESTABLISHED.**
