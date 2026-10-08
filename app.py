@@ -18,6 +18,7 @@ import market_context
 import risk_params
 import notify
 import gh_sync
+import forward_log          # read-only here: signal_key() only; the app never appends
 from journal_store import (
     load_alerts, save_alerts, load_journal, save_journal,
     load_positions, save_positions, load_skipped, save_skipped,
@@ -132,6 +133,31 @@ def source_selector(key: str) -> str:
              "passed the filters. Your own idea = anything else, including a "
              "setup the system showed but rejected.") == "A system signal" \
         else "discretionary"
+
+
+def signal_bar_input(key: str, ticker: str, right: str) -> str | None:
+    """
+    WHICH signal. Shown only when the setup came from the system: the date
+    of the signal bar, which every Telegram alert now prints ("Signal bar:
+    2026-10-07"). Returns forward_log.signal_key(underlying, direction, date)
+    for journal_store.open_option_position(signal_key=...), or None when the
+    ticker is not filled in yet.
+
+    BACKLOG 28, piece 2. attach_outcomes() matches a keyed row EXACTLY; an
+    unkeyed one falls back to (ticker, direction, within five days) and is
+    REFUSED whenever two signals qualify -- the common case now that base
+    signals are recorded on consecutive bars. Typing one date is what makes
+    the trade's outcome land on its signal.
+    """
+    _d = st.date_input(
+        "Signal bar date", key=f"sig_bar_{key}",
+        help="The 'Signal bar:' date in the alert. The outcome of this trade "
+             "attaches to the forward-log row for that exact bar.")
+    _tkr = str(ticker or "").strip().upper()
+    if not _tkr or _d is None:
+        return None
+    _trend = "Bullish" if str(right).upper().startswith("C") else "Bearish"
+    return forward_log.signal_key(_tkr, _trend, _d)
 
 
 def fallback_configured() -> bool:
@@ -2015,6 +2041,13 @@ with TAB_STOCK:
                                                         key=f"qbuy_confirm_{_qkey}"):
                                                 open_option_position(
                                                     mode=_q_mode, source=_q_src,
+                                                    # Exactly this signal (BACKLOG 28):
+                                                    # `df` is the frame analyze() read,
+                                                    # so its last bar IS the signal bar.
+                                                    signal_key=(forward_log.signal_key(
+                                                        ticker, r["trend"],
+                                                        pd.Timestamp(df.index[-1]).date())
+                                                        if _q_src == "signal" else None),
                                                     ticker=ticker, right=opt["label"],
                                                     strike=opt["strike"],
                                                     expiry=opt["expiry"],
@@ -2447,11 +2480,12 @@ with TAB_POSITIONS:
                        "EMA20 invalidation" if rule_thesis else ""])))
         _o_mode = mode_selector("op")
         _o_src = source_selector("op")
+        _o_key = signal_bar_input("op", o_tkr, o_right) if _o_src == "signal" else None
         _o_ok = size_gate(o_prem, o_qty, "op")
         if _o_ok and st.button("📍 Start monitoring this contract",
                                type="primary", key="op_save"):
             open_option_position(
-                mode=_o_mode, source=_o_src,
+                mode=_o_mode, source=_o_src, signal_key=_o_key,
                 ticker=o_tkr, right=o_right, strike=o_strike,
                 expiry=o_expiry.strftime("%Y-%m-%d"), contracts=o_qty,
                 entry_premium=o_prem,
@@ -2978,6 +3012,8 @@ with TAB_CHECK:
                 _chk_prem = res["entry_premium"] or (ct["mid"] if ct else 0.0)
                 _chk_mode = mode_selector("chk")
                 _chk_src = source_selector("chk")
+                _chk_key = (signal_bar_input("chk", res["ticker"], res["right"])
+                            if _chk_src == "signal" else None)
                 _chk_ok = size_gate(_chk_prem, chk_contracts, "chk")
                 if st.button("Log position", key="chk_log"):
                     if not _chk_ok:
@@ -2990,6 +3026,7 @@ with TAB_CHECK:
                         try:
                             open_option_position(
                                 mode=_chk_mode, source=_chk_src,
+                                signal_key=_chk_key,
                                 ticker=res["ticker"], expiry=res["expiry"],
                                 strike=res["strike"], right=res["right"],
                                 entry_premium=_chk_prem,

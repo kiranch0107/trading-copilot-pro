@@ -182,7 +182,8 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
                          entry_features: dict | None = None,
                          mode: str = "live",
                          traded_at: str | None = None,
-                         source: str = "discretionary") -> dict:
+                         source: str = "discretionary",
+                         signal_key: str | None = None) -> dict:
     """
     Record an OPTION contract you bought so the exit monitor can watch it.
 
@@ -218,6 +219,14 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
     `opened`/`opened_epoch` are LOGGING times and were being read as trade
     times: one journal row shows a one-minute hold on a contract back-filled
     two weeks after it was sold.
+
+    `signal_key`: WHICH signal this trade came from — forward_log.signal_key()
+    of (underlying, direction, signal bar date), e.g. "NVDA|Bullish|2026-10-07".
+    BACKLOG 28, piece 2. Without it attach_outcomes() matches on (ticker,
+    direction, within five days) and REFUSES whenever two signals qualify —
+    which, with base signals recorded on consecutive bars, is the common
+    case. With it the match is exact. Stored as given, None when the owner
+    did not say; never inferred from the source field.
     """
     positions = load_positions()
     now_epoch = time.time()
@@ -236,6 +245,7 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
         "opened_epoch":     now_epoch,
         "mode":             "paper" if str(mode).lower().startswith("p") else "live",
         "source":           source,
+        "signal_key":       signal_key or None,
         "traded_at":        traded_at or datetime.now(
                                 pytz.timezone("America/New_York")
                             ).strftime("%Y-%m-%d %H:%M ET"),
@@ -283,6 +293,7 @@ def close_position(position_id: str, exit_premium: float, outcome: str,
             "closed":     datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d %H:%M ET"),
             "mode":       pos.get("mode", "live"),
             "source":     pos.get("source", "discretionary"),
+            "signal_key": pos.get("signal_key"),
             "traded_at":  pos.get("traded_at"),
             "closed_at":  closed_at or datetime.now(
                               pytz.timezone("America/New_York")
@@ -755,6 +766,38 @@ def selftest() -> int:
         "the signal is the assumption that flatters the signal"
     print(f"mode / source           : independent fields, source defaults "
           f"to the non-flattering value")
+
+    # THE SIGNAL KEY RIDES FROM THE POSITION TO THE JOURNAL ROW. Storage is
+    # swapped for in-memory lists so this writes nothing to disk or GitHub.
+    _mem = {"pos": [], "jrn": []}
+    _g = globals()
+    _saved_io = {k: _g[k] for k in ("load_positions", "save_positions",
+                                    "load_journal", "save_journal")}
+    try:
+        _g["load_positions"] = lambda: list(_mem["pos"])
+        _g["save_positions"] = lambda d: _mem.__setitem__("pos", list(d))
+        _g["load_journal"] = lambda: list(_mem["jrn"])
+        _g["save_journal"] = lambda d: _mem.__setitem__("jrn", list(d))
+        _rules = {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7,
+                  "max_hold_bars": 20, "invalidate_ema": False}
+        _pk = open_option_position("NVDA", "CALL", 250.0, "2026-11-20", 1, 3.0,
+                                   _rules, source="signal",
+                                   signal_key="NVDA|Bullish|2026-10-07")
+        _pn = open_option_position("PFE", "CALL", 29.0, "2026-10-16", 1, 0.5,
+                                   _rules, source="signal")
+        assert _pk["signal_key"] == "NVDA|Bullish|2026-10-07"
+        assert _pn["signal_key"] is None, "no key given -> None, never inferred"
+        close_position(_pk["id"], 4.5, "WIN")
+        close_position(_pn["id"], 0.2, "LOSS")
+        _rows = {j["id"]: j for j in _mem["jrn"]}
+        assert _rows[_pk["id"]]["signal_key"] == "NVDA|Bullish|2026-10-07", \
+            "close_position dropped the signal key; attach_outcomes needs it on the journal row"
+        assert _rows[_pn["id"]]["signal_key"] is None
+        assert not _mem["pos"], "both positions closed"
+    finally:
+        _g.update(_saved_io)
+    print("signal key              : stored on the position, carried to the "
+          "journal row, None when not given")
 
     # Sizing gate, exercised through the same path the UI uses.
     #

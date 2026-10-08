@@ -2286,6 +2286,82 @@ def check_outcome_bases_never_pooled() -> None:
           "grader pure and wired into scanner.py")
 
 
+def check_signal_key_round_trip() -> None:
+    """
+    A trade logged as a system signal names WHICH signal, and the outcome
+    lands on exactly that row (BACKLOG 28, piece 2).
+
+    THE CHAIN, end to end, each link in a different module: the scanner's
+    alert carries the signal bar's date; the app's three logging sites hand
+    forward_log.signal_key(underlying, direction, bar) to
+    journal_store.open_option_position(); close_position() carries it to the
+    journal row; attach_outcomes() matches a keyed row exactly and refuses a
+    key that names a skipped or missing signal. One link dropped and the
+    match falls back to the five-day heuristic, which is refused whenever
+    two signals qualify -- the common case now that base signals are
+    recorded on consecutive bars.
+    """
+    import tempfile
+    import forward_log as fl
+    import journal_store as js
+
+    import re
+    app = Path("app.py").read_text()
+    # Call sites only: `signal_key=(...` or `signal_key=_name`. A docstring's
+    # "signal_key=..." does not count.
+    sites = len(re.findall(r"signal_key=(\(|_)", app))
+    assert "import forward_log" in app and sites >= 3, (
+        f"app.py passes signal_key= at {sites} site(s); the scan-result quick "
+        f"log, the manual form and the contract checker must all pass it")
+    assert "forward_log.signal_key(" in app, \
+        "app.py must build the key with forward_log.signal_key(), not its own format"
+    assert "def signal_bar_input" in app and "sig_bar_" in app, \
+        "the manual forms have no signal-bar date input"
+    sc_src = Path("scanner.py").read_text()
+    assert "Signal bar:" in sc_src and '"signal_key":' in sc_src, \
+        "the alert does not tell the owner the signal bar's date"
+    # The key format is ONE function. journal_store must not re-derive it:
+    # no definition of its own, and no f-string that pipes a ticker into a
+    # "TICKER|Trend|date" shape.
+    js_src = Path("journal_store.py").read_text()
+    assert "def signal_key" not in js_src and not re.search(r'f"\{[^}]*\}\|', js_src), \
+        "journal_store builds a key itself; the format lives in forward_log only"
+
+    # Behavioural: position -> journal row -> exact attachment.
+    mem = {"pos": [], "jrn": []}
+    saved = {k: getattr(js, k) for k in ("load_positions", "save_positions",
+                                         "load_journal", "save_journal")}
+    try:
+        js.load_positions = lambda: list(mem["pos"])
+        js.save_positions = lambda d: mem.__setitem__("pos", list(d))
+        js.load_journal = lambda: list(mem["jrn"])
+        js.save_journal = lambda d: mem.__setitem__("jrn", list(d))
+        key = fl.signal_key("NVDA", "Bullish", "2026-09-10")
+        pos = js.open_option_position("NVDA", "CALL", 250.0, "2026-11-20", 1, 3.0,
+                                      {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7,
+                                       "max_hold_bars": 20, "invalidate_ema": False},
+                                      source="signal", signal_key=key)
+        js.close_position(pos["id"], 4.5, "WIN")
+    finally:
+        for k, v in saved.items():
+            setattr(js, k, v)
+    row = mem["jrn"][0]
+    assert row["signal_key"] == key and row["source"] == "signal", row
+    tmp = Path(tempfile.mkdtemp()) / "key.jsonl"
+    setup = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0}
+    fl.record_signal("NVDA", "Bullish", setup, "taken", "", {"k": 1},
+                     bar_date="2026-09-09", path=tmp, hq=False)
+    fl.record_signal("NVDA", "Bullish", setup, "taken", "", {"k": 1},
+                     bar_date="2026-09-10", path=tmp, hq=False)
+    row["date"] = "2026-09-11 10:00 ET"           # inside both candidates' windows
+    rep = fl.attach_outcomes([row], path=tmp)
+    assert rep["attached"] == 1 and rep["ambiguous"] == 0, (
+        rep, "two candidates and a key: the key must decide, not ambiguity")
+    out = [x for x in fl.read_all(tmp) if x["kind"] == "outcome"][0]
+    assert out["ref_seq"] == 2 and out["basis"] == "premium", out
+    print("  alert -> app -> position -> journal -> exact attachment: key carried end to end")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -2303,6 +2379,7 @@ CHECKS = [
     ("research/live config divergence declared",   check_research_config_divergence_declared),
     ("HQ tier tags the record, gates only alerts", check_hq_tier_annotates_record),
     ("outcome bases coexist, never pooled",        check_outcome_bases_never_pooled),
+    ("signal key rides alert->app->journal->log", check_signal_key_round_trip),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),
