@@ -38,6 +38,8 @@ Run
     python scanner.py
 
     python scanner.py --dry-run --force    # print, send nothing, ignore hours
+    python scanner.py --record-only        # post-close: forward-log rows +
+                                           # heartbeat for today's bar, no alerts
 """
 from __future__ import annotations
 
@@ -137,6 +139,8 @@ EARNINGS_BLACKOUT_DAYS = 3   # matches app.py sidebar default
 POST_EARNINGS_DAYS     = 1   # matches app.py sidebar default
 ALERT_COOLDOWN_HRS = 4      # per ticker AND direction
 STATE_FILE         = Path("scanner_state.json")
+STATE_MAX_AGE_DAYS = 30     # cooldown stamps older than this are pruned
+POST_CLOSE_WINDOW_HRS = 2   # --record-only runs this long after the close
 
 # ── Option suggestion ──
 # DTE window is centred on 30 deliberately: option_backtest.py measured this
@@ -228,6 +232,26 @@ def is_market_open(now: datetime | None = None) -> bool:
             <= now <= now.replace(hour=ch, minute=cm, second=0, microsecond=0))
 
 
+def is_post_close_window(now: datetime | None = None) -> bool:
+    """
+    The POST_CLOSE_WINDOW_HRS after the close on a trading day — when today's
+    bar is settled and the market is shut. This is when --record-only runs.
+
+    Same calendar as is_market_open(): weekday, not a holiday, and a half day
+    closes at 13:00. Strictly AFTER the close: at 16:00:00 exactly the session
+    is still "open" to is_market_open(), and the two must never both be true.
+    """
+    now = now or datetime.now(ET)
+    if now.weekday() >= 5:
+        return False
+    day = now.strftime("%Y-%m-%d")
+    if day in MARKET_HOLIDAYS:
+        return False
+    ch = 13 if day in MARKET_HALF_DAYS else 16
+    close = now.replace(hour=ch, minute=0, second=0, microsecond=0)
+    return close < now <= close + timedelta(hours=POST_CLOSE_WINDOW_HRS)
+
+
 # ══════════════════════════════════════════════════════════════════
 # ALERT STATE (dedup)
 # ══════════════════════════════════════════════════════════════════
@@ -245,6 +269,29 @@ def save_state(state: dict) -> None:
     except Exception as e:
         logger.error("Could not write %s: %s — dedup will not persist, so "
                      "expect repeat alerts next run.", STATE_FILE, e)
+
+
+def prune_state(state: dict, now: float | None = None,
+                max_age_days: int = STATE_MAX_AGE_DAYS) -> int:
+    """
+    Drop cooldown stamps older than `max_age_days`. Returns how many went.
+
+    Every value in scanner_state.json is an epoch: "TICKER:Trend" for the
+    alert cooldown, "SCANNER:OUTAGE" and "SCANNER:COVERAGE" for the
+    operational ones. The longest cooldown is 20 hours, so a stamp a month
+    old gates nothing — it is just a line the file carries forever, and the
+    file is committed on every run. Entries from August were still there in
+    October. A value that is not a number is left alone rather than guessed
+    at.
+    """
+    now = time.time() if now is None else now
+    cutoff = now - max_age_days * 86400
+    gone = [k for k, v in state.items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool)
+            and v < cutoff]
+    for k in gone:
+        del state[k]
+    return len(gone)
 
 
 def is_total_outage(failed: list, watchlist: list) -> bool:
@@ -564,7 +611,8 @@ def get_spy_regime() -> dict | None:
 
 
 def analyze(df: pd.DataFrame, ticker: str,
-            spy_regime: dict | None = None) -> dict | None:
+            spy_regime: dict | None = None,
+            tally: dict | None = None) -> dict | None:
     """
     Thin adapter over signal_core.evaluate().
 
@@ -578,6 +626,11 @@ def analyze(df: pd.DataFrame, ticker: str,
     Now there is one implementation and this function only translates its
     output into the shape send_alert() expects. Returns None when no tradeable
     signal fires, matching the previous contract.
+
+    `tally`, when given, has its "signals" count incremented once for every
+    bar on which THE RULES PRODUCED A SIGNAL — taken or skipped — so run() can
+    write that count on the bar's `scan` row. The return value cannot carry
+    it: a skipped signal returns None, exactly like a blocked bar.
     """
     if len(df) < MIN_BARS_AFTER_WARMUP:
         logger.info("%s — only %d usable bars after warm-up; skipping.",
@@ -593,6 +646,9 @@ def analyze(df: pd.DataFrame, ticker: str,
     if r["blocked"]:
         logger.debug("%s — no signal (%s)", ticker, r.get("block_reason"))
         return None
+
+    if tally is not None:
+        tally["signals"] = tally.get("signals", 0) + 1
 
     # FROM HERE A SIGNAL EXISTS. Every one is recorded, whatever happens to it
     # next — a log of only the alerts that went out describes what the filters
@@ -690,11 +746,28 @@ def selftest() -> int:
 
 
 def run(args) -> int:
-    if not args.force and not is_market_open():
+    # RECORD-ONLY is the post-close pass. During the session every scan
+    # evaluates YESTERDAY's bar (drop_partial_bar), so a signal that forms at
+    # today's close is first recorded by tomorrow's 11:07 scan — or the day
+    # after, if tomorrow's dispatches miss. In the two hours after the close
+    # today's bar is settled; this pass writes its signal rows and `scan`
+    # heartbeat and nothing else. No trade alert (the market is shut; the
+    # next session's first scan alerts, because the alert cooldown does not
+    # read the log) and no chain fetch (post-close quotes are stale).
+    record_only = bool(getattr(args, "record_only", False))
+    if record_only:
+        if not args.force and not is_post_close_window():
+            logger.info("Not in the post-close window — record-only run skipped.")
+            return 0
+    elif not args.force and not is_market_open():
         logger.info("Market closed — skipping.")
         return 0
 
     state = load_state()
+    _pruned = prune_state(state)
+    if _pruned:
+        logger.info("state: pruned %d stamp(s) older than %d days",
+                    _pruned, STATE_MAX_AGE_DAYS)
     hits, skipped, failed = 0, 0, []
 
     # ── ATTACH OUTCOMES TO SETTLED SIGNALS, BEFORE SCANNING ──
@@ -760,11 +833,19 @@ def run(args) -> int:
                 bars_scanned[_bar]["tickers"].append(tk)
             except Exception:                              # noqa: BLE001
                 _bar = None
-            r = analyze(cdf, tk, spy_regime=spy_regime)
+            # The bar's tally rides along so n_signals on the scan row counts
+            # what the RULES produced (taken or skipped), not what reached
+            # Telegram. A None return cannot distinguish "no signal" from
+            # "signal, skipped", and the first version of this counted only
+            # the alert-worthy ones under a name that said otherwise.
+            r = analyze(cdf, tk, spy_regime=spy_regime,
+                        tally=bars_scanned.get(_bar) if _bar else None)
             if not r:
                 continue
-            if _bar:
-                bars_scanned[_bar]["signals"] += 1
+            if record_only:
+                logger.info("%s %s — recorded; the next session's scan alerts.",
+                            tk, r["trend"])
+                continue
 
             if recently_alerted(state, tk, r["trend"]):
                 logger.info("%s %s qualifies but alerted within %dh — suppressed.",
@@ -850,7 +931,9 @@ def run(args) -> int:
     #
     # Written on dry runs too: a dry run still evaluated the bar. Skipped only
     # when nothing was scanned at all — "scanned zero tickers" is an outage
-    # (handled above), not a heartbeat.
+    # (handled above), not a heartbeat. n_signals is the count of bars on
+    # which the rules produced a signal, taken OR skipped — the same rows
+    # record_signal() wrote (or deduped) for this bar.
     for _bar, _info in sorted(bars_scanned.items()):
         try:
             forward_log.record_scan(_bar, _info["tickers"], _info["signals"],
@@ -1029,6 +1112,20 @@ def _selftest_body() -> int:
         assert got is not None and got["trend"] == "Bullish", (
             f"the gate swallowed a LONG. It must block one direction, not "
             f"stop the scanner: {got}")
+        # THE TALLY counts what the rules PRODUCED: the skipped bearish signal
+        # above counts, the taken bullish one counts, a blocked bar does not.
+        _tally: dict = {}
+        sc.evaluate = lambda *a, **k: _canned("Bearish")
+        assert analyze(_frame, "ZT", tally=_tally) is None
+        sc.evaluate = lambda *a, **k: _canned("Bullish")
+        analyze(_frame, "ZU", tally=_tally)
+        sc.evaluate = lambda *a, **k: dict(_canned("Bullish"), blocked=True,
+                                           block_reason="fixture")
+        assert analyze(_frame, "ZV", tally=_tally) is None
+        assert _tally.get("signals") == 2, (
+            f"tally {_tally}: analyze() must count a skipped signal AND a "
+            f"taken one, and not a blocked bar — n_signals on the scan row "
+            f"is 'what the rules produced', not 'what was alert-worthy'")
     finally:
         sc.evaluate = _real_eval
         globals()["get_weekly_trend"] = _real_wk
@@ -1254,7 +1351,10 @@ def _selftest_body() -> int:
         # ── run() WRITES A SCAN ROW — the heartbeat is produced, not just read ──
         _tmpl.write_text("")
         import pandas as _pd2
-        _bars = _pd2.bdate_range("2026-08-01", periods=MIN_BARS_AFTER_WARMUP + 20)
+        # ENDS IN THE PAST, so drop_partial_bar() never trims it. A range that
+        # ran past today lost its last bars during the session and kept them
+        # after the close, and this test passed or failed on the clock.
+        _bars = _pd2.bdate_range(end="2026-06-30", periods=MIN_BARS_AFTER_WARMUP + 20)
         _fr = _pd2.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0,
                               "Close": 100.0, "Volume": 1e6}, index=_bars)
         _g = globals()
@@ -1264,7 +1364,7 @@ def _selftest_body() -> int:
         try:
             _g["get_data"] = lambda tk: _fr
             _g["compute"] = lambda df: df
-            _g["analyze"] = lambda df, tk, spy_regime=None: None
+            _g["analyze"] = lambda df, tk, spy_regime=None, tally=None: None
             _g["get_spy_regime"] = lambda: None
             _g["save_state"] = lambda st: None
             _g["load_state"] = lambda: {}
@@ -1285,6 +1385,112 @@ def _selftest_body() -> int:
         forward_log.LOG = _real_log2
         globals()["send_alert"] = _real_send2
 
+    # ── THE POST-CLOSE WINDOW ──
+    _wed = lambda h, m: _dt2(2026, 10, 7, h, m, tzinfo=ET)       # a Wednesday
+    assert is_post_close_window(_wed(16, 20)) is True
+    assert is_post_close_window(_wed(18, 0)) is True, "inclusive at the end"
+    assert is_post_close_window(_wed(16, 0)) is False, \
+        "16:00:00 is still the session to is_market_open(); never both"
+    assert is_post_close_window(_wed(15, 59)) is False
+    assert is_post_close_window(_wed(18, 1)) is False
+    assert is_post_close_window(_dt2(2026, 10, 10, 16, 20, tzinfo=ET)) is False, "Saturday"
+    assert is_post_close_window(_dt2(2026, 11, 26, 16, 20, tzinfo=ET)) is False, "Thanksgiving"
+    assert is_post_close_window(_dt2(2026, 11, 27, 13, 30, tzinfo=ET)) is True, \
+        "half day closes at 13:00"
+    assert is_post_close_window(_dt2(2026, 11, 27, 16, 20, tzinfo=ET)) is False, \
+        "half day: 16:20 is three hours after the close"
+    for _t in (_wed(16, 20), _wed(18, 0), _dt2(2026, 11, 27, 13, 30, tzinfo=ET)):
+        assert not is_market_open(_t), "the two windows must never overlap"
+    print("post-close window       : 16:00 < t <= 18:00 ET on trading days, "
+          "13:00-15:00 on a half day, disjoint from the session")
+
+    # ── STATE PRUNING ──
+    _now_ep = 1_800_000_000.0
+    _st3 = {"AAPL:Bullish": _now_ep - 31 * 86400,
+            "NVDA:Bullish": _now_ep - 3600,
+            "SCANNER:COVERAGE": _now_ep - 30 * 86400 - 1,
+            "SCANNER:OUTAGE": _now_ep - 29 * 86400,
+            "odd": "not a number", "flag": True}
+    assert prune_state(_st3, now=_now_ep) == 2, _st3
+    assert set(_st3) == {"NVDA:Bullish", "SCANNER:OUTAGE", "odd", "flag"}, _st3
+    assert prune_state(_st3, now=_now_ep) == 0, "idempotent"
+    print("state pruning           : stamps older than 30 days dropped, "
+          "fresh / non-numeric kept")
+
+    # ── RECORD-ONLY: rows and heartbeat, no alert; n_signals counts skipped ──
+    _tmpl3 = _pl2.Path(_tf2.mkdtemp()) / "ro.jsonl"
+    _real_log3 = forward_log.LOG
+    _real_send3 = globals()["send_alert"]
+    _sent3: list = []
+    try:
+        forward_log.LOG = _tmpl3
+        globals()["send_alert"] = lambda m, dry_run=False: (_sent3.append(m) or True)
+        import pandas as _pd3
+        _bars3 = _pd3.bdate_range(end="2026-06-30", periods=MIN_BARS_AFTER_WARMUP + 20)
+        _fr3 = _pd3.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0,
+                               "Close": 100.0, "Volume": 1e6}, index=_bars3)
+
+        def _fake_analyze(df, tk, spy_regime=None, tally=None):
+            # AAA: a tradeable signal. BBB: a signal the rules produced but
+            # skipped (returns None, like the direction gate). CCC: blocked.
+            if tk in ("AAA", "BBB") and tally is not None:
+                tally["signals"] = tally.get("signals", 0) + 1
+            if tk == "AAA":
+                return {"ticker": tk, "trend": "Bullish", "strength": "Strong",
+                        "price": 100.0, "entry": 100.0, "stop": 98.0,
+                        "target": 106.0, "rr": 3.0, "rsi": 55.0, "adx": 40.0,
+                        "atr": 1.6, "filters_pass": 4, "filters_total": 4}
+            return None
+
+        _g = globals()
+        _saved = {k: _g[k] for k in ("get_data", "compute", "analyze",
+                                     "get_spy_regime", "save_state", "load_state",
+                                     "WATCHLIST", "FETCH_GAP_SEC", "suggest_option",
+                                     "is_post_close_window")}
+        _saved_state: dict = {}
+        try:
+            _g["get_data"] = lambda tk: _fr3
+            _g["compute"] = lambda df: df
+            _g["analyze"] = _fake_analyze
+            _g["get_spy_regime"] = lambda: None
+            _g["save_state"] = lambda st: _saved_state.update(st)
+            _g["load_state"] = lambda: {}
+            _g["WATCHLIST"] = ["AAA", "BBB", "CCC"]
+            _g["FETCH_GAP_SEC"] = 0
+            # RECORDS the call rather than raising: run() isolates each
+            # ticker in try/except, so a stub that raised was swallowed
+            # there and the alert path it was meant to expose never ran.
+            _chain_calls: list = []
+            _g["suggest_option"] = lambda *a, **k: (_chain_calls.append(a) or None)
+            import argparse as _ap3
+            # Outside the window, not forced: nothing happens at all.
+            _g["is_post_close_window"] = lambda now=None: False
+            run(_ap3.Namespace(force=False, dry_run=False, record_only=True))
+            assert not forward_log.read_all(_tmpl3) and not _sent3, \
+                "a record-only run outside its window must not scan"
+            # Inside the window: rows + heartbeat, no alert, no state.
+            _g["is_post_close_window"] = lambda now=None: True
+            run(_ap3.Namespace(force=False, dry_run=False, record_only=True))
+        finally:
+            _g.update(_saved)
+        assert not _sent3, f"record-only sent an alert: {_sent3}"
+        assert not _chain_calls, "record-only fetched an option chain"
+        _rows3 = forward_log.read_all(_tmpl3)
+        _scans3 = [r for r in _rows3 if r["kind"] == "scan"]
+        assert len(_scans3) == 1 and _scans3[0]["tickers"] == ["AAA", "BBB", "CCC"], _scans3
+        assert _scans3[0]["n_signals"] == 2, (
+            _scans3[0], "n_signals must count what the rules PRODUCED (AAA "
+            "taken + BBB skipped), not only the alert-worthy one")
+        assert "AAA:Bullish" not in _saved_state, \
+            "record-only must not stamp the alert cooldown — the next " \
+            "session's scan has to be free to alert"
+        print("record-only run         : heartbeat n_signals=2 (1 taken + 1 "
+              "skipped), no alert, no chain, no cooldown stamp; skipped "
+              "outside its window")
+    finally:
+        forward_log.LOG = _real_log3
+        globals()["send_alert"] = _real_send3
+
     print("\nAll self-tests passed.")
     return 0
 
@@ -1297,6 +1503,11 @@ def parse_args():
                    help="Run even when the market is closed")
     p.add_argument("--selftest", action="store_true",
                    help="Run offline checks and exit (no network, no alerts)")
+    p.add_argument("--record-only", action="store_true",
+                   help="Post-close pass: evaluate today's settled bar and "
+                        "write its forward-log rows and scan heartbeat. Sends "
+                        "no trade alert and fetches no chain. Runs only inside "
+                        "the 2h after the close unless --force.")
     p.add_argument("--coverage", action="store_true",
                    help="Check whether the unattended system has been running "
                         "(last scan row, unchecked positions) and alert if not. "
@@ -1311,6 +1522,7 @@ if __name__ == "__main__":
         raise SystemExit(selftest())
     if _args.coverage:
         _st = load_state()
+        prune_state(_st)
         coverage_check(_st, dry_run=_args.dry_run)
         if not _args.dry_run:
             save_state(_st)

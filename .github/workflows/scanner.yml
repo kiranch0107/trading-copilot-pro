@@ -67,6 +67,15 @@ on:
     # has not been since 2026-08-26.
     - cron: '7,37 15,16,17,18,19 * * 1-5'
 
+    # POST-CLOSE RECORD-ONLY PASS (backup slots; the primary is job 4 below).
+    # 20:20 UTC is 16:20 EDT (in the window) / 15:20 EST (pre-close, the
+    # guard skips it); 21:20 UTC is 17:20 EDT / 16:20 EST. One of the two is
+    # inside the 16:00-18:00 ET window all year. The step that runs here is
+    # `scanner.py --record-only`: forward-log rows and the scan heartbeat for
+    # TODAY's settled bar, no trade alert, no chain fetch. See
+    # "Record the closed bar" below.
+    - cron: '20 20,21 * * 1-5'
+
     # DO NOT use a post-close cron such as '15 20 * * 1-5' (4:15pm ET). The
     # guard step requires 9:30-16:00 ET, so a 16:15 run is skipped as
     # market-closed and never scans. A previous comment here recommended
@@ -96,7 +105,10 @@ on:
   #      the timezone there ends the UTC/DST problem every comment in this
   #      file has fought.
   #   3. Do the same for exit-monitor.yml, hourly 09:30-16:00 ET.
-  #   4. Keep the `schedule` block above as the backup.
+  #   4. A FOURTH job for this workflow at 16:20 America/New_York, Mon-Fri.
+  #      The guard step sees it is after the close and runs the record-only
+  #      pass instead of the alerting scan (added 2026-10-08).
+  #   5. Keep the `schedule` block above as the backup.
   #
   # Dispatch without `inputs` takes the defaults below (force=false), so the
   # market-hours guard still applies. `concurrency` makes a double-fire safe.
@@ -137,13 +149,15 @@ jobs:
       # step below needs the repo (it reads the committed forward log and
       # position file) and runs on EVERY run, so the install is unconditional.
       # Public repo; the minutes are free.
+      # Node 24 majors (checkout v5, setup-python v6). The v4 / v5 pins ran
+      # on Node 20, which GitHub is retiring; every run warned about it.
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0     # full history so `git pull --rebase` works
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: pip
@@ -183,6 +197,7 @@ jobs:
 
           day = now.strftime("%Y-%m-%d")
           reason = ""
+          postclose = False
           if now.weekday() >= 5:
               is_open, reason = False, "weekend"
           elif day in HOLIDAYS:
@@ -192,18 +207,24 @@ jobs:
               start = now.replace(hour=9, minute=30, second=0, microsecond=0)
               end   = now.replace(hour=ch, minute=cm, second=0, microsecond=0)
               is_open = start <= now <= end
+              # The two hours after the close: today's bar is settled and the
+              # market is shut, so the record-only pass runs instead of the
+              # alerting scan. Mirrors scanner.is_post_close_window().
+              postclose = end < now <= end + datetime.timedelta(hours=2)
               if not is_open:
                   reason = "outside 9:30-%02d:%02d ET" % (ch, cm)
 
           print(f"Now (ET): {now:%Y-%m-%d %H:%M %A}")
           print(f"Market open: {is_open}" + (f" ({reason})" if reason else ""))
+          print(f"Post-close window: {postclose}")
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
               fh.write(f"open={'true' if is_open else 'false'}\n")
+              fh.write(f"postclose={'true' if postclose else 'false'}\n")
           PY
 
       - name: Skip notice
-        if: steps.market.outputs.open != 'true' && inputs.force != true
+        if: steps.market.outputs.open != 'true' && steps.market.outputs.postclose != 'true' && inputs.force != true
         run: echo "Market closed — scan skipped. The coverage check below still runs."
 
       - name: Run scanner
@@ -225,6 +246,26 @@ jobs:
           USE_DYNAMIC_UNIVERSE: '1'
           LOG_LEVEL: ${{ inputs.log_level || 'INFO' }}
         run: python scanner.py
+
+      # ── THE POST-CLOSE PASS — today's bar, into the record, the day it closed ──
+      #
+      # During the session every scan evaluates YESTERDAY's bar, so a signal
+      # that forms at today's close is first written by tomorrow's 11:07 scan
+      # — or later, if tomorrow's dispatches miss. In the two hours after the
+      # close today's bar is settled. --record-only writes its signal rows and
+      # the `scan` heartbeat and nothing else: no trade alert (the market is
+      # shut; the next session's first scan alerts, because the cooldown does
+      # not read the log) and no chain fetch. A forced dispatch takes the
+      # alerting path above instead, as before.
+      - name: Record the closed bar
+        if: steps.market.outputs.postclose == 'true' && inputs.force != true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}   # outage alert only
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
+          USE_DYNAMIC_UNIVERSE: '1'
+          LOG_LEVEL: ${{ inputs.log_level || 'INFO' }}
+        run: python scanner.py --record-only
 
       # ── THE ALARM FOR SILENCE — runs on EVERY run, scanned or not ──
       #

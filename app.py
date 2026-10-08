@@ -22,7 +22,7 @@ from journal_store import (
     load_alerts, save_alerts, load_journal, save_journal,
     load_positions, save_positions, load_skipped, save_skipped,
     log_skipped_signal, open_option_position, close_position,
-    log_alert, add_journal_trade, journal_stats, calc_position_size,
+    log_alert, add_journal_trade, journal_stats, calc_position_size, DUST_R,
     MIN_JOURNAL_TRADES_FOR_SIGNAL,
 )
 from rate_limit import (
@@ -2702,6 +2702,10 @@ with TAB_JOURNAL:
             d3.metric("Win Rate", f"{stats['win_rate']}%",
                       delta=f"{stats['wins']}W / {stats['losses']}L",
                       delta_color="off")
+            if stats.get("dust"):
+                st.caption(f"ℹ️ {stats['dust']} trade(s) closed inside "
+                           f"±{DUST_R:g} R and count as neither win nor "
+                           f"loss — the same floor the profit factor uses.")
             if stats.get("missing_usd"):
                 st.caption(f"ℹ️ {stats['missing_usd']} trade(s) have no recorded "
                            f"dollar P&L (share trades logged before position "

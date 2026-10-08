@@ -405,6 +405,11 @@ def trade_mode(entry: dict) -> str:
     return "paper" if "paper" in (entry.get("notes") or "").lower() else "live"
 
 
+# A closed trade inside ±DUST_R is neither a win nor a loss for any rate. One
+# floor, used by the win rate, the averages and the profit factor alike.
+DUST_R = 0.05
+
+
 def journal_stats(journal: list, mode: str | None = None) -> dict:
     """
     Performance over closed trades.
@@ -433,19 +438,29 @@ def journal_stats(journal: list, mode: str | None = None) -> dict:
     journal = [j for j in journal if j.get("outcome") in ("WIN", "LOSS", "BREAKEVEN")]
     if not journal:
         return {"open": _n_open} if _n_open else {}
-    wins   = [j for j in journal if j["outcome"] == "WIN"]
-    losses = [j for j in journal if j["outcome"] == "LOSS"]
+    # ONE DUST FLOOR FOR EVERY RATE. The 0.05 R floor used to apply to the
+    # profit factor only, so a trade closed at +0.04 R (NKE, +$4) was a WIN in
+    # the win rate and nothing in the profit factor — two headline numbers
+    # describing two different sets of trades. Now a WIN or LOSS inside
+    # ±DUST_R is "dust": it stays in the total (it was a trade, and it is in
+    # total_r and the equity curve) but it is neither a win nor a loss for the
+    # rate, the averages, or the factor — the same treatment BREAKEVEN gets.
+    _rr = lambda j: float(j.get("actual_rr") or 0.0)
+    wins   = [j for j in journal if j["outcome"] == "WIN"  and _rr(j) >  DUST_R]
+    losses = [j for j in journal if j["outcome"] == "LOSS" and _rr(j) < -DUST_R]
     be     = [j for j in journal if j["outcome"] == "BREAKEVEN"]
+    dust   = [j for j in journal if j["outcome"] in ("WIN", "LOSS")
+              and -DUST_R <= _rr(j) <= DUST_R]
     total  = len(journal)
     wr     = round(len(wins)/total*100, 1)
     avg_win  = round(sum(j["actual_rr"] for j in wins)  /len(wins),  2) if wins   else 0
     avg_loss = round(sum(j["actual_rr"] for j in losses)/len(losses), 2) if losses else 0
     total_r  = round(sum(j["actual_rr"] for j in journal), 2)
-    gp = sum(j["actual_rr"] for j in wins   if j["actual_rr"] > 0.05)   # J1 FIX: ignore dust trades
-    gl = abs(sum(j["actual_rr"] for j in losses if j["actual_rr"] < -0.05))  # same floor on loss side
-    # If all wins/losses are below 0.05R, fall back to full set so pf isn't 0/inf
-    if gp == 0: gp = sum(j["actual_rr"] for j in wins if j["actual_rr"] > 0)
-    if gl == 0: gl = abs(sum(j["actual_rr"] for j in losses if j["actual_rr"] < 0))
+    gp = sum(j["actual_rr"] for j in wins)          # already above the floor
+    gl = abs(sum(j["actual_rr"] for j in losses))   # already below the floor
+    # If every win/loss is dust, fall back to the full set so pf isn't 0/inf
+    if gp == 0: gp = sum(_rr(j) for j in journal if j["outcome"] == "WIN"  and _rr(j) > 0)
+    if gl == 0: gl = abs(sum(_rr(j) for j in journal if j["outcome"] == "LOSS" and _rr(j) < 0))
     pf = round(gp/gl, 2) if gl else float("inf")
     # ORDER BY WHEN THE TRADE ACTUALLY CLOSED, not when the row was written.
     #
@@ -501,6 +516,7 @@ def journal_stats(journal: list, mode: str | None = None) -> dict:
         "mode": mode or "all",
         "equity_curve_usd": eq_usd,
         "wins": len(wins), "losses": len(losses), "breakeven": len(be),
+        "dust": len(dust),
         "win_rate": wr, "avg_win_r": avg_win, "avg_loss_r": avg_loss,
         "total_r": total_r, "profit_factor": pf, "streak": streak,
         "streak_type": streak_type, "equity_curve": eq_curve,
@@ -684,6 +700,32 @@ def selftest() -> int:
     assert both["profit_factor"] == 2.28, both["profit_factor"]
     print(f"two profit factors      : PF$ {both['profit_factor_usd']} (real) vs "
           f"PF_R {both['profit_factor']} (flattering)")
+
+    # DUST IS NOT A WIN. A +0.04 R close used to be a WIN in the win rate and
+    # nothing in the profit factor; the two headline numbers described
+    # different trades. One floor now: the trade stays in the total and in
+    # total_r, and is neither a win nor a loss anywhere a rate is computed.
+    J3 = J + [{"outcome": "WIN",  "actual_rr":  0.04, "pnl_usd":  4.0, "closed": "2026-09-10", "mode": "live"},
+              {"outcome": "LOSS", "actual_rr": -0.03, "pnl_usd": -3.0, "closed": "2026-09-11", "mode": "live"}]
+    s3 = journal_stats(J3, mode="live")
+    assert s3["total"] == 7 and s3["dust"] == 2, s3
+    assert s3["wins"] == 4 and s3["losses"] == 1, \
+        "a trade inside the dust floor must count as neither a win nor a loss"
+    assert s3["win_rate"] == 57.1, (s3["win_rate"],
+        "win rate must be wins-above-dust over ALL closed trades: 4/7")
+    assert s3["profit_factor"] == live["profit_factor"], \
+        "dust never moved the profit factor; it must not start to"
+    assert s3["avg_win_r"] == live["avg_win_r"], "dust must not dilute the average win"
+    assert s3["total_r"] == round(live["total_r"] + 0.01, 2), \
+        "dust is still a trade: it stays in total_r"
+    # All-dust fallback: a record of nothing but dust still gets a finite PF.
+    s_dust = journal_stats([{"outcome": "WIN", "actual_rr": 0.02, "closed": "2026-09-01"},
+                            {"outcome": "LOSS", "actual_rr": -0.01, "closed": "2026-09-02"}])
+    assert s_dust["wins"] == 0 and s_dust["win_rate"] == 0.0 and s_dust["dust"] == 2
+    assert s_dust["profit_factor"] == 2.0, s_dust["profit_factor"]
+    print(f"dust floor              : ±{DUST_R} R is neither win nor loss — "
+          f"WR {live['win_rate']}% -> {s3['win_rate']}% with 2 dust trades, "
+          f"PF unchanged")
 
     # Rows without pnl_usd (share trades) must be counted as missing, never as
     # zero — a silent zero would drag the average toward nothing.
