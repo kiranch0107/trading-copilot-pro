@@ -1,0 +1,58 @@
+LONGS-ONLY REPLAY ON THE FIXED ENGINE (BACKLOG 18 + 21). Same laptop, same
+cache and same universe as portfolio_replay_run2.txt; the only change is the
+gapped-level fill rule (claude/trading-code-review-wt48q8 @ 3a473e0).
+
+  run 2 (stop filled AT the level) -> run 3 (filled at the open when gapped):
+    idealised    +4.0%/yr, 45.6% DD  ->  +0.3%/yr, 55.7% DD
+    constrained  +3.4%/yr, 19.0% DD  ->  +1.7%/yr, 21.8% DD
+    long side    +0.076 R            ->  +0.042 R, 95% CI [-0.093, +0.177]
+    SPY          +13.7%/yr, 34.1% DD (unchanged)
+
+The "READING IT" line below is measured on this run (longs_only.long_edge()),
+not quoted from the record.
+
+====================================================================================
+LONGS ONLY, IN SHARES — what it would actually have been
+====================================================================================
+  $5,000 account, 1.0% risk per trade, position ceiling 25%
+  A MEASUREMENT, not a test. No bar, nothing searched over.
+====================================================================================
+                   total %   CAGR %  max DD %  trades   win %
+  -----------------------------------------------------------
+  idealised           +3.2     +0.3      55.7     883    35.4
+  constrained        +18.6     +1.7      21.8     692    36.1
+  SPY buy-hold      +259.6    +13.7      34.1       —       —
+
+  WHAT THE CONSTRAINT COST
+    signals skipped, no room    191
+    positions sized down        733
+    peak concurrent positions   5
+    peak capital deployed       100% of equity
+    -> 191 of 883 signals (22%) were not takeable at this account size
+
+  BY YEAR (constrained)
+    year      trades       P&L $
+    2017          51        -257
+    2018          63        +320
+    2019          61        +118
+    2020          87        +241
+    2021          91        +204
+    2022          28        -661
+    2023          80        +127
+    2024         106        -489
+    2025          70       +1264
+    2026          55         +66
+
+====================================================================================
+  READING IT
+  The long side is +0.042 R on 883 trades, 95% CI [-0.093, +0.177] — it SPANS ZERO.
+  (The record was +0.085 R, and decayed +0.268 -> +0.106 -> +0.085
+  as the sample grew; results/longshort_split.md.)
+  Dropping shorts removes a measured loss; it does not add a measured
+  gain. Expectancy above has a confidence interval. The DRAWDOWN does
+  not — that is what the path did.
+
+  This returned +1.7%/yr against SPY at +13.7%/yr,
+  at 22% drawdown against 34%. Owning the index was
+  better on both axes, with no signals to follow.
+====================================================================================

@@ -215,8 +215,21 @@ def benchmark(ticker: str, years: int, account: float) -> dict | None:
             "max_dd_pct": 100.0 * float(dd.max())}
 
 
+def long_edge(longs: list[dict]) -> dict:
+    """Mean R of the long trades with a normal 95% CI -- MEASURED on this run,
+    so the report cannot quote a number from another one."""
+    rs = [float(t["r"]) for t in longs if t.get("r") is not None]
+    n = len(rs)
+    if n < 2:
+        return {"n": n, "mean": float("nan"), "lo": float("nan"), "hi": float("nan")}
+    mean = sum(rs) / n
+    sd = (sum((x - mean) ** 2 for x in rs) / (n - 1)) ** 0.5
+    half = 1.96 * sd / n ** 0.5
+    return {"n": n, "mean": mean, "lo": mean - half, "hi": mean + half}
+
+
 def report(ideal: dict, real: dict, bench: dict | None, *, account: float,
-           risk_pct: float) -> int:
+           risk_pct: float, edge: dict | None = None) -> int:
     print("=" * 84)
     print("LONGS ONLY, IN SHARES — what it would actually have been")
     print("=" * 84)
@@ -266,8 +279,18 @@ def report(ideal: dict, real: dict, bench: dict | None, *, account: float,
     print()
     print("=" * 84)
     print("  READING IT")
-    print(f"  The long side is +0.085 R with a CI of [-0.037, +0.206] — it SPANS")
-    print(f"  ZERO, and it decayed +0.268 -> +0.106 -> +0.085 as the sample grew.")
+    # MEASURED HERE, never quoted. This block used to print the record's
+    # "+0.085 R, CI [-0.037, +0.206]" verbatim on every run, so a run whose
+    # long side was +0.076 R said +0.085 -- prose beside a number, drifting.
+    if edge and edge["n"] >= 2:
+        _spans = edge["lo"] <= 0.0 <= edge["hi"]
+        print(f"  The long side is {edge['mean']:+.3f} R on {edge['n']} trades, "
+              f"95% CI [{edge['lo']:+.3f}, {edge['hi']:+.3f}] — it "
+              f"{'SPANS' if _spans else 'does NOT span'} ZERO.")
+        print(f"  (The record was +0.085 R, and decayed +0.268 -> +0.106 -> +0.085")
+        print(f"  as the sample grew; results/longshort_split.md.)")
+    else:
+        print(f"  Too few long trades to measure an edge.")
     print(f"  Dropping shorts removes a measured loss; it does not add a measured")
     print(f"  gain. Expectancy above has a confidence interval. The DRAWDOWN does")
     print(f"  not — that is what the path did.")
@@ -283,6 +306,23 @@ def report(ideal: dict, real: dict, bench: dict | None, *, account: float,
 
 def selftest() -> int:
     print("longs_only.py selftest")
+    # ── the reading is measured, not quoted ──
+    _e = long_edge([{"r": 1.0}, {"r": -1.0}, {"r": 1.0}, {"r": -1.0}])
+    assert _e["n"] == 4 and abs(_e["mean"]) < 1e-9 and _e["lo"] < 0 < _e["hi"], _e
+    _e2 = long_edge([{"r": 2.0}] * 30 + [{"r": 1.9}] * 30)
+    assert _e2["lo"] > 0, "sixty +2 R trades do not span zero"
+    assert long_edge([{"r": 1.0}])["n"] == 1
+    import io as _io, contextlib as _cl
+    _buf = _io.StringIO()
+    # A real (empty) simulation carries every key report() reads.
+    _stub = simulate([], account=5000, risk_pct=1.0, constrained=False)
+    with _cl.redirect_stdout(_buf):
+        report(dict(_stub), dict(_stub), None, account=5000, risk_pct=1.0,
+               edge=long_edge([{"r": 0.5}] * 10 + [{"r": -0.4}] * 10))
+    _txt = _buf.getvalue()
+    assert "+0.050 R on 20 trades" in _txt and "SPANS ZERO" in _txt, _txt
+    assert "+0.085 R with a CI" not in _txt, "the record's number must not be printed as this run's"
+    print("measured reading : long edge computed from the run, record quoted as the record")
     print("=" * 72)
 
     def mk(date, r, entry=100.0, stop=98.0, hold_to="9999"):
@@ -627,7 +667,8 @@ def main() -> int:
                     constrained=True)
     print(f"  benchmark {BENCHMARK} ...", file=sys.stderr)
     bench = benchmark(BENCHMARK, a.years, a.account)
-    rc = report(ideal, real, bench, account=a.account, risk_pct=a.risk_pct)
+    rc = report(ideal, real, bench, account=a.account, risk_pct=a.risk_pct,
+                edge=long_edge(longs))
     if a.break_even:
         rc = max(rc, break_even_arm(tickers, a.years, longs, ideal, real,
                                     account=a.account, risk_pct=a.risk_pct))

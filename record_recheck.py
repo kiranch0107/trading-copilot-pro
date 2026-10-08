@@ -60,6 +60,7 @@ import io
 import sys
 
 import re
+from pathlib import Path
 
 import numpy as np
 
@@ -78,6 +79,42 @@ RECORD = [
      "trades": 1386, "avg_r": -0.048, "fingerprint": "v2-e09e31d6eaf30233",
      "long_n": 889, "long_r": +0.085, "short_n": 497, "short_r": -0.287},
 ]
+
+# ── A SECOND PIN: the 2026-10-08 baseline ──
+# The windows are relative to today, so the record's fingerprints can never be
+# reproduced again: three weeks on, every cut starts and ends on different bars
+# and this tool says DATA CHANGED about everything, forever. The owner re-ran
+# all three cuts on 2026-10-08 on UNCHANGED code
+# (results/record_recheck_baseline_2026-10-08.txt); those bars sit in that
+# machine's .bar_cache/. Pinning that run here means a later run on the same
+# cache reproduces these fingerprints and is judged against THIS table, so the
+# verdict isolates the code -- which is what BACKLOG 21's gapped-stop fix
+# needs. A run matching neither pin is still DATA CHANGED.
+BASELINE_2026_10_08 = [
+    {"name": "7t/5y  (discovery, swept)", "tickers": SWEEP_7, "years": 5,
+     "trades": 413, "avg_r": -0.004, "fingerprint": "v2-e817de3bdf479135",
+     "long_n": 263, "long_r": +0.260, "short_n": 150, "short_r": -0.466},
+    {"name": "12t/5y (OOS set)", "tickers": OOS_12, "years": 5,
+     "trades": 675, "avg_r": -0.022, "fingerprint": "v2-9acbe79f9c98a1dc",
+     "long_n": 432, "long_r": +0.101, "short_n": 243, "short_r": -0.240},
+    {"name": "12t/10y (OOS set)", "tickers": OOS_12, "years": 10,
+     "trades": 1381, "avg_r": -0.056, "fingerprint": "v2-2931fe00d85eb037",
+     "long_n": 883, "long_r": +0.076, "short_n": 498, "short_r": -0.290},
+]
+
+
+def pin_for(cut: dict, got: dict) -> tuple[dict, str]:
+    """
+    The pinned table a run is judged against: the record when the
+    fingerprint matches it, the 2026-10-08 baseline when it matches that,
+    else the record (and compare() will say DATA CHANGED).
+    """
+    fp = got.get("fingerprint")
+    if fp and fp != cut["fingerprint"]:
+        for b in BASELINE_2026_10_08:
+            if b["name"] == cut["name"] and b["fingerprint"] == fp:
+                return b, "2026-10-08 baseline"
+    return cut, "record"
 
 # A number is "moved" if it differs by more than this. Expectancy is quoted to
 # three decimals in the record, so anything beyond half a unit in the last place
@@ -125,9 +162,14 @@ def measure(cut: dict) -> dict | None:
     m2 = re.search(r"survived every gate\s*:\s*(\d+)", text)
     if m2:
         passed = int(m2.group(1))
+    gapped_through = 0
+    m3 = re.search(r"gapped through a level\s*:\s*(\d+)", text)
+    if m3:
+        gapped_through = int(m3.group(1))
 
     return {"trades": len(rs), "avg_r": float(rs.mean()), "fingerprint": fp,
             "gapped": gap, "passed_gates": passed,
+            "gapped_through": gapped_through,
             "long_n": len(longs),
             "long_r": float(longs.mean()) if len(longs) else float("nan"),
             "short_n": len(shorts),
@@ -199,6 +241,8 @@ def report(results: list[tuple[dict, dict | None]]) -> int:
             print("    ! no trades returned — nothing to compare")
             worst = max(worst, 2)
             continue
+        cut, pin_name = pin_for(cut, got)
+        print(f"    judged against the {pin_name}")
         print(f"    {'':<14} {'recorded':>12} {'now':>12}")
         for key, label in (("trades", "trades"), ("avg_r", "avg R"),
                            ("long_n", "long n"), ("long_r", "long R"),
@@ -219,6 +263,10 @@ def report(results: list[tuple[dict, dict | None]]) -> int:
                  "   (fix did not fire on this data)"))
         if pg is not None:
             print(f"    {'passed gates':<14} {'':>12} {pg:>12}")
+        gth = got.get("gapped_through", 0)
+        print(f"    {'gapped through':<14} {'':>12} {gth:>12}"
+              + ("   <-- the 10-08 gapped-stop rule FIRED here" if gth else
+                 "   (no level was gapped through on this data)"))
         verdict, notes = compare(cut, got)
         print(f"\n    VERDICT: {verdict}")
         for n in notes:
@@ -287,6 +335,55 @@ def selftest() -> int:
     v, _ = compare(base, dict(same, fingerprint=None))
     assert v == "INDETERMINATE", v
     print("verdicts         : CONFIRMED / CODE MOVED / DATA CHANGED / INDETERMINATE")
+
+    # ── the 2026-10-08 baseline is a second pin, chosen by fingerprint ──
+    # A run whose fingerprint matches the baseline is judged against the
+    # baseline's numbers, so a code change shows as CODE MOVED instead of
+    # drowning in DATA CHANGED forever (the windows are relative to today).
+    bl = BASELINE_2026_10_08[2]
+    assert bl["name"] == base["name"] and bl["fingerprint"] != base["fingerprint"]
+    got_bl = {k: bl[k] for k in ("trades", "avg_r", "long_n", "long_r",
+                                 "short_n", "short_r", "fingerprint")}
+    got_bl["gapped"] = 42
+    pin, label = pin_for(base, got_bl)
+    assert pin is bl and label == "2026-10-08 baseline", (label, pin["fingerprint"])
+    assert compare(pin, got_bl)[0] == "CONFIRMED"
+    v, notes = compare(pin, dict(got_bl, avg_r=bl["avg_r"] - 0.02))
+    assert v == "CODE MOVED", (v, "a moved number on the baseline's own bars is the code")
+    pin2, label2 = pin_for(base, dict(got_bl, fingerprint="v2-deadbeefdeadbeef"))
+    assert pin2 is base and label2 == "record" and \
+        compare(pin2, dict(got_bl, fingerprint="v2-deadbeefdeadbeef"))[0] == "DATA CHANGED"
+    pin3, label3 = pin_for(base, dict(got_bl, fingerprint=base["fingerprint"]))
+    assert pin3 is base and label3 == "record", "the record wins when its own fingerprint matches"
+    print("baseline pin     : judged against the 2026-10-08 baseline when its "
+          "fingerprint matches, the record otherwise")
+
+    # ── THE PINNED BASELINE IS THE COMMITTED FILE, digit for digit ──
+    # A table retyped from a file drifts; the file is the fact. Every "now"
+    # value and every fingerprint in results/record_recheck_baseline_2026-10-08.txt
+    # must equal BASELINE_2026_10_08, or a later CODE MOVED verdict is judged
+    # against numbers nobody ran.
+    _bf = Path("results/record_recheck_baseline_2026-10-08.txt")
+    if _bf.exists():
+        _txt = _bf.read_text(encoding="utf-8")
+        _blocks = re.split(r"\n  (?=\S.*\(\d+y\)\n)", _txt)
+        _seen = 0
+        for b in BASELINE_2026_10_08:
+            blk = next((x for x in _blocks if x.lstrip().startswith(b["name"])), None)
+            assert blk is not None, f"baseline file has no block for {b['name']!r}"
+            def _now(label):
+                m = re.search(rf"^\s+{re.escape(label)}\s+(\S+)\s+(\S+)", blk, re.M)
+                assert m, (b["name"], label)
+                return m.group(2)
+            assert int(_now("trades")) == b["trades"], (b["name"], "trades")
+            assert int(_now("long n")) == b["long_n"] and int(_now("short n")) == b["short_n"], b["name"]
+            for lab, key in (("avg R", "avg_r"), ("long R", "long_r"), ("short R", "short_r")):
+                assert abs(float(_now(lab)) - b[key]) <= R_TOL, (b["name"], lab, _now(lab), b[key])
+            assert _now("fingerprint") == b["fingerprint"], (b["name"], _now("fingerprint"))
+            _seen += 1
+        assert _seen == 3
+        print("baseline file    : BASELINE_2026_10_08 equals the committed run, "
+              "digit for digit, all three cuts")
 
     # ── rounding must not masquerade as drift ──
     v, _ = compare(base, dict(same, avg_r=base["avg_r"] + 0.0004))

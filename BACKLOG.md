@@ -690,7 +690,19 @@ it is not what the field name says.
 
 ---
 
-## 18. ~~`longs_only.simulate()` books P&L at entry~~ — CODE FIXED 2026-09-16; RE-RUN OWED
+## 18. ~~`longs_only.simulate()` books P&L at entry~~ — CLOSED 2026-10-08, RE-RUN DONE
+
+**Re-run by the owner 2026-10-08 on a laptop with Yahoo access:
+`results/portfolio_replay_run2.txt`.** On the correct OOS twelve, 10y to
+2026-10-08: idealised +47.7% total (+4.0%/yr, 45.6% DD, 883 trades, 35.4% wins),
+constrained +39.7% (+3.4%/yr, 19.0% DD, 687 trades), SPY +259.6% (+13.7%/yr,
+34.1% DD). The entry-time artifact run 1's banner predicted ("peak capital
+deployed 101%") is gone: 100%. Owning the index was better on both axes. One
+line of that file's prose quoted the record's +0.085 R instead of this run's
++0.076 R; `longs_only.report()` now measures and prints the run's own long edge
+(`long_edge()`), with the record quoted as the record. Run 2 predates the
+gapped-stop fix (21); run 3, same day, same cache, is on the fixed engine:
+constrained +1.7%/yr at 21.8% drawdown, long side +0.042 R. See 21.
 
 **The accounting is fixed and pinned. The published numbers are not yet replaced.**
 
@@ -840,9 +852,47 @@ both callers importing it, and a `check_` function that pins it.
 
 ---
 
-## 21. The share backtest fills a gapped stop AT the stop — every loss is floored at −1 R
+## 21. ~~The share backtest fills a gapped stop AT the stop — every loss is floored at −1 R~~ — CLOSED 2026-10-08, FIX AND RE-RUN TOGETHER
 
-**Found 2026-09-16 by review. NOT FIXED, deliberately — see the last section.**
+**Found 2026-09-16 by review. Fixed 2026-10-08; the re-run is the owner's next
+local step.**
+
+- **Code.** `simulate_trade()` fills a stop gapped through at the worse of the
+  stop and that bar's open, a target at the better; a touched level with the
+  open inside still fills at the level. Tallied as "gapped through a level" in
+  `run()`'s summary. Same rule as `forward_log.resolve_signal()`. Selftest:
+  −5.00 R on a 90 open against a 98 stop, +5.00 R on a 110 open against a 106
+  target, both sides mirrored, ordinary stop-outs still −1.00 R.
+- **Baseline.** The owner's 2026-10-08 run on unchanged code
+  (`results/record_recheck_baseline_2026-10-08.txt`) could only say DATA
+  CHANGED: the windows are relative to today, so the record's fingerprints are
+  unreproducible three weeks on. Its three fingerprints are now pinned as
+  `record_recheck.BASELINE_2026_10_08`, and `record_recheck` judges a run
+  against whichever pin its fingerprint matches. A re-run on the same laptop
+  hits `.bar_cache/`, reproduces those fingerprints, and reports CODE MOVED
+  against the baseline — the isolated effect of this fix.
+- **Re-run done 2026-10-08 by the owner on the same cache**
+  (`results/record_recheck_gapfill_run1.txt`): every fingerprint matched the
+  baseline, verdict CODE MOVED on all three cuts, so the table below is the
+  fix and nothing else.
+
+  | cut | avg R before → after | long R | short R | gapped through |
+  |---|---|---|---|---|
+  | 7t/5y | −0.004 → −0.004 | +0.260 → +0.297 | −0.466 → −0.532 | 73 of 413 (18%) |
+  | 12t/5y | −0.022 → −0.043 | +0.101 → +0.082 | −0.240 → −0.265 | 113 of 675 (17%) |
+  | 12t/10y | −0.056 → −0.088 | +0.076 → +0.042 | −0.290 → −0.319 | 216 of 1381 (16%) |
+
+  One trade in six had a level gapped through. The record's 10y long side —
+  the number `longs_only_run1.md` called the one worth trusting most — halves,
+  from +0.076 R to +0.042 R, CI [−0.093, +0.177]. Longs-only replay on the
+  fixed engine (`results/portfolio_replay_run3.txt`): idealised +4.0%/yr →
+  +0.3%/yr at 55.7% drawdown; constrained +3.4%/yr → +1.7%/yr at 21.8%; SPY
+  +13.7%/yr at 34.1%. The decision not to trade the signal was already made;
+  this makes it by a wider margin, and from the left tail specifically.
+- **Every committed result built on the share engine carries a STALE FILL RULE
+  banner** (25 files) rather than a VOID: their findings are signs and
+  dose-responses, which the rule change does not undo, but none of their R is
+  on the current engine. Each is re-run on demand before being relied on.
 
 `simulate_trade()` checks `if lo <= stop` and then exits at `stop`. When a bar
 GAPS THROUGH the stop, a real stop order fills at the OPEN, not at the trigger.

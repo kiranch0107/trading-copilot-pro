@@ -1,3 +1,15 @@
+> **STALE FILL RULE — read with this caveat (BACKLOG 21, fixed 2026-10-08).**
+> Every R in this file was produced while `backtest.simulate_trade()` filled a
+> stop that was gapped THROUGH at the stop, so no loss here is worse than about
+> −1 R. Real stops fill at the open. The engine now does too, and the record's
+> re-run on the fixed code is `results/record_recheck_gapfill_run1.txt` (run 2026-10-08;
+> the record's 10y long side went +0.076 -> +0.042 R, one trade in six
+> had a level gapped through). The FINDINGS
+> in this file (a sign, a dose-response, a refutation) are not voided by the
+> rule change, but no R here is on the current engine, and none should be
+> quoted as if it were. A fresh run on the fixed code is owed for any number
+> below that is relied on.
+
 # Conditional test — run 1: nothing beyond `side`
 
 **Run 2026-09-12, `python conditional_test.py --years 10` on the OOS 12.

@@ -1,0 +1,100 @@
+!! BASELINE, NOT THE GAP-FILL TEST. Run by the owner on 2026-10-08 on a laptop
+!! with Yahoo access, on UNCHANGED code (main @ 85759eb, simulate_trade() still
+!! filling a gapped stop AT the stop). The file was first named
+!! record_recheck_gapfill_run1.txt; the gap fix had not been applied, so it is
+!! renamed to what it is.
+!!
+!! VERDICT IS "DATA CHANGED" BY DESIGN, NOT BY FAULT. The backtest windows are
+!! relative to today (BACKLOG working conventions), so three weeks after the
+!! record was cut the 5y and 10y windows start and end on different bars and
+!! every fingerprint moved. This run cannot say anything about the code.
+!!
+!! WHAT IT IS FOR. The fingerprints below (v2-e817de3bdf479135,
+!! v2-9acbe79f9c98a1dc, v2-2931fe00d85eb037) are now pinned in
+!! record_recheck.BASELINE_2026_10_08, and the bars that produced them sit in
+!! that laptop's .bar_cache/. A re-run there after the gap fix hits the cache,
+!! reproduces these fingerprints, and compares against THIS table -- so the
+!! next verdict isolates the code change. That is BACKLOG 21's test.
+!!
+!! "gapped fills 8 / 18 / 42" is the 2026-09-10 rule (a fill already past its
+!! own levels is no trade). It is not the gapped-STOP rule BACKLOG 21 adds.
+!!
+!! Read against the record: every cut moved a little in the same direction
+!! (fewer trades, lower expectancy), consistent with a shifted window on a
+!! sample whose edge was already inside its own confidence interval.
+
+==============================================================================
+RECORD RE-CHECK — do the three recorded cuts still hold on today's code?
+==============================================================================
+
+  7t/5y  (discovery, swept)   (5y)
+  --------------------------------------------------------------------------
+                       recorded          now
+    trades                  418          413   <-- MOVED
+    avg R                +0.012       -0.004   <-- MOVED
+    long n                  260          263   <-- MOVED
+    long R               +0.268       +0.260   <-- MOVED
+    short n                 158          150   <-- MOVED
+    short R              -0.409       -0.466   <-- MOVED
+    fingerprint    v2-24b0f52e1203ecd5 v2-e817de3bdf479135
+    gapped fills                           8   <-- the 09-10 scoring fix FIRED here
+    passed gates                         421
+
+    VERDICT: DATA CHANGED
+      - fingerprint v2-24b0f52e1203ecd5 -> v2-e817de3bdf479135: the DATA changed, so any moved number says nothing about the code
+      - trade count 418 -> 413
+      - expectancy +0.012 -> -0.004
+      - long count 260 -> 263
+      - long avg R +0.268 -> +0.260
+      - short count 158 -> 150
+      - short avg R -0.409 -> -0.466
+
+  12t/5y (OOS set)   (5y)
+  --------------------------------------------------------------------------
+                       recorded          now
+    trades                  684          675   <-- MOVED
+    avg R                -0.012       -0.022   <-- MOVED
+    long n                  429          432   <-- MOVED
+    long R               +0.106       +0.101   <-- MOVED
+    short n                 255          243   <-- MOVED
+    short R              -0.210       -0.240   <-- MOVED
+    fingerprint    v2-6b5c07fe41849b1c v2-9acbe79f9c98a1dc
+    gapped fills                          18   <-- the 09-10 scoring fix FIRED here
+    passed gates                         693
+
+    VERDICT: DATA CHANGED
+      - fingerprint v2-6b5c07fe41849b1c -> v2-9acbe79f9c98a1dc: the DATA changed, so any moved number says nothing about the code
+      - trade count 684 -> 675
+      - expectancy -0.012 -> -0.022
+      - long count 429 -> 432
+      - long avg R +0.106 -> +0.101
+      - short count 255 -> 243
+      - short avg R -0.210 -> -0.240
+
+  12t/10y (OOS set)   (10y)
+  --------------------------------------------------------------------------
+                       recorded          now
+    trades                 1386         1381   <-- MOVED
+    avg R                -0.048       -0.056   <-- MOVED
+    long n                  889          883   <-- MOVED
+    long R               +0.085       +0.076   <-- MOVED
+    short n                 497          498   <-- MOVED
+    short R              -0.287       -0.290   <-- MOVED
+    fingerprint    v2-e09e31d6eaf30233 v2-2931fe00d85eb037
+    gapped fills                          42   <-- the 09-10 scoring fix FIRED here
+    passed gates                        1423
+
+    VERDICT: DATA CHANGED
+      - fingerprint v2-e09e31d6eaf30233 -> v2-2931fe00d85eb037: the DATA changed, so any moved number says nothing about the code
+      - trade count 1386 -> 1381
+      - expectancy -0.048 -> -0.056
+      - long count 889 -> 883
+      - long avg R +0.085 -> +0.076
+      - short count 497 -> 498
+      - short avg R -0.287 -> -0.290
+
+==============================================================================
+  INDETERMINATE. The data or the fingerprint moved, so this run
+  cannot separate a code change from a provider re-adjustment.
+  Do not read it as either confirming or refuting the record.
+==============================================================================
