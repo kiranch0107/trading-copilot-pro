@@ -145,6 +145,32 @@ MAX_POSITION_PCT = 25.0
 # share number made losing configurations look profitable.
 OPT_WIN_RATE = 0.249
 
+# THE IV ASSUMPTION EVERY OPTION NUMBER RESTS ON (BACKLOG 25,
+# results/option_iv_preregistration.md). option_backtest.py prices every
+# modelled contract at realised vol x OPT_IV_MULT, held constant for the life
+# of the trade. 1.15 was never measured; it was set before vrp_check.py
+# existed, and the only measurement since (+3.63 vol points) is on SPX, which
+# does not transfer to single names. This is the ONE home for the constant:
+# option_backtest reads its default from here, and
+# check_option_iv_single_source() pins the two together.
+#
+# WHAT THE SENSITIVITY SWEEP SAID (results/option_iv_sensitivity_run1.md,
+# 2026-10-08, four multipliers, nothing else varied):
+#   - the ORDERING of take-profit levels by win rate is the same at every
+#     multiplier, so "a wider target is hit less often" is robust;
+#   - the SIGN of expectancy at TP >= +100 is NOT: positive with no premium
+#     (1.00), negative with any (1.15 and up). Whether the live TP+200
+#     structure has positive expectancy is a function of this constant alone
+#     and is UNMEASURED until the forward single-name premium reads (Part B).
+#   - OPT_WIN_RATE at TP+100 / SL-50 across the bracket, below.
+OPT_IV_MULT = 1.15
+OPT_WIN_RATE_BY_IV_MULT = {        # measured 2026-10-08, 393 trades per row
+    1.00: 27.7,
+    1.15: 25.4,                    # vs 24.9 recorded 2026-09-10: window drift
+    1.30: 24.7,
+    1.50: 20.6,
+}
+
 # THE BASIS OPT_WIN_RATE WAS MEASURED AT. Not decoration — a win rate is
 # meaningless without the payoff rule it was measured under, and this repo
 # already paid for that once: the spread ceiling below was derived by comparing
@@ -472,6 +498,20 @@ def _selftest_direction() -> None:
 
 
 def selftest() -> int:
+    # ── the IV constant and its sensitivity table agree with each other ──
+    assert OPT_IV_MULT in OPT_WIN_RATE_BY_IV_MULT, \
+        "the sweep must include the multiplier the engine actually uses"
+    _ms = sorted(OPT_WIN_RATE_BY_IV_MULT)
+    assert all(OPT_WIN_RATE_BY_IV_MULT[a] > OPT_WIN_RATE_BY_IV_MULT[b]
+               for a, b in zip(_ms, _ms[1:])), (
+        "a richer option (higher IV multiple) must reach +100% less often; a "
+        "non-monotone table is a transcription error")
+    assert abs(OPT_WIN_RATE_BY_IV_MULT[OPT_IV_MULT] / 100 - OPT_WIN_RATE) < 0.01, (
+        "the sweep's win rate at the engine's own multiplier must sit within "
+        "window drift of OPT_WIN_RATE; a larger gap is a code change")
+    print(f"iv assumption    : OPT_IV_MULT {OPT_IV_MULT} single-sourced; win rate "
+          f"{OPT_WIN_RATE_BY_IV_MULT[_ms[0]]}% -> {OPT_WIN_RATE_BY_IV_MULT[_ms[-1]]}% "
+          f"across {_ms[0]}-{_ms[-1]}")
     _selftest_sweep_table()
     _selftest_direction()
     assert DEFAULT_ACCOUNT_SIZE > 0

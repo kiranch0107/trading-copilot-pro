@@ -2362,6 +2362,54 @@ def check_signal_key_round_trip() -> None:
     print("  alert -> app -> position -> journal -> exact attachment: key carried end to end")
 
 
+def check_option_iv_single_source() -> None:
+    """
+    The option engine's IV multiplier has one home, every committed option
+    result says which value it used, and the recorded sensitivity table is
+    the committed sweep, digit for digit (BACKLOG 25).
+
+    option_backtest.py carried `default=1.15` in its argparse for a year with
+    the comment "trade above realised vol" and nothing measured it. The number
+    now lives in risk_params.OPT_IV_MULT with its caveat; the engine must read
+    it from there, not restate it. And a result whose header does not say
+    `IV: <x>x realised` is a number with no stated assumption.
+    """
+    import re
+    import risk_params as rp
+    src = Path("option_backtest.py").read_text()
+    assert "default=risk_params.OPT_IV_MULT" in src, (
+        "option_backtest.py's --iv-mult default is not risk_params.OPT_IV_MULT; "
+        "a second copy of the constant is how 1.15 went unmeasured for a year")
+    assert not re.search(r"default=1\.15\b", src), \
+        "option_backtest.py still hard-codes 1.15 somewhere"
+
+    files = sorted(Path("results").glob("option_*"))
+    assert files, "no option results on file"
+    for f in files:
+        txt = f.read_text(encoding="utf-8")
+        if f.name.endswith("preregistration.md"):
+            continue
+        assert re.search(r"IV: [0-9.]+x realised", txt), (
+            f"{f.name} carries no 'IV: <x>x realised' line; an option result "
+            f"must state the assumption it was priced under")
+
+    # The sensitivity table in risk_params is the committed sweep.
+    for mult, wr in rp.OPT_WIN_RATE_BY_IV_MULT.items():
+        f = Path(f"results/option_iv_sensitivity_{mult:.2f}.txt")
+        assert f.exists(), f"risk_params lists {mult} but {f.name} is not on file"
+        txt = f.read_text(encoding="utf-8")
+        m = re.search(r"^\+100% / -50%\s+\d+\s+([0-9.]+)%", txt, re.M)
+        assert m, f"{f.name}: no +100%/-50% row"
+        assert abs(float(m.group(1)) - wr) < 1e-9, (
+            f"OPT_WIN_RATE_BY_IV_MULT[{mult}] = {wr} but {f.name} measured "
+            f"{m.group(1)}% -- the table must be the file")
+        hdr = re.search(r"IV: ([0-9.]+)x realised", txt)
+        assert hdr and abs(float(hdr.group(1)) - mult) < 1e-9, \
+            f"{f.name} was not run at {mult}x"
+    print(f"  OPT_IV_MULT single-sourced; {len(files)} option result(s) state their "
+          f"IV; sensitivity table matches the committed sweep")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -2380,6 +2428,7 @@ CHECKS = [
     ("HQ tier tags the record, gates only alerts", check_hq_tier_annotates_record),
     ("outcome bases coexist, never pooled",        check_outcome_bases_never_pooled),
     ("signal key rides alert->app->journal->log", check_signal_key_round_trip),
+    ("option IV multiplier has one home",          check_option_iv_single_source),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),
