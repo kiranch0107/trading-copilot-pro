@@ -58,6 +58,7 @@ import yfinance as yf
 
 import data_source
 import market_context
+import iv_snapshot
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(),format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("scanner")
@@ -401,6 +402,57 @@ def bars_for_grading(df: pd.DataFrame) -> list:
                     "high": float(h), "low": float(l), "close": float(c)})
     out.sort(key=lambda b: b["date"])
     return out
+
+
+def fetch_atm_chain(ticker: str, today=None) -> dict | None:
+    """
+    The nearest expiry inside OPT_MIN_DTE..OPT_MAX_DTE and its calls/puts as
+    plain rows for iv_snapshot.atm_iv_from_chain(). One expiries call, one
+    chain call, with the same rate-limit backoff suggest_option() uses.
+    Returns {"expiry", "dte", "calls", "puts"} or None.
+    """
+    today = today or pd.Timestamp.today().normalize()
+    try:
+        stock = yf.Ticker(ticker)
+        expiries, delay = None, YF_RETRY_DELAY
+        for attempt in range(YF_RETRY_ATTEMPTS):
+            try:
+                expiries = list(stock.options or []); break
+            except Exception as e:                      # noqa: BLE001
+                if _is_rate_limit_error(e) and attempt < YF_RETRY_ATTEMPTS - 1:
+                    time.sleep(delay); delay *= 2; continue
+                logger.warning("%s expiries fetch failed: %s", ticker, e)
+                return None
+        pick = None
+        for exp in expiries or []:
+            try:
+                dte = (pd.Timestamp(exp) - today).days
+            except Exception:                           # noqa: BLE001
+                continue
+            if OPT_MIN_DTE <= dte <= OPT_MAX_DTE:
+                pick = (exp, dte); break
+        if pick is None:
+            return None
+        chain, delay = None, YF_RETRY_DELAY
+        for attempt in range(YF_RETRY_ATTEMPTS):
+            try:
+                time.sleep(0.5); chain = stock.option_chain(pick[0]); break
+            except Exception as e:                      # noqa: BLE001
+                if _is_rate_limit_error(e) and attempt < YF_RETRY_ATTEMPTS - 1:
+                    time.sleep(delay); delay *= 2; continue
+                logger.warning("%s chain %s failed: %s", ticker, pick[0], e)
+                return None
+        if chain is None:
+            return None
+        def _rows(df):
+            if df is None or df.empty or "impliedVolatility" not in df.columns:
+                return []
+            return df[["strike", "impliedVolatility"]].to_dict("records")
+        return {"expiry": str(pick[0])[:10], "dte": pick[1],
+                "calls": _rows(chain.calls), "puts": _rows(chain.puts)}
+    except Exception as e:                              # noqa: BLE001
+        logger.warning("%s ATM chain failed: %s", ticker, e)
+        return None
 
 
 def compute(df: pd.DataFrame) -> pd.DataFrame:
@@ -1008,6 +1060,47 @@ def run(args) -> int:
     except Exception as _exc:                          # noqa: BLE001
         logger.warning("forward log: grading failed: %s", _exc)
 
+    # ── THE IV SNAPSHOT — post-close only (BACKLOG 25 Part B) ──
+    #
+    # results/option_iv_preregistration.md. One row per watchlist name per
+    # session: ATM implied vol at the nearest 21-45 DTE expiry, with trailing
+    # realised vol, into iv_snapshots.jsonl (one writer: this module). Then
+    # every snapshot whose 21 sessions have elapsed is graded from the frames
+    # already fetched. Post-close because that is when the day's close and
+    # the chain agree on a settled spot. Non-fatal, like every record write.
+    if record_only:
+        try:
+            _refused: dict = {}
+            _wrote = 0
+            for tk, _df in sorted(frames.items()):
+                _ch = fetch_atm_chain(tk)
+                if not _ch:
+                    _refused["no chain in 21-45 DTE"] = _refused.get("no chain in 21-45 DTE", 0) + 1
+                    continue
+                _closes = [float(c) for c in _df["Close"].tolist()]
+                _spot = _closes[-1]
+                _atm = iv_snapshot.atm_iv_from_chain(_ch["calls"], _ch["puts"], _spot)
+                if not _atm:
+                    _refused["no ATM quote"] = _refused.get("no ATM quote", 0) + 1
+                    continue
+                _row = iv_snapshot.record(
+                    str(sc._bar_dates(_df, None).max().date()), tk, _ch["expiry"],
+                    _ch["dte"], _atm["strike"], _spot, _atm["iv"],
+                    iv_snapshot.realised_vol_points(_closes), "yahoo",
+                    refused=_refused)
+                _wrote += 1 if _row else 0
+            logger.info("iv snapshot: %d row(s) written%s", _wrote,
+                        f", refused {_refused}" if _refused else "")
+            _closes_for = lambda t: ([{"date": b["date"], "close": b["close"]}
+                                      for b in bars_for_grading(frames[t])]
+                                     if t in frames else None)
+            _ig = iv_snapshot.grade(_closes_for)
+            if _ig["graded"] or _ig["failed"]:
+                logger.info("iv snapshot: graded %d, unsettled %d, no data %d, failed %d",
+                            _ig["graded"], _ig["unsettled"], _ig["no_data"], _ig["failed"])
+        except Exception as _exc:                          # noqa: BLE001
+            logger.warning("iv snapshot failed: %s", _exc)
+
     # ── RECORD THAT THIS SCAN HAPPENED ──
     #
     # One `scan` row per bar evaluated. Without it a bar with no signal row
@@ -1558,9 +1651,19 @@ def _selftest_body() -> int:
         _saved = {k: _g[k] for k in ("get_data", "compute", "analyze",
                                      "get_spy_regime", "save_state", "load_state",
                                      "WATCHLIST", "FETCH_GAP_SEC", "suggest_option",
-                                     "is_post_close_window")}
+                                     "is_post_close_window", "fetch_atm_chain")}
         _saved_state: dict = {}
+        _iv_tmp = _pl2.Path(_tf2.mkdtemp()) / "iv.jsonl"
+        _real_iv_log = iv_snapshot.LOG
+        _chain_fetches: list = []
+        def _fake_chain(tk, today=None):
+            _chain_fetches.append(tk)
+            return {"expiry": "2026-07-31", "dte": 31,
+                    "calls": [{"strike": 100.0, "impliedVolatility": 0.42}],
+                    "puts": [{"strike": 100.0, "impliedVolatility": 0.44}]}
         try:
+            iv_snapshot.LOG = _iv_tmp
+            _g["fetch_atm_chain"] = _fake_chain
             _g["get_data"] = lambda tk: _fr3
             _g["compute"] = lambda df: df
             _g["analyze"] = _fake_analyze
@@ -1585,7 +1688,17 @@ def _selftest_body() -> int:
             run(_ap3.Namespace(force=False, dry_run=False, record_only=True))
         finally:
             _g.update(_saved)
+            iv_snapshot.LOG = _real_iv_log
         assert not _sent3, f"record-only sent an alert: {_sent3}"
+        # THE IV SNAPSHOT RODE ON THE POST-CLOSE PASS: one row per watchlist
+        # name, ATM at 100 with the call/put mean, and only in that pass (the
+        # first run above was outside the window and fetched no chain).
+        _ivr = [r for r in iv_snapshot.read_all(_iv_tmp) if r["kind"] == "iv"]
+        assert sorted(r["ticker"] for r in _ivr) == ["AAA", "BBB", "CCC"], _ivr
+        assert all(abs(r["iv"] - 43.0) < 1e-9 and r["dte"] == 31 for r in _ivr), _ivr
+        assert sorted(_chain_fetches) == ["AAA", "BBB", "CCC"], (
+            f"{_chain_fetches}: the chain is fetched once per name, and only "
+            f"inside the post-close pass")
         assert not _chain_calls, "record-only fetched an option chain"
         _rows3 = forward_log.read_all(_tmpl3)
         _scans3 = [r for r in _rows3 if r["kind"] == "scan"]
@@ -1597,8 +1710,8 @@ def _selftest_body() -> int:
             "record-only must not stamp the alert cooldown — the next " \
             "session's scan has to be free to alert"
         print("record-only run         : heartbeat n_signals=2 (1 taken + 1 "
-              "skipped), no alert, no chain, no cooldown stamp; skipped "
-              "outside its window")
+              "skipped), no alert, no trade chain, no cooldown stamp; skipped "
+              "outside its window; IV snapshot written per name")
     finally:
         forward_log.LOG = _real_log3
         globals()["send_alert"] = _real_send3
@@ -1627,8 +1740,16 @@ def _selftest_body() -> int:
         _g = globals()
         _saved = {k: _g[k] for k in ("get_data", "compute", "analyze",
                                      "get_spy_regime", "save_state", "load_state",
-                                     "WATCHLIST", "FETCH_GAP_SEC")}
+                                     "WATCHLIST", "FETCH_GAP_SEC", "fetch_atm_chain")}
+        _iv_tmp4 = _pl2.Path(_tf2.mkdtemp()) / "iv4.jsonl"
+        _real_iv_log4 = iv_snapshot.LOG
+        # RECORDS the call rather than raising: the snapshot block is wrapped
+        # in try/except (non-fatal by design), so a raising stub is swallowed
+        # there and proves nothing. Counting calls does.
+        _chain_calls4: list = []
         try:
+            iv_snapshot.LOG = _iv_tmp4
+            _g["fetch_atm_chain"] = lambda tk, today=None: (_chain_calls4.append(tk) or None)
             _g["get_data"] = lambda tk: (_fetched.append(tk) or _fr4)
             _g["compute"] = lambda df: df
             _g["analyze"] = lambda df, tk, spy_regime=None, tally=None: None
@@ -1641,6 +1762,11 @@ def _selftest_body() -> int:
             run(_ap4.Namespace(force=True, dry_run=True))
         finally:
             _g.update(_saved)
+            iv_snapshot.LOG = _real_iv_log4
+        assert not _chain_calls4 and not _iv_tmp4.exists(), (
+            f"an in-session (alerting) run must not take an IV snapshot; chain "
+            f"fetched for {_chain_calls4}. The snapshot pairs a chain with the "
+            f"settled close, which only the post-close pass has")
         _outs4 = {o["ticker"]: o for o in forward_log.read_all(_tmpl4)
                   if o["kind"] == "outcome"}
         assert set(_outs4) == {"AAA", "GONE"}, (

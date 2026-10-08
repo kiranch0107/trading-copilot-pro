@@ -307,10 +307,13 @@ jobs:
         # be cleaned afterwards — only abandoned. The dedupe landed first.
         if: always()
         run: |
-          if [[ -n "$(git status --porcelain scanner_state.json forward_log.jsonl)" ]]; then
+          # iv_snapshots.jsonl (BACKLOG 25 Part B) is written by the post-close
+          # pass and has the same ephemeral-runner problem as the forward log:
+          # a row not committed here is destroyed with the container.
+          if [[ -n "$(git status --porcelain scanner_state.json forward_log.jsonl iv_snapshots.jsonl)" ]]; then
             git config user.name  "trading-scanner"
             git config user.email "actions@github.com"
-            git add scanner_state.json forward_log.jsonl
+            git add scanner_state.json forward_log.jsonl iv_snapshots.jsonl
             git commit -m "chore: update scanner alert state + forward log [skip ci]"
             BRANCH="${GITHUB_REF_NAME:-main}"
             for attempt in 1 2 3; do

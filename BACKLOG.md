@@ -1126,7 +1126,7 @@ before changing.
 
 ---
 
-## 25. The option engine prices every contract at one constant, guessed IV — PART A DONE 2026-10-08, PART B TO BUILD
+## 25. The option engine prices every contract at one constant, guessed IV — PART A DONE, PART B RUNNING (first reading 2027-04-08)
 
 **Found 2026-10-07; see `results/code_review_2026-10-07.md` (H3).**
 
@@ -1147,9 +1147,15 @@ stay refuted at every multiplier. `OPT_WIN_RATE` at TP+100 / SL−50 spans
 27.7% → 20.6% across the bracket. The multiplier now has one home
 (`risk_params.OPT_IV_MULT`), the table is `OPT_WIN_RATE_BY_IV_MULT`, and
 `check_option_iv_single_source()` pins both to the committed files. The
-pre-registration is frozen from this run. **Part B, the forward single-name
-premium, is the next build:** the daily ATM-IV snapshot in the post-close pass,
-first reading at six months.
+pre-registration is frozen from this run. **Part B BUILT 2026-10-08:**
+`iv_snapshot.py` (stdlib; `record()` with counted refusals, `grade()` after 21
+sessions, `report()` with per-name and pooled HAC SE and the 126-session
+reading gate), taken by the scanner's post-close pass only
+(`fetch_atm_chain()`, nearest 21–45 DTE expiry, ATM = nearest strike, call/put
+IV mean, vol points), committed by `scanner.yml`, pinned by
+`check_iv_snapshot_single_writer_and_committed()`. **The six-month clock starts
+with the first post-close run after merge; first reading no earlier than
+2027-04-08.** `python iv_snapshot.py --report` is the offline view.
 
 `simulate_option_trade()`: `iv = realised_vol(20d) × 1.15`, held constant for the
 life of the trade. No vol-of-vol, no IV crush, no skew, no term structure.
@@ -1298,8 +1304,8 @@ Two pieces, each needing its own pre-registration before a row is written:
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 40 cross-module
-  invariants (40 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 41 cross-module
+  invariants (41 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip

@@ -5,6 +5,29 @@ runs below.** Everything here is fixed. It may be AMENDED in a dated section
 at the top only until the first run under it is committed; after that nothing
 changes.
 
+## AMENDED 2026-10-08, WITH PART B's CODE AND BEFORE ITS FIRST ROW — implementation details, no rule changes
+
+Part A has run (`option_iv_sensitivity_run1.md`), so the only part of this
+document still open to amendment is Part B, and only until its first snapshot
+row. Fixed here:
+
+1. **Units.** Implied and realised vol are stored in vol points (45.0 = 45 %),
+   the units `vrp_check.py` and `vrp_measurement.md` use.
+2. **ATM.** The strike nearest spot within 10 %; IV is the mean of the call
+   and put IV at that strike when both quote, else the one that does. One
+   expiry: the nearest inside 21–45 DTE.
+3. **One row per name per session**, taken by the post-close pass only, with
+   the day's settled close as spot. Refusals (DTE outside the band, IV
+   missing or absurd, strike not at the money, a second row in a day) are
+   counted, never written.
+4. **Grading** is done by the scanner, 21 sessions after the snapshot, from
+   the bars it already holds; one premium row per snapshot, never partial.
+5. **The reading gate is 126 distinct snapshot sessions**
+   (`READING_SESSIONS`); `report()` prints "NOT A READING" before that.
+   Pooling is through the daily cross-name mean and its HAC standard error
+   (lag 20), which carries the between-name correlation without a separate
+   correction.
+
 ## The finding
 
 `option_backtest.simulate_option_trade()` prices every contract, on every bar
