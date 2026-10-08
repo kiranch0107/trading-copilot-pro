@@ -190,7 +190,7 @@ def already_recorded(ticker: str, trend: str, bar_date,
 
 def record_signal(ticker: str, trend: str, setup: dict, decision: str,
                   reason: str, cfg: dict, bar_date=None,
-                  path: Path | None = None) -> dict | None:
+                  path: Path | None = None, hq: bool | None = None) -> dict | None:
     """
     One signal, as the rules produced it, before any outcome exists.
 
@@ -198,6 +198,13 @@ def record_signal(ticker: str, trend: str, setup: dict, decision: str,
     Recording skips is the whole point: a log of only the trades capital
     allowed describes the account, not the rules, and the two diverge exactly
     where it matters.
+
+    `hq` is the high-quality TIER AS A TAG, never a gate (owner decision
+    2026-10-08, results/forward_record_preregistration.md). A long base
+    signal is `taken` whether or not it clears the tier; `hq` records what the
+    alert gate would have selected, so the record can later say whether the
+    tier earned the alerts it suppressed. Rows written before the field
+    existed carry the same fact as `setup.high_quality`.
 
     `bar_date` is the date of the SIGNAL BAR, and it is what makes a row mean
     anything. Returns None when that bar is already logged.
@@ -245,10 +252,15 @@ def record_signal(ticker: str, trend: str, setup: dict, decision: str,
     bar_date = str(bar_date)[:10]
     if already_recorded(ticker, trend, bar_date, path=path):
         return None
-    return append("signal", {
+    row = {
         "ticker": ticker, "trend": trend, "decision": decision,
         "reason": reason, "setup": setup, "bar_date": bar_date,
         "key": signal_key(ticker, trend, bar_date),
+    }
+    if hq is not None:
+        row["hq"] = bool(hq)
+    return append("signal", {
+        **row,
         "config": config_fingerprint(cfg),
     }, path=path)
 
@@ -528,6 +540,14 @@ def attach_outcomes(journal: list, path: Path | None = None,
     return report
 
 
+def _is_hq(row: dict) -> bool:
+    """The HQ tag, reading the top-level field first and the setup for rows
+    written before it existed."""
+    if "hq" in row:
+        return bool(row["hq"])
+    return bool((row.get("setup") or {}).get("high_quality"))
+
+
 def summary(path: Path | None = None) -> dict:
     rows = read_all(path)
     sigs = [r for r in rows if r.get("kind") == "signal"]
@@ -536,11 +556,13 @@ def summary(path: Path | None = None) -> dict:
     taken = [s for s in sigs if s.get("decision") == "taken"]
     skipped = [s for s in sigs if s.get("decision") == "skipped"]
     settled = [o for o in outs if o.get("r") is not None]
+    taken_hq = [s for s in taken if _is_hq(s)]
     configs = sorted({s.get("config") for s in sigs if s.get("config")})
     return {
         "rows": len(rows), "scans": len(scans),
         "bars_scanned": len({x.get("bar_date") for x in scans}),
         "signals": len(sigs), "taken": len(taken),
+        "taken_hq": len(taken_hq), "taken_base": len(taken) - len(taken_hq),
         "skipped": len(skipped), "settled": len(settled),
         "open": len(taken) - len(settled),
         "mean_r": (sum(o["r"] for o in settled) / len(settled)
@@ -564,8 +586,9 @@ def report(path: Path | None = None) -> int:
         return 0
     print(f"  {s['rows']} rows: {s['signals']} signals, "
           f"{s['signals'] and s['rows'] - s['signals']} outcomes")
-    print(f"  taken {s['taken']}   skipped {s['skipped']}   "
-          f"settled {s['settled']}   still open {s['open']}")
+    print(f"  taken {s['taken']} (hq {s['taken_hq']}, base {s['taken_base']})   "
+          f"skipped {s['skipped']}   settled {s['settled']}   "
+          f"still open {s['open']}")
     if s["settled"]:
         print(f"  mean R on settled trades: {s['mean_r']:+.4f}")
         print(f"  NOT a result. It becomes one when enough trades settle to")
@@ -847,6 +870,23 @@ def selftest() -> int:
     assert _out["mode"] == "live"
     print(f"attach           : journal trade -> seq {sig['seq']}, "
           f"basis {_out['basis']}")
+
+    # THE HQ TAG rides on the row and the summary splits taken by it. Rows
+    # from before the field existed read it from setup.high_quality.
+    ao_hq = Path(tempfile.mkdtemp()) / "ao_hq.jsonl"
+    record_signal("HQA", "Bullish", dict(setup, high_quality=False), "taken",
+                  "", cfg, bar_date="2026-09-10", path=ao_hq, hq=False)
+    record_signal("HQB", "Bullish", setup, "taken", "", cfg,
+                  bar_date="2026-09-10", path=ao_hq, hq=True)
+    record_signal("HQC", "Bullish", dict(setup, high_quality=True), "taken",
+                  "", cfg, bar_date="2026-09-10", path=ao_hq)       # legacy row
+    _hq_rows = {r["ticker"]: r for r in read_all(ao_hq) if r["kind"] == "signal"}
+    assert _hq_rows["HQA"]["hq"] is False and _hq_rows["HQB"]["hq"] is True
+    assert "hq" not in _hq_rows["HQC"], "no tag given -> no field invented"
+    _hs = summary(ao_hq)
+    assert (_hs["taken"], _hs["taken_hq"], _hs["taken_base"]) == (3, 2, 1), _hs
+    print("hq tag           : on the row when given; summary splits taken "
+          "2 hq / 1 base, legacy rows read from setup")
 
     # IDEMPOTENT. The scanner re-reads the journal on every run.
     r2 = attach_outcomes([_trade()], path=ao)

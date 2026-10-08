@@ -2163,6 +2163,78 @@ def check_post_close_record_wired() -> None:
           "alerting scan stays session-only")
 
 
+def check_hq_tier_annotates_record() -> None:
+    """
+    The high-quality tier TAGS the forward record; it does not GATE it.
+
+    OWNER DECISION 2026-10-08, pre-registered in
+    results/forward_record_preregistration.md (BACKLOG 24). Two of the tier's
+    legs -- ADX >= 35 and volume >= 1.2x -- were tested in this repo and found
+    non-predictive, and for three weeks the record's `taken` set was gated on
+    them: 19 base signals, 0 taken. A long base signal is now `taken` with
+    `hq` on the row saying what the gate would have selected. Alerts still
+    fire on the tier; that is what is SENT, and this check pins that it no
+    longer decides what is RECORDED.
+
+    Driven through scanner.analyze() against a temporary log, from outside
+    the module, so the scanner's own selftest cannot be edited away with the
+    behaviour.
+    """
+    import tempfile
+    import pandas as pd
+    import scanner
+    import signal_core as sc
+    import forward_log
+
+    frame = pd.DataFrame(
+        {"Close": [100.0] * (scanner.MIN_BARS_AFTER_WARMUP + 5)},
+        index=pd.bdate_range("2026-01-05", periods=scanner.MIN_BARS_AFTER_WARMUP + 5))
+
+    def canned(trend, hq):
+        r = {"blocked": False, "ticker": "CK", "trend": trend,
+             "strength": "Strong" if hq else "Normal", "price": 100.0,
+             "entry": 100.0, "stop": 98.0, "target": 106.0,
+             "rr": 3.0 if hq else 0.8, "rsi": 65.0, "adx": 30.0, "atr": 2.0,
+             "high_quality": hq, "filters_pass": 4, "filters_total": 4,
+             "filters": {"ADX Trend Strength": {"pass": hq}}}
+        return r
+
+    real_log, real_eval = forward_log.LOG, sc.evaluate
+    real_wk, real_earn = scanner.get_weekly_trend, scanner.check_earnings_blackout
+    try:
+        forward_log.LOG = Path(tempfile.mkdtemp()) / "ck.jsonl"
+        scanner.get_weekly_trend = lambda t: "Bullish"
+        scanner.check_earnings_blackout = lambda t: (True, "n/a")
+        sc.evaluate = lambda *a, **k: canned("Bullish", False)
+        base = scanner.analyze(frame, "CKA")
+        sc.evaluate = lambda *a, **k: canned("Bullish", True)
+        hq = scanner.analyze(frame, "CKB")
+        sc.evaluate = lambda *a, **k: canned("Bearish", True)
+        short = scanner.analyze(frame, "CKC")
+        rows = {r["ticker"]: r for r in forward_log.read_all()}
+    finally:
+        forward_log.LOG, sc.evaluate = real_log, real_eval
+        scanner.get_weekly_trend, scanner.check_earnings_blackout = real_wk, real_earn
+
+    a = rows.get("CKA") or {}
+    assert a.get("decision") == "taken" and a.get("hq") is False, (
+        f"a long base signal below the HQ tier was recorded as "
+        f"{a.get('decision')!r} hq={a.get('hq')!r}; it must be taken with "
+        f"hq=False. The tier gating the record is what starved it (BACKLOG 24, "
+        f"results/forward_record_preregistration.md)")
+    assert a.get("setup", {}).get("hq_fail"), \
+        "a below-tier row must say WHICH legs failed (setup.hq_fail is empty)"
+    assert base is None, \
+        "a below-tier signal must not produce an alert payload; alerts stay on the tier"
+    b = rows.get("CKB") or {}
+    assert b.get("decision") == "taken" and b.get("hq") is True and hq is not None, \
+        f"an HQ long must be taken, hq=True, and alerted: {b.get('decision')!r}/{b.get('hq')!r}/{hq!r}"
+    c = rows.get("CKC") or {}
+    assert c.get("decision") == "skipped" and short is None, \
+        "the direction gate (a measured decision) must still skip shorts"
+    print("  HQ tier tags the record (taken, hq=False below the tier), gates only the alert")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -2178,6 +2250,7 @@ CHECKS = [
     ("unattended workflows pinned + silence alarm",   check_unattended_workflows_pinned_and_alarmed),
     ("post-close record-only run is wired",       check_post_close_record_wired),
     ("research/live config divergence declared",   check_research_config_divergence_declared),
+    ("HQ tier tags the record, gates only alerts", check_hq_tier_annotates_record),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),

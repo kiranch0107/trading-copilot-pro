@@ -664,11 +664,29 @@ def analyze(df: pd.DataFrame, ticker: str,
             "weekly_confirm": PARAMS.weekly_confirm,
             "longs_only": risk_params.LONGS_ONLY}
 
+    # THE HQ TIER IS A TAG ON THE RECORD, NOT A GATE ON IT. Owner decision
+    # 2026-10-08, pre-registered in results/forward_record_preregistration.md:
+    # two of the tier's legs (ADX >= 35, volume >= 1.2x) were tested here and
+    # found non-predictive, and gating the record's `taken` set on them left
+    # it at 0 taken in three weeks. The row now says what the rules produced
+    # AND what the gate would have selected. Alerts still fire on the tier.
+    _hq_fail = []
+    if float(r.get("rr") or 0) < PARAMS.hq_min_rr:
+        _hq_fail.append(f"rr<{PARAMS.hq_min_rr:g}")
+    if r.get("strength") != "Strong":
+        _hq_fail.append("not Strong")
+    _hq_fail += [n for n, f in (r.get("filters") or {}).items()
+                 if not (f or {}).get("pass")]
+    _setup["hq_fail"] = _hq_fail
+    _hq = bool(r["high_quality"])
+
     def _log(decision: str, reason: str) -> None:
         # "taken" MEANS "THE RULES PRODUCED A TRADEABLE SIGNAL", not "a Telegram
         # message went out". This runs before run()'s alert cooldown and before
         # send_alert(), so a signal suppressed as a 4-hour duplicate, or lost to
-        # a Telegram outage, is still recorded as taken.
+        # a Telegram outage, is still recorded as taken. Since 2026-10-08 the
+        # rules are the BASE rules: a long that fails the HQ tier is taken too,
+        # with hq=False on the row.
         #
         # That is the right semantic for a record of what the RULES produced --
         # which is what this log is for -- but it is not what the word implies,
@@ -686,7 +704,8 @@ def analyze(df: pd.DataFrame, ticker: str,
             # record_signal() dedupes on it and returns None for a repeat.
             _bar = sc._bar_dates(df, None).max().date()
             if forward_log.record_signal(ticker, r["trend"], _setup, decision,
-                                         reason, _cfg, bar_date=_bar) is None:
+                                         reason, _cfg, bar_date=_bar,
+                                         hq=_hq) is None:
                 logger.debug("%s — %s bar %s already in the forward log",
                              ticker, r["trend"], _bar)
         except Exception as exc:                       # noqa: BLE001
@@ -703,15 +722,17 @@ def analyze(df: pd.DataFrame, ticker: str,
         _log("skipped", "direction gate: shorts are switched off")
         return None
 
+    # FROM HERE THE RULES PRODUCED A LONG BASE SIGNAL: recorded as taken,
+    # whatever the tier says. The row's hq tag carries the tier's verdict.
+    _log("taken", "")
+
     # Alerts fire on the high-quality tier only, exactly as app.py defines it.
+    # This gate decides what is SENT. It no longer decides what is recorded.
     if not r["high_quality"]:
         logger.debug("%s — signal but not high-quality (rr %.2f, %s, "
-                     "filters %d/%d)", ticker, r["rr"], r["strength"],
-                     r["filters_pass"], r["filters_total"])
-        _log("skipped", "not high-quality")
+                     "filters %d/%d; recorded, not alerted)", ticker, r["rr"],
+                     r["strength"], r["filters_pass"], r["filters_total"])
         return None
-
-    _log("taken", "")
 
     return {
         "ticker": ticker, "trend": r["trend"], "strength": r["strength"],
@@ -1149,17 +1170,39 @@ def _selftest_body() -> int:
         # (ticker, trend, bar date) and these are three different signals.
         # They used to share "ZZ" and one frame, which the dedupe now — quite
         # correctly — collapses into one row.
+        _ret = {}
         for _tk, _trend, _hq in (("ZA", "Bullish", True),
                                  ("ZB", "Bearish", True),
                                  ("ZC", "Bullish", False)):
             _c = dict(_canned(_trend), high_quality=_hq)
+            if not _hq:
+                # A base long that fails the tier on two legs, so hq_fail
+                # has something to say.
+                _c.update(strength="Normal", rr=0.8,
+                          filters={"ADX Trend Strength": {"pass": False},
+                                   "Macro Regime": {"pass": True}})
             sc.evaluate = lambda *a, **k: _c
-            analyze(_frame, _tk)
+            _ret[_tk] = analyze(_frame, _tk)
         _rows = forward_log.read_all(_tmp)
         assert len(_rows) == 3, (
             f"three signals fired and {len(_rows)} were logged. The ones that "
             f"never became alerts are exactly the ones that make the record "
             f"worth having")
+        # THE TIER TAGS; IT DOES NOT GATE (results/forward_record_preregistration.md).
+        _byt = {x["ticker"]: x for x in _rows}
+        assert _byt["ZC"]["decision"] == "taken" and _byt["ZC"]["hq"] is False, (
+            f"a long base signal that fails the HQ tier must be TAKEN with "
+            f"hq=False, got {_byt['ZC']['decision']}/{_byt['ZC'].get('hq')}. "
+            f"Gating the record on the tier is what starved it (BACKLOG 24)")
+        assert _byt["ZC"]["setup"]["hq_fail"] == ["rr<1", "not Strong",
+                                                   "ADX Trend Strength"], \
+            _byt["ZC"]["setup"]["hq_fail"]
+        assert _ret["ZC"] is None, \
+            "a base signal below the tier must still NOT produce an alert payload"
+        assert _byt["ZA"]["decision"] == "taken" and _byt["ZA"]["hq"] is True \
+            and _byt["ZA"]["setup"]["hq_fail"] == [] and _ret["ZA"] is not None
+        assert _byt["ZB"]["decision"] == "skipped" and _ret["ZB"] is None, \
+            "the direction gate still skips shorts; it rests on a measurement"
 
         # ── ONE ROW PER SIGNAL BAR, NOT ONE PER SCAN ──
         #
@@ -1194,7 +1237,7 @@ def _selftest_body() -> int:
         _by = {(x["trend"], x["decision"]) for x in _rows}
         assert ("Bullish", "taken") in _by, _by
         assert ("Bearish", "skipped") in _by, "the direction skip was not logged"
-        assert sum(1 for x in _rows if x["decision"] == "skipped") == 2, _by
+        assert sum(1 for x in _rows if x["decision"] == "skipped") == 1, _by
         assert all(x["reason"] for x in _rows if x["decision"] == "skipped"), (
             "a skip was logged with no reason")
         assert not forward_log.verify(_tmp), forward_log.verify(_tmp)
@@ -1205,8 +1248,8 @@ def _selftest_body() -> int:
         sc.evaluate = _real_eval
         globals()["get_weekly_trend"] = _real_wk
         globals()["check_earnings_blackout"] = _real_earn
-    print("forward log             : 3 signals, 1 taken 2 skipped with "
-          "reasons, chain intact")
+    print("forward log             : 3 signals -> taken hq=True (alerted), "
+          "taken hq=False (recorded, not alerted), short skipped; chain intact")
 
     # ── A BROKEN LOG MUST NOT COST AN ALERT ──
     # The record matters; it does not matter more than the trade. Nothing

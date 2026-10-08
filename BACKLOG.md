@@ -1035,9 +1035,21 @@ run should use, and say so in its pre-registration.
 
 ---
 
-## 24. The alert tier is gated on refuted features, and the forward test is starving
+## 24. ~~The alert tier is gated on refuted features, and the forward test is starving~~ — DECIDED 2026-10-08, RECORD CHANGED
 
 **Found 2026-10-07; see `results/code_review_2026-10-07.md` (H2, H5).**
+
+**Owner decision 2026-10-08: record the base signal, tag the HQ tier.**
+Pre-registered in `results/forward_record_preregistration.md` before the first
+row under the new rule. A long base signal is now `taken`; every row carries
+`hq: true|false` and `setup.hq_fail` (the legs that failed). Alerts still fire
+on the HQ tier only; the direction gate is unchanged; the config fingerprint is
+unchanged. The 19 existing `skipped: not high-quality` rows are read as
+`taken, hq=false` — fixed in the pre-registration, not after. H1 bar: the tier
+adds ≥ +0.15 R per episode; 349 settled episodes needed; ~3 years at 8 names,
+~6 months at ~50. **The record still has no outcome measurement** — see 28.
+The universe-size half of this item (7 of 8 names rotated in three weeks,
+`churn_tracker` has no cumulative view) is NOT addressed and stays open below.
 
 17 base signals in three weeks on 8 tickers; **0 taken**. 13 blocked by
 `ADX < 35`, 4 by the volume ≥ 1.2× leg of "Strong". `adx_retest.py` found ADX adds
@@ -1168,10 +1180,39 @@ the dedupe's natural companion: `record_signal` already keys on the bar.
 
 ---
 
+## 28. The forward record has intake and no grading
+
+**Opened 2026-10-08 with the decision on 24.**
+
+Outcome rows exist only through `attach_outcomes()`, which matches journal
+trades the owner actually took. Base signals are not alerted, so they are not
+traded, so they never get an outcome that way. Until something grades them the
+record measures arrival, not edge.
+
+Two pieces, each needing its own pre-registration before a row is written:
+
+1. **Mechanical resolution** of every `taken` signal against later bars on the
+   `stop_distance` basis `record_outcome()` already defines: entry at the next
+   bar's open, stop and target from the row's setup, a fixed hold, a gapped
+   stop filled at the worse of stop and open (BACKLOG 21's rule, applied here
+   from day one rather than discovered later). Runs in the scanner — the one
+   writer, on the runner that has market data. One outcome per signal per
+   basis: `record_outcome()`'s one-outcome-per-`ref_seq` guard must become
+   per-(`ref_seq`, `basis`) so a journal (premium) outcome and a mechanical
+   (stop-distance) outcome can both exist and are never summed.
+2. **An exact signal key on the journal row.** `open_option_position()` has no
+   field for which signal a trade came from, so `attach_outcomes()` matches on
+   (ticker, trend, within 5 days) and refuses ambiguity. With base signals
+   recorded on consecutive bars ambiguity becomes the common case. Carry
+   `signal_key` (ticker|trend|bar_date) from the alert into the position and
+   match on it first.
+
+---
+
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 36 cross-module
-  invariants (36 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 37 cross-module
+  invariants (37 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip
