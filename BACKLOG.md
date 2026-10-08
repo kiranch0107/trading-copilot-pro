@@ -1182,7 +1182,9 @@ the dedupe's natural companion: `record_signal` already keys on the bar.
 
 ## 28. The forward record has intake and no grading
 
-**Opened 2026-10-08 with the decision on 24.**
+**Opened 2026-10-08 with the decision on 24.** Piece 1 is pre-registered in
+`results/forward_grading_preregistration.md` (2026-10-08, before any code);
+amendable in a dated section until the first `stop_distance` outcome is written.
 
 Outcome rows exist only through `attach_outcomes()`, which matches journal
 trades the owner actually took. Base signals are not alerted, so they are not
