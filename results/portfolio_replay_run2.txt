@@ -1,0 +1,45 @@
+  · SPY: dropped 1 bar(s) dated 2026-10-08 or later — still forming, and unusable by a next-bar-open fill
+====================================================================================
+LONGS ONLY, IN SHARES — what it would actually have been
+====================================================================================
+  $5,000 account, 1.0% risk per trade, position ceiling 25%
+  A MEASUREMENT, not a test. No bar, nothing searched over.
+====================================================================================
+                   total %   CAGR %  max DD %  trades   win %
+  -----------------------------------------------------------
+  idealised          +47.7     +4.0      45.6     883    35.4
+  constrained        +39.7     +3.4      19.0     687    36.1
+  SPY buy-hold      +259.6    +13.7      34.1       —       —
+
+  WHAT THE CONSTRAINT COST
+    signals skipped, no room    196
+    positions sized down        733
+    peak concurrent positions   5
+    peak capital deployed       100% of equity
+    -> 196 of 883 signals (22%) were not takeable at this account size
+
+  BY YEAR (constrained)
+    year      trades       P&L $
+    2017          51        -149
+    2018          63        +424
+    2019          61        +173
+    2020          87        +257
+    2021          90        +344
+    2022          28        -650
+    2023          76        +241
+    2024         106        -198
+    2025          70       +1440
+    2026          55        +103
+
+====================================================================================
+  READING IT
+  The long side is +0.085 R with a CI of [-0.037, +0.206] — it SPANS
+  ZERO, and it decayed +0.268 -> +0.106 -> +0.085 as the sample grew.
+  Dropping shorts removes a measured loss; it does not add a measured
+  gain. Expectancy above has a confidence interval. The DRAWDOWN does
+  not — that is what the path did.
+
+  This returned +3.4%/yr against SPY at +13.7%/yr,
+  at 19% drawdown against 34%. Owning the index was
+  better on both axes, with no signals to follow.
+====================================================================================
