@@ -1,3 +1,16 @@
+LONGS-ONLY REPLAY ON THE FIXED ENGINE (BACKLOG 18 + 21). Same laptop, same
+cache and same universe as portfolio_replay_run2.txt; the only change is the
+gapped-level fill rule (claude/trading-code-review-wt48q8 @ 3a473e0).
+
+  run 2 (stop filled AT the level) -> run 3 (filled at the open when gapped):
+    idealised    +4.0%/yr, 45.6% DD  ->  +0.3%/yr, 55.7% DD
+    constrained  +3.4%/yr, 19.0% DD  ->  +1.7%/yr, 21.8% DD
+    long side    +0.076 R            ->  +0.042 R, 95% CI [-0.093, +0.177]
+    SPY          +13.7%/yr, 34.1% DD (unchanged)
+
+The "READING IT" line below is measured on this run (longs_only.long_edge()),
+not quoted from the record.
+
 ====================================================================================
 LONGS ONLY, IN SHARES — what it would actually have been
 ====================================================================================

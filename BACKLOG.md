@@ -701,7 +701,8 @@ deployed 101%") is gone: 100%. Owning the index was better on both axes. One
 line of that file's prose quoted the record's +0.085 R instead of this run's
 +0.076 R; `longs_only.report()` now measures and prints the run's own long edge
 (`long_edge()`), with the record quoted as the record. Run 2 predates the
-gapped-stop fix (21), so it carries that caveat and will be re-run with it.
+gapped-stop fix (21); run 3, same day, same cache, is on the fixed engine:
+constrained +1.7%/yr at 21.8% drawdown, long side +0.042 R. See 21.
 
 **The accounting is fixed and pinned. The published numbers are not yet replaced.**
 
@@ -851,7 +852,7 @@ both callers importing it, and a `check_` function that pins it.
 
 ---
 
-## 21. The share backtest fills a gapped stop AT the stop — every loss is floored at −1 R — FIX SHIPPED 2026-10-08, RE-RUN OWED ON THE BRANCH
+## 21. ~~The share backtest fills a gapped stop AT the stop — every loss is floored at −1 R~~ — CLOSED 2026-10-08, FIX AND RE-RUN TOGETHER
 
 **Found 2026-09-16 by review. Fixed 2026-10-08; the re-run is the owner's next
 local step.**
@@ -870,9 +871,24 @@ local step.**
   against whichever pin its fingerprint matches. A re-run on the same laptop
   hits `.bar_cache/`, reproduces those fingerprints, and reports CODE MOVED
   against the baseline — the isolated effect of this fix.
-- **Owed, on this PR's branch before merge:** `python record_recheck.py | tee
-  results/record_recheck_gapfill_run1.txt` and `python longs_only.py | tee
-  results/portfolio_replay_run3.txt`, from the laptop that holds the cache.
+- **Re-run done 2026-10-08 by the owner on the same cache**
+  (`results/record_recheck_gapfill_run1.txt`): every fingerprint matched the
+  baseline, verdict CODE MOVED on all three cuts, so the table below is the
+  fix and nothing else.
+
+  | cut | avg R before → after | long R | short R | gapped through |
+  |---|---|---|---|---|
+  | 7t/5y | −0.004 → −0.004 | +0.260 → +0.297 | −0.466 → −0.532 | 73 of 413 (18%) |
+  | 12t/5y | −0.022 → −0.043 | +0.101 → +0.082 | −0.240 → −0.265 | 113 of 675 (17%) |
+  | 12t/10y | −0.056 → −0.088 | +0.076 → +0.042 | −0.290 → −0.319 | 216 of 1381 (16%) |
+
+  One trade in six had a level gapped through. The record's 10y long side —
+  the number `longs_only_run1.md` called the one worth trusting most — halves,
+  from +0.076 R to +0.042 R, CI [−0.093, +0.177]. Longs-only replay on the
+  fixed engine (`results/portfolio_replay_run3.txt`): idealised +4.0%/yr →
+  +0.3%/yr at 55.7% drawdown; constrained +3.4%/yr → +1.7%/yr at 21.8%; SPY
+  +13.7%/yr at 34.1%. The decision not to trade the signal was already made;
+  this makes it by a wider margin, and from the left tail specifically.
 - **Every committed result built on the share engine carries a STALE FILL RULE
   banner** (25 files) rather than a VOID: their findings are signs and
   dose-responses, which the rule change does not undo, but none of their R is

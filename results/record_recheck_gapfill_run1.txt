@@ -1,3 +1,16 @@
+THE GAP-FILL TEST (BACKLOG 21). Run by the owner on 2026-10-08 on the laptop
+whose .bar_cache/ produced record_recheck_baseline_2026-10-08.txt, on branch
+claude/trading-code-review-wt48q8 @ 3a473e0 (the fix in). Every fingerprint
+matches the baseline, so every move below is the code and nothing else.
+
+  cut        avg R  before -> after   long R            short R           gapped through
+  7t/5y      -0.004 -> -0.004         +0.260 -> +0.297  -0.466 -> -0.532   73 of 413 (18%)
+  12t/5y     -0.022 -> -0.043         +0.101 -> +0.082  -0.240 -> -0.265  113 of 675 (17%)
+  12t/10y    -0.056 -> -0.088         +0.076 -> +0.042  -0.290 -> -0.319  216 of 1381 (16%)
+
+One in six trades had a level gapped through. The record's 10y long side,
+the "number worth trusting most", halves from +0.076 R to +0.042 R.
+
 ==============================================================================
 RECORD RE-CHECK — do the three recorded cuts still hold on today's code?
 ==============================================================================
