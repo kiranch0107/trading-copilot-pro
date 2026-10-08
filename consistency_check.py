@@ -2410,6 +2410,46 @@ def check_option_iv_single_source() -> None:
           f"IV; sensitivity table matches the committed sweep")
 
 
+def check_iv_snapshot_single_writer_and_committed() -> None:
+    """
+    The IV snapshot file has one writer, is pure to read, is committed by
+    the workflow, and is taken only in the post-close pass (BACKLOG 25 B).
+
+    Same shape as the forward log's rules, for the same reasons: two writers
+    on an append-only file collide; a row on an ephemeral runner that is not
+    committed is destroyed; and a snapshot taken mid-session would pair a
+    live chain with an unsettled spot, which is not the measurement the
+    pre-registration fixed.
+    """
+    writers = []
+    for q in sorted(Path(".").glob("*.py")):
+        if q.name in ("iv_snapshot.py", "consistency_check.py"):
+            continue
+        txt = q.read_text()
+        if any(f"iv_snapshot.{fn}(" in txt for fn in ("record", "grade", "_append")):
+            writers.append(q.name)
+    assert writers == ["scanner.py"], (
+        f"iv_snapshots.jsonl must have exactly one writer, scanner.py; found "
+        f"{writers or 'none'}")
+    src = Path("iv_snapshot.py").read_text()
+    for banned in ("import pandas", "import numpy", "import yfinance", "import requests"):
+        assert banned not in src, f"iv_snapshot.py must stay stdlib: found {banned!r}"
+    wf = Path(".github/workflows/scanner.yml").read_text()
+    i = wf.find("git add")
+    assert i > 0 and "iv_snapshots.jsonl" in wf[i:i + 160], \
+        "scanner.yml does not stage iv_snapshots.jsonl; every snapshot would die with the runner"
+    assert Path("iv_snapshots.jsonl").exists(), \
+        "iv_snapshots.jsonl must exist in the repo (even empty) or `git add` fails on the runner"
+    sc_src = Path("scanner.py").read_text()
+    j = sc_src.find("iv_snapshot.record(")
+    k = sc_src.rfind("if record_only:", 0, j)
+    assert j > 0 and k > 0 and j - k < 2500, \
+        "the snapshot must be taken inside the record-only (post-close) branch of run()"
+    assert "python iv_snapshot.py --selftest" in Path(".github/workflows/tests.yml").read_text(), \
+        "iv_snapshot's selftest is not in CI"
+    print("  one writer (scanner.py, post-close only), stdlib reader, committed by scanner.yml")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -2429,6 +2469,7 @@ CHECKS = [
     ("outcome bases coexist, never pooled",        check_outcome_bases_never_pooled),
     ("signal key rides alert->app->journal->log", check_signal_key_round_trip),
     ("option IV multiplier has one home",          check_option_iv_single_source),
+    ("IV snapshot: one writer, committed, post-close", check_iv_snapshot_single_writer_and_committed),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),
