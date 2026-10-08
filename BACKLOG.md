@@ -903,7 +903,37 @@ Expect the expectancy to get worse, not better. That is the point.
 
 ---
 
-## 22. The unattended system runs at 14–23% of its schedule — CODE SIDE CLOSED 2026-10-07; EXTERNAL TRIGGER IS THE OWNER'S
+## 22. ~~The unattended system runs at 14–23% of its schedule~~ — CLOSED 2026-10-08
+
+**The external trigger is live.** Two cron-job.org jobs, verified end to end on
+2026-10-08: each test fired a `workflow_dispatch` that GitHub created and started
+**in the same second** (scanner 00:20:30Z, exit monitor 00:27:29Z), against the
+`schedule` trigger's 2–4 h delays.
+
+| job | fires (America/Los_Angeles) | = ET | target |
+|---|---|---|---|
+| `trading-scanner` | 8:07, 10:07, 12:07 Mon–Fri | 11:07, 13:07, 15:07 | `scanner.yml` |
+| `exit-monitor` | 6:00–13:30 every 30 min Mon–Fri | 9:00–16:30 | `exit-monitor.yml` |
+
+The jobs run in Pacific time because that is the account's timezone; LA and New
+York are always exactly three hours apart and both observe DST, so the offset
+never drifts. The two monitor slots outside 9:30–16:00 ET are discarded by the
+script's own guard. The doubled `schedule` crons in both YAMLs stay as backup.
+
+**FORCING FUNCTION — the PAT expires 2027-01-06.** Fine-grained token, this repo
+only, Actions: read+write (the response header `x-accepted-github-permissions:
+actions=write` confirmed exactly that scope). When it expires every dispatch
+returns 401, both jobs go silent, and the only thing standing between that and
+a repeat of the three-week outage is the coverage alarm, which pages within two
+trading days. **Rotate it in the last week of December 2026** and update both
+cron-job.org jobs' `Authorization` header. Nothing in the repo holds the token.
+
+The in-repo half — the alarm, the heartbeat, the pins — shipped in #96 and is
+recorded below as it stood on 10-07.
+
+---
+
+### Code side, as closed 2026-10-07
 
 **Done in the repo (PR #96):**
 
