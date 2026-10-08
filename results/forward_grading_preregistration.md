@@ -8,6 +8,33 @@ is written; after that nothing here changes. Companion to
 `results/forward_record_preregistration.md`, which fixed what is RECORDED;
 this fixes how it is GRADED.
 
+## AMENDED 2026-10-08, BEFORE ANY OUTCOME ROW — implementation details, no rule changes
+
+Written with the resolver code, before it has run anywhere. Four points the
+first draft left to the implementation are fixed here so they are not decided
+by whoever reads the code later:
+
+1. **Where it runs.** After the scan loop in `scanner.run()`, not before it,
+   so a watchlist ticker reuses the frame the scan already fetched and a
+   ticker that has left the watchlist is fetched exactly once. Still every
+   run, still `--record-only` too, still non-fatal. The order within a run
+   grades nothing differently.
+2. **How a split is detected.** The scanner's bars are split-adjusted by the
+   provider even in raw mode, so a split between the signal and the fetch
+   rewrites the signal bar itself. The resolver compares the freshly fetched
+   close ON the signal bar to the row's recorded `setup.price`; a difference
+   beyond **2 %** (`GRADE_BASIS_TOL`) is `VOID: split_in_window`. Ordinary
+   provider revisions are far inside that.
+3. **When "no bars" becomes a VOID.** No bar after the signal, or the signal
+   bar itself missing from the fetch, is UNSETTLED until the signal is
+   **45 calendar days** old (`GRADE_NO_BARS_DAYS`, comfortably past 20
+   trading days plus holidays), then `VOID: no_bars`.
+4. **The constants are named**, so they are greppable and pinned:
+   `GRADE_MAX_HOLD = 20`, `GRADE_SLIPPAGE_BPS = 2.0`, `GRADE_DUST_R = 0.05`,
+   in `forward_log.py`. The entry bar counts as bar 1 of the 20, as in the
+   record's engine. A signal whose window is open gets no row: `resolve_signal`
+   returns None and the grader moves on.
+
 ## Why grading is a separate act
 
 Outcome rows today come only from `attach_outcomes()`: a journal trade the

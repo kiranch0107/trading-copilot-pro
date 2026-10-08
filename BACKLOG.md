@@ -1183,8 +1183,15 @@ the dedupe's natural companion: `record_signal` already keys on the bar.
 ## 28. The forward record has intake and no grading
 
 **Opened 2026-10-08 with the decision on 24.** Piece 1 is pre-registered in
-`results/forward_grading_preregistration.md` (2026-10-08, before any code);
-amendable in a dated section until the first `stop_distance` outcome is written.
+`results/forward_grading_preregistration.md` (2026-10-08, before any code) and
+**BUILT the same day**: `forward_log.resolve_signal()` (pure, stdlib) and
+`grade_open_signals()`, wired into `scanner.run()` after the scan loop.
+`record_outcome()` now keys one outcome per (`ref_seq`, `basis`); `summary()`
+has no pooled mean. `check_outcome_bases_never_pooled()` pins it. The first
+run happens on the next scanner dispatch; its rows are then written up as
+`results/forward_grading_run1.txt` from the committed log. The document is
+frozen from that first row. Piece 2 (the signal key on the journal row) is
+still open.
 
 Outcome rows exist only through `attach_outcomes()`, which matches journal
 trades the owner actually took. Base signals are not alerted, so they are not
@@ -1213,8 +1220,8 @@ Two pieces, each needing its own pre-registration before a row is written:
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 37 cross-module
-  invariants (37 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 38 cross-module
+  invariants (38 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip

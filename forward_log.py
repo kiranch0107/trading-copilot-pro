@@ -298,10 +298,11 @@ def last_scan(path: Path | None = None) -> dict | None:
     return rows[-1] if rows else None
 
 
-def record_outcome(ref_seq: int, outcome: str, r: float, basis: str,
+def record_outcome(ref_seq: int, outcome: str, r: float | None, basis: str,
                    exit_price: float | None = None,
                    trade_id: str | None = None, mode: str | None = None,
-                   path: Path | None = None) -> dict:
+                   path: Path | None = None, detail: dict | None = None,
+                   reason: str | None = None) -> dict:
     """
     A settled trade, as a NEW row referencing the signal by sequence number.
 
@@ -326,6 +327,16 @@ def record_outcome(ref_seq: int, outcome: str, r: float, basis: str,
 
     `mode` is paper/live, carried rather than filtered, because journal_store
     keeps those apart for good reason and an analysis here must be able to too.
+
+    ONE OUTCOME PER (ref_seq, basis), since 2026-10-08
+    (results/forward_grading_preregistration.md). A journal trade's premium
+    outcome and the grader's stop-distance outcome may both exist for one
+    signal; they are different measurements and summary() never pools them.
+    A second row on the SAME basis is still refused.
+
+    `outcome` "void" is a real row: the signal could not be graded, `r` is
+    None, and `reason` says why (gapped_before_fill, split_in_window,
+    no_bars). A void is closed, visibly, rather than left looking open.
     """
     BASES = ("premium", "stop_distance")
     if basis not in BASES:
@@ -348,23 +359,231 @@ def record_outcome(ref_seq: int, outcome: str, r: float, basis: str,
             f"signal has no outcome to record — inventing one would put "
             f"hypothetical results in the forward record")
     if any(x.get("kind") == "outcome" and x.get("ref_seq") == ref_seq
-           for x in rows):
+           and x.get("basis") == basis for x in rows):
         raise ValueError(
-            f"seq {ref_seq} already has an outcome. A second one would let a "
-            f"result be revised after the fact, which is what append-only is "
-            f"for")
+            f"seq {ref_seq} already has a {basis} outcome. A second one would "
+            f"let a result be revised after the fact, which is what "
+            f"append-only is for")
+    if (outcome == "void") != (r is None):
+        raise ValueError(
+            "a void outcome carries r=None and nothing else does; a number on "
+            "a void, or a void-shaped None on a settled row, would be summed "
+            "or dropped by accident")
     if trade_id and any(x.get("kind") == "outcome" and x.get("trade_id") == trade_id
                         for x in rows):
         raise ValueError(
             f"trade {trade_id} already has an outcome row. The scanner re-reads "
             f"the journal every run, so without this a settled trade would be "
             f"recorded again on every scan")
-    return append("outcome", {
+    row = {
         "ref_seq": ref_seq, "ticker": ref.get("ticker"),
-        "outcome": outcome, "r": round(float(r), 4), "basis": basis,
-        "trade_id": trade_id, "mode": mode,
+        "outcome": outcome, "r": None if r is None else round(float(r), 4),
+        "basis": basis, "trade_id": trade_id, "mode": mode,
         "exit_price": round(float(exit_price), 4) if exit_price else None,
-    }, path=path)
+    }
+    if reason:
+        row["reason"] = reason
+    if detail:
+        row["detail"] = detail
+    return append("outcome", row, path=path)
+
+
+# ---------------------------------------------------------------------------
+# Grading — results/forward_grading_preregistration.md (2026-10-08)
+# ---------------------------------------------------------------------------
+#
+# Every rule below is fixed in that document. resolve_signal() is a PURE
+# function of the signal row and the bars that followed it, stdlib only: it
+# cannot fetch, so the only way market data reaches it is the scanner handing
+# over plain rows. That keeps the grader testable bar by bar and keeps this
+# module importable anywhere, which the tamper-evident record requires.
+
+GRADE_MAX_HOLD = 20          # bars after entry, exit at the close of the last
+GRADE_SLIPPAGE_BPS = 2.0     # per side, against the trade
+GRADE_DUST_R = 0.05          # timeout inside this is BREAKEVEN (journal_store.DUST_R)
+GRADE_BASIS_TOL = 0.02       # signal-bar close vs recorded price: beyond this, the
+                             # price basis changed (a split) and the row is void
+GRADE_NO_BARS_DAYS = 45      # calendar days after the signal with no bars -> void
+VOID_REASONS = ("gapped_before_fill", "split_in_window", "no_bars")
+
+
+def resolve_signal(row: dict, bars: list, today=None,
+                   max_hold: int = GRADE_MAX_HOLD,
+                   slippage_bps: float = GRADE_SLIPPAGE_BPS,
+                   dust: float = GRADE_DUST_R) -> dict | None:
+    """
+    Grade one taken signal against the bars that followed it.
+
+    `bars`: ascending rows {"date": "YYYY-MM-DD", "open", "high", "low",
+    "close"} on the SAME price basis the signal was computed on (raw,
+    auto_adjust=False). Returns None while the signal is UNSETTLED (its
+    window has not closed), otherwise a dict ready for record_outcome():
+      {"outcome": win|loss|breakeven, "r", "exit_price", "detail": {...}}
+      {"outcome": "void", "reason": <VOID_REASONS>, "detail": {...}}
+
+    THE RULES (the pre-registration's table, in code order):
+      entry      open of the first bar after bar_date, +slippage in the trade's
+                 direction; gapped past stop or target at that open -> void
+      walk       up to max_hold bars starting WITH the entry bar; the stop is
+                 checked before the target on every bar
+      stop hit   exit at the WORSE of the stop and that bar's open (real fill)
+      target hit exit at the BETTER of the target and that bar's open
+      timeout    the close of the max_hold-th bar
+      exit       slippage against the trade on every exit
+      label      target -> win, stop -> loss, timeout by sign with the dust floor
+      r_at_level the R the record's engine would book (fill AT the level),
+                 recorded in detail so BACKLOG 21's defect is measured live.
+                 `r` is the graded number.
+    """
+    import datetime as _dt
+    setup = row.get("setup") or {}
+    trend = row.get("trend")
+    sig_date = str(row.get("bar_date"))[:10]
+    try:
+        price = float(setup["price"]); stop = float(setup["stop"])
+        target = float(setup["target"])
+    except (KeyError, TypeError, ValueError):
+        return {"outcome": "void", "reason": "no_bars",
+                "detail": {"exit_rule": "void:no_bars",
+                           "note": "row has no usable price/stop/target"}}
+    long = trend == "Bullish"
+    today = today or _dt.date.today()
+    age_days = (today - _dt.date.fromisoformat(sig_date)).days
+
+    bars = sorted((b for b in bars or [] if b.get("date")), key=lambda b: b["date"])
+    sig_bar = next((b for b in bars if b["date"] == sig_date), None)
+    after = [b for b in bars if b["date"] > sig_date]
+
+    if sig_bar is None or not after:
+        if age_days > GRADE_NO_BARS_DAYS:
+            return {"outcome": "void", "reason": "no_bars",
+                    "detail": {"exit_rule": "void:no_bars", "age_days": age_days}}
+        return None                                    # unsettled: too soon
+    # THE PRICE BASIS MUST BE THE ONE THE SIGNAL WAS COMPUTED ON. A split or
+    # reverse split between the signal and now rewrites the fetched history,
+    # and the row's stop and target would then be in the wrong units.
+    if price > 0 and abs(float(sig_bar["close"]) - price) / price > GRADE_BASIS_TOL:
+        return {"outcome": "void", "reason": "split_in_window",
+                "detail": {"exit_rule": "void:split_in_window",
+                           "recorded_close": price,
+                           "fetched_close": float(sig_bar["close"])}}
+
+    slip = lambda px: px * slippage_bps / 10_000.0
+    raw_open = float(after[0]["open"])
+    fill = raw_open + slip(raw_open) if long else raw_open - slip(raw_open)
+    gapped = ((fill <= stop or fill >= target) if long
+              else (fill >= stop or fill <= target))
+    if gapped or abs(fill - stop) <= 0:
+        return {"outcome": "void", "reason": "gapped_before_fill",
+                "detail": {"exit_rule": "void:gapped_before_fill",
+                           "fill": round(fill, 4), "fill_date": after[0]["date"],
+                           "stop": stop, "target": target}}
+    risk = abs(fill - stop)
+
+    exit_rule = exit_px = level_px = None
+    exit_bar = None
+    gap_fill = False
+    for j, b in enumerate(after[:max_hold]):
+        o, h, l = float(b["open"]), float(b["high"]), float(b["low"])
+        if long:
+            if l <= stop:
+                exit_rule, level_px = "stop", stop
+                exit_px = min(stop, o); gap_fill = o < stop
+            elif h >= target:
+                exit_rule, level_px = "target", target
+                exit_px = max(target, o); gap_fill = o > target
+        else:
+            if h >= stop:
+                exit_rule, level_px = "stop", stop
+                exit_px = max(stop, o); gap_fill = o > stop
+            elif l <= target:
+                exit_rule, level_px = "target", target
+                exit_px = min(target, o); gap_fill = o < target
+        if exit_rule:
+            exit_bar = (j, b); break
+    if exit_rule is None:
+        if len(after) < max_hold:
+            return None                                # unsettled: window open
+        j, b = max_hold - 1, after[max_hold - 1]
+        exit_rule, exit_px, level_px = "timeout", float(b["close"]), float(b["close"])
+        exit_bar = (j, b)
+
+    def _r(px):
+        px_net = px - slip(px) if long else px + slip(px)
+        return ((px_net - fill) if long else (fill - px_net)) / risk
+
+    r = _r(exit_px)
+    r_level = _r(level_px)
+    if exit_rule == "target":
+        outcome = "win"
+    elif exit_rule == "stop":
+        outcome = "loss"
+    else:
+        outcome = "win" if r > dust else ("loss" if r < -dust else "breakeven")
+    return {
+        "outcome": outcome, "r": round(r, 4), "exit_price": round(exit_px, 4),
+        "detail": {"fill": round(fill, 4), "fill_date": after[0]["date"],
+                   "exit_date": exit_bar[1]["date"], "bars_held": exit_bar[0] + 1,
+                   "exit_rule": exit_rule, "gap_fill": gap_fill,
+                   "cost_bps": slippage_bps, "r_at_level": round(r_level, 4)},
+    }
+
+
+def grade_open_signals(fetch, path: Path | None = None, today=None) -> dict:
+    """
+    Write a stop_distance outcome for every taken signal whose window has
+    closed. `fetch(ticker)` returns the plain bar rows resolve_signal() reads,
+    or None. One fetch per ticker. Never raises on a row; the report says what
+    happened to each.
+    """
+    rows = read_all(path)
+    have = {(o.get("ref_seq"), o.get("basis")) for o in rows
+            if o.get("kind") == "outcome"}
+    open_sigs = [s for s in rows if s.get("kind") == "signal"
+                 and s.get("decision") == "taken"
+                 and (s.get("seq"), "stop_distance") not in have]
+    report = {"graded": 0, "void": 0, "unsettled": 0, "no_data": 0,
+              "failed": 0, "detail": []}
+    by_ticker: dict = {}
+    for s in open_sigs:
+        by_ticker.setdefault(s.get("ticker"), []).append(s)
+    for tk, sigs in sorted(by_ticker.items()):
+        try:
+            bars = fetch(tk)
+        except Exception as e:                           # noqa: BLE001
+            report["failed"] += len(sigs)
+            report["detail"].append(f"{tk}: fetch failed: {e}")
+            continue
+        if not bars:
+            report["no_data"] += len(sigs)
+            continue
+        for s in sigs:
+            try:
+                res = resolve_signal(s, bars, today=today)
+                if res is None:
+                    report["unsettled"] += 1
+                    continue
+                record_outcome(s["seq"], res["outcome"], res.get("r"),
+                               "stop_distance", exit_price=res.get("exit_price"),
+                               detail=res.get("detail"), reason=res.get("reason"),
+                               path=path)
+                if res["outcome"] == "void":
+                    report["void"] += 1
+                    report["detail"].append(
+                        f"seq {s['seq']} {tk} {s.get('bar_date')}: void "
+                        f"({res['reason']})")
+                else:
+                    report["graded"] += 1
+                    d = res["detail"]
+                    report["detail"].append(
+                        f"seq {s['seq']} {tk} {s.get('bar_date')}: "
+                        f"{res['outcome']} {res['r']:+.2f} R via {d['exit_rule']}"
+                        f"{' (gap)' if d.get('gap_fill') else ''} "
+                        f"after {d['bars_held']} bar(s)")
+            except Exception as e:                       # noqa: BLE001
+                report["failed"] += 1
+                report["detail"].append(f"seq {s.get('seq')} {tk}: {e}")
+    return report
 
 
 # ---------------------------------------------------------------------------
@@ -438,7 +657,11 @@ def attach_outcomes(journal: list, path: Path | None = None,
     rows = read_all(path)
     taken = [r for r in rows if r.get("kind") == "signal"
              and r.get("decision") == "taken"]
-    settled_seqs = {r.get("ref_seq") for r in rows if r.get("kind") == "outcome"}
+    # PREMIUM BASIS ONLY. A signal the grader has already resolved on the
+    # stop-distance basis can still take the journal's premium outcome; the
+    # two are different measurements of one signal and coexist.
+    settled_seqs = {r.get("ref_seq") for r in rows
+                    if r.get("kind") == "outcome" and r.get("basis") == "premium"}
     settled_trades = {r.get("trade_id") for r in rows if r.get("kind") == "outcome"}
     # THE LOG'S FIRST BAR. A trade opened before it has nothing to match and
     # is not a mismatch — it is simply older than the record.
@@ -548,6 +771,13 @@ def _is_hq(row: dict) -> bool:
     return bool((row.get("setup") or {}).get("high_quality"))
 
 
+def _mean_r(settled: list, sigs: list, hq: bool) -> float:
+    by_seq = {s.get("seq"): s for s in sigs}
+    rs = [o["r"] for o in settled
+          if o.get("ref_seq") in by_seq and _is_hq(by_seq[o["ref_seq"]]) == hq]
+    return sum(rs) / len(rs) if rs else float("nan")
+
+
 def summary(path: Path | None = None) -> dict:
     rows = read_all(path)
     sigs = [r for r in rows if r.get("kind") == "signal"]
@@ -555,18 +785,30 @@ def summary(path: Path | None = None) -> dict:
     scans = [r for r in rows if r.get("kind") == "scan"]
     taken = [s for s in sigs if s.get("decision") == "taken"]
     skipped = [s for s in sigs if s.get("decision") == "skipped"]
-    settled = [o for o in outs if o.get("r") is not None]
     taken_hq = [s for s in taken if _is_hq(s)]
     configs = sorted({s.get("config") for s in sigs if s.get("config")})
+    # BY BASIS, AND ONLY BY BASIS. A premium R and a stop-distance R are
+    # different denominators; there is no pooled mean here on purpose.
+    by_basis = {}
+    for basis in ("premium", "stop_distance"):
+        outs_b = [o for o in outs if o.get("basis") == basis]
+        settled_b = [o for o in outs_b if o.get("r") is not None]
+        by_basis[basis] = {
+            "settled": len(settled_b),
+            "void": sum(1 for o in outs_b if o.get("outcome") == "void"),
+            "open": len(taken) - len(outs_b),
+            "mean_r": (sum(o["r"] for o in settled_b) / len(settled_b)
+                       if settled_b else float("nan")),
+            "mean_r_hq": _mean_r(settled_b, sigs, True),
+            "mean_r_base": _mean_r(settled_b, sigs, False),
+        }
     return {
         "rows": len(rows), "scans": len(scans),
         "bars_scanned": len({x.get("bar_date") for x in scans}),
         "signals": len(sigs), "taken": len(taken),
         "taken_hq": len(taken_hq), "taken_base": len(taken) - len(taken_hq),
-        "skipped": len(skipped), "settled": len(settled),
-        "open": len(taken) - len(settled),
-        "mean_r": (sum(o["r"] for o in settled) / len(settled)
-                   if settled else float("nan")),
+        "skipped": len(skipped), "outcomes": len(outs),
+        "by_basis": by_basis,
         "configs": configs,
         "skip_reasons": {r: sum(1 for s in skipped if s.get("reason") == r)
                          for r in sorted({s.get("reason") for s in skipped})},
@@ -584,15 +826,20 @@ def report(path: Path | None = None) -> int:
         print("  empty. Nothing has been recorded yet.")
         print("  Every day without recording is clean data not accumulating.")
         return 0
-    print(f"  {s['rows']} rows: {s['signals']} signals, "
-          f"{s['signals'] and s['rows'] - s['signals']} outcomes")
+    print(f"  {s['rows']} rows: {s['signals']} signals, {s['outcomes']} outcomes, "
+          f"{s['scans']} scans")
     print(f"  taken {s['taken']} (hq {s['taken_hq']}, base {s['taken_base']})   "
-          f"skipped {s['skipped']}   settled {s['settled']}   "
-          f"still open {s['open']}")
-    if s["settled"]:
-        print(f"  mean R on settled trades: {s['mean_r']:+.4f}")
-        print(f"  NOT a result. It becomes one when enough trades settle to")
-        print(f"  have power; see power_check.py for how many that is.")
+          f"skipped {s['skipped']}")
+    for basis, b in s["by_basis"].items():
+        if not (b["settled"] or b["void"]):
+            continue
+        print(f"  {basis:14} settled {b['settled']}   void {b['void']}   "
+              f"open {b['open']}   mean R {b['mean_r']:+.4f} "
+              f"(hq {b['mean_r_hq']:+.4f} / base {b['mean_r_base']:+.4f})")
+    if any(b["settled"] for b in s["by_basis"].values()):
+        print(f"  NOT a result. It becomes one at 349 settled EPISODES on one")
+        print(f"  basis (results/forward_record_preregistration.md); the two")
+        print(f"  bases are different denominators and are never summed.")
     if s["skip_reasons"]:
         print(f"  skipped because:")
         for reason, n in sorted(s["skip_reasons"].items(), key=lambda kv: -kv[1]):
@@ -725,11 +972,16 @@ def selftest() -> int:
             raise SystemExit(f"outcome accepted for seq {bad} ({why})")
         except ValueError:
             pass
+    # ONE OUTCOME PER (ref_seq, basis). A second on the SAME basis is a
+    # revision and is refused; a different basis is a different measurement
+    # of the same signal and coexists (results/forward_grading_preregistration.md).
     try:
-        record_outcome(s1["seq"], "loss", -1.0, "premium", path=tmp)
-        raise SystemExit("a second outcome was accepted for one signal")
+        record_outcome(s1["seq"], "loss", -1.0, "stop_distance", path=tmp)
+        raise SystemExit("a second outcome on one basis was accepted for one signal")
     except ValueError as e:
-        assert "already has an outcome" in str(e), e
+        assert "already has a stop_distance outcome" in str(e), e
+    o2 = record_outcome(s1["seq"], "loss", -0.4, "premium", trade_id="TP1", path=tmp)
+    assert o2["basis"] == "premium" and o2["ref_seq"] == s1["seq"]
     assert not verify(tmp)
     print("outcomes         : appended by reference; no edits, no duplicates, "
           "none for skips")
@@ -887,6 +1139,137 @@ def selftest() -> int:
     assert (_hs["taken"], _hs["taken_hq"], _hs["taken_base"]) == (3, 2, 1), _hs
     print("hq tag           : on the row when given; summary splits taken "
           "2 hq / 1 base, legacy rows read from setup")
+
+    # ── THE GRADER: every row of the pre-registration's rules table ──
+    # (results/forward_grading_preregistration.md)
+    import datetime as _dt
+    def _bars(*rows):
+        # rows: (date, open, high, low, close)
+        return [{"date": d, "open": o, "high": h, "low": l, "close": c}
+                for d, o, h, l, c in rows]
+    _row = {"trend": "Bullish", "bar_date": "2026-09-01",
+            "setup": {"price": 100.0, "stop": 98.0, "target": 106.0}}
+    _sig = ("2026-09-01", 99.0, 101.0, 98.5, 100.0)
+    _today = _dt.date(2026, 12, 1)
+    _flat = lambda d: (d, 100.0, 101.0, 99.0, 100.0)
+    _days = [f"2026-09-{d:02d}" for d in range(2, 31)] + \
+            [f"2026-10-{d:02d}" for d in range(1, 15)]
+
+    # Clean stop: bar 3 trades down through 98, opens above it -> fills AT 98.
+    r1 = resolve_signal(_row, _bars(_sig, _flat(_days[0]), _flat(_days[1]),
+                                    (_days[2], 99.5, 100.0, 97.0, 97.5)), today=_today)
+    _fill = 100.0 * (1 + 2e-4)
+    assert r1["outcome"] == "loss" and r1["detail"]["exit_rule"] == "stop" \
+        and r1["detail"]["gap_fill"] is False and r1["detail"]["bars_held"] == 3, r1
+    assert abs(r1["r"] - ((98.0 * (1 - 2e-4) - _fill) / (_fill - 98.0))) < 1e-4, \
+        (r1, "r is rounded to 4 places")
+    assert abs(r1["r"] - r1["detail"]["r_at_level"]) < 1e-9, "no gap: both Rs agree"
+    # Gapped stop: opens at 90 -> fills at 90, not 98. r < -1; r_at_level = -1.
+    r2 = resolve_signal(_row, _bars(_sig, _flat(_days[0]),
+                                    (_days[1], 90.0, 91.0, 89.0, 90.5)), today=_today)
+    assert r2["outcome"] == "loss" and r2["detail"]["gap_fill"] is True, r2
+    assert r2["r"] < -4.5 and abs(r2["detail"]["r_at_level"] + 1.0) < 2e-2, \
+        (r2, "at the level it is -1 R plus 4 bps of slippage")
+    # Gapped target: opens at 110 -> fills at 110, better than 106.
+    r3 = resolve_signal(_row, _bars(_sig, _flat(_days[0]),
+                                    (_days[1], 110.0, 111.0, 109.0, 110.0)), today=_today)
+    assert r3["outcome"] == "win" and r3["detail"]["gap_fill"] is True \
+        and r3["r"] > r3["detail"]["r_at_level"] > 2.9, r3
+    # Both levels inside one bar -> the stop, conservative.
+    r4 = resolve_signal(_row, _bars(_sig, (_days[0], 100.0, 107.0, 97.0, 103.0)), today=_today)
+    assert r4["outcome"] == "loss" and r4["detail"]["exit_rule"] == "stop", r4
+    # Timeout at the 20th bar's close: win / loss / breakeven by the dust floor.
+    def _hold(close_last):
+        bs = [_sig] + [_flat(d) for d in _days[:19]]
+        bs.append((_days[19], 100.0, 101.0, 99.0, close_last))
+        return _bars(*bs)
+    t_win = resolve_signal(_row, _hold(101.0), today=_today)
+    t_loss = resolve_signal(_row, _hold(99.0), today=_today)
+    t_be = resolve_signal(_row, _hold(100.05), today=_today)
+    assert t_win["outcome"] == "win" and t_win["detail"]["exit_rule"] == "timeout" \
+        and t_win["detail"]["bars_held"] == 20, t_win
+    assert t_loss["outcome"] == "loss" and t_be["outcome"] == "breakeven", (t_loss, t_be)
+    # Nineteen bars and no hit -> UNSETTLED, no row.
+    assert resolve_signal(_row, _bars(_sig, *[_flat(d) for d in _days[:19]]),
+                          today=_today) is None, "19 bars is not a closed window"
+    # Gapped before the fill -> VOID, not a trade with an inverted stop.
+    v1 = resolve_signal(_row, _bars(_sig, (_days[0], 97.0, 99.0, 96.0, 98.0)), today=_today)
+    assert v1["outcome"] == "void" and v1["reason"] == "gapped_before_fill", v1
+    # Split in the window: the fetched signal-bar close no longer matches.
+    v2 = resolve_signal(_row, _bars(("2026-09-01", 49.5, 50.5, 49.2, 50.0),
+                                    (_days[0], 50.0, 50.5, 49.0, 50.0)), today=_today)
+    assert v2["outcome"] == "void" and v2["reason"] == "split_in_window", v2
+    # No bars after the signal: unsettled while young, void once stale.
+    assert resolve_signal(_row, _bars(_sig), today=_dt.date(2026, 9, 10)) is None
+    v3 = resolve_signal(_row, _bars(_sig), today=_today)
+    assert v3["outcome"] == "void" and v3["reason"] == "no_bars", v3
+    # A short, mirrored: gap UP through the stop fills at the open.
+    _srow = {"trend": "Bearish", "bar_date": "2026-09-01",
+             "setup": {"price": 100.0, "stop": 102.0, "target": 94.0}}
+    r5 = resolve_signal(_srow, _bars(_sig, _flat(_days[0]),
+                                     (_days[1], 108.0, 109.0, 107.0, 108.0)), today=_today)
+    assert r5["outcome"] == "loss" and r5["detail"]["gap_fill"] is True and r5["r"] < -3.5, r5
+    print("grader           : clean stop, gapped stop (r<-1, r_at_level=-1), "
+          "gapped target, both-in-bar->stop, timeout win/loss/breakeven, "
+          "unsettled, 3 voids, short mirrored")
+
+    # ── grade_open_signals: writes rows, per-basis, idempotent ──
+    ag = Path(tempfile.mkdtemp()) / "ag.jsonl"
+    _gsetup = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0}
+    g1 = record_signal("GA", "Bullish", _gsetup, "taken", "", cfg,
+                       bar_date="2026-09-01", path=ag, hq=True)
+    g2 = record_signal("GB", "Bullish", _gsetup, "taken", "", cfg,
+                       bar_date="2026-09-01", path=ag, hq=False)
+    record_signal("GC", "Bearish", _gsetup, "skipped", "direction gate", cfg,
+                  bar_date="2026-09-01", path=ag)
+    _feeds = {"GA": _bars(_sig, _flat(_days[0]), (_days[1], 90.0, 91.0, 89.0, 90.5)),
+              "GB": _bars(_sig, _flat(_days[0]))}
+    _calls = []
+    def _fetch(tk):
+        _calls.append(tk); return _feeds.get(tk)
+    rep_g = grade_open_signals(_fetch, path=ag, today=_today)
+    assert rep_g["graded"] == 1 and rep_g["unsettled"] == 1 and rep_g["void"] == 0, rep_g
+    assert sorted(_calls) == ["GA", "GB"], "one fetch per ticker, skipped rows never fetched"
+    _outs = [x for x in read_all(ag) if x["kind"] == "outcome"]
+    assert len(_outs) == 1 and _outs[0]["ref_seq"] == g1["seq"] \
+        and _outs[0]["basis"] == "stop_distance" and _outs[0]["detail"]["gap_fill"]
+    rep_g2 = grade_open_signals(_fetch, path=ag, today=_today)
+    assert rep_g2["graded"] == 0 and len([x for x in read_all(ag) if x["kind"] == "outcome"]) == 1, \
+        "a graded signal must never be graded again"
+    # SKIPPED, not refused: a graded signal is not offered to the resolver at
+    # all. The record_outcome guard would catch a second row too, but it would
+    # count as "failed" and read as a grading error on every run forever.
+    assert rep_g2["failed"] == 0, (rep_g2, "a graded signal must be skipped, not retried")
+    # A SIGNAL GRADED ON THE STOP-DISTANCE BASIS STILL TAKES THE JOURNAL'S
+    # PREMIUM OUTCOME: different measurement, same signal.
+    _jt = {"id": "GAJ", "ticker": "GA 2026-10-16 100C", "trend": "Bullish",
+           "date": "2026-09-02 10:00 ET", "outcome": "WIN", "actual_rr": 0.3,
+           "source": "signal", "mode": "live"}
+    _ra = attach_outcomes([_jt], path=ag)
+    assert _ra["attached"] == 1, (_ra, "a stop-distance row must not block the premium attachment")
+    # A second stop_distance is refused (the premium row from the journal is
+    # already beside it).
+    try:
+        record_outcome(g1["seq"], "win", 1.0, "stop_distance", path=ag)
+    except ValueError as e:
+        assert "stop_distance outcome" in str(e), e
+    else:
+        raise AssertionError("second stop_distance outcome accepted")
+    try:
+        record_outcome(g2["seq"], "void", -1.0, "stop_distance", reason="no_bars", path=ag)
+    except ValueError as e:
+        assert "void" in str(e), e
+    else:
+        raise AssertionError("a void with a number was accepted")
+    _sg = summary(ag)["by_basis"]
+    assert _sg["stop_distance"]["settled"] == 1 and _sg["premium"]["settled"] == 1
+    assert _sg["stop_distance"]["open"] == 1 and _sg["premium"]["open"] == 1, _sg
+    assert _sg["stop_distance"]["mean_r"] < -4 and abs(_sg["premium"]["mean_r"] - 0.3) < 1e-9
+    assert _sg["stop_distance"]["mean_r_hq"] < -4 and _sg["stop_distance"]["mean_r_base"] != \
+        _sg["stop_distance"]["mean_r_base"], "GB is unsettled, so base mean is nan"
+    assert "mean_r" not in summary(ag), "no pooled mean, ever"
+    print("grade_open       : one fetch per ticker, idempotent, premium beside "
+          "stop_distance, void needs r=None, summary split by basis")
 
     # IDEMPOTENT. The scanner re-reads the journal on every run.
     r2 = attach_outcomes([_trade()], path=ao)
