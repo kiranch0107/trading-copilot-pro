@@ -1981,7 +1981,7 @@ def check_forward_log_single_writer() -> None:
         # start writing through the one entry point this check did not name.
         if any(f"forward_log.{fn}" in txt for fn in
                ("record_signal", "record_outcome", "append", "attach_outcomes",
-                "record_scan")):
+                "record_scan", "grade_open_signals")):
             writers.append(p.name)
     if writers != ["scanner.py"]:
         raise AssertionError(
@@ -2235,6 +2235,57 @@ def check_hq_tier_annotates_record() -> None:
     print("  HQ tier tags the record (taken, hq=False below the tier), gates only the alert")
 
 
+def check_outcome_bases_never_pooled() -> None:
+    """
+    The two outcome bases coexist on one signal and are never summed.
+
+    results/forward_grading_preregistration.md. A journal trade yields an R on
+    the option PREMIUM; the mechanical grader yields an R on the underlying's
+    STOP DISTANCE. Different denominators -- the error risk_params.py already
+    paid for once. So: record_outcome() allows one row per (ref_seq, basis)
+    and refuses a second on the same basis; summary() reports every count and
+    mean under its basis and has no pooled mean; report() prints them apart;
+    the grader is wired into scanner.py, the log's one writer; and
+    resolve_signal() is pure stdlib so it cannot fetch anything itself.
+    """
+    import tempfile
+    import forward_log as fl
+    import inspect
+
+    tmp = Path(tempfile.mkdtemp()) / "bases.jsonl"
+    setup = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0}
+    sig = fl.record_signal("CKX", "Bullish", setup, "taken", "", {"k": 1},
+                           bar_date="2026-09-01", path=tmp, hq=False)
+    fl.record_outcome(sig["seq"], "loss", -1.3, "stop_distance", exit_price=97.4,
+                      detail={"exit_rule": "stop"}, path=tmp)
+    try:
+        fl.record_outcome(sig["seq"], "win", 2.0, "stop_distance", path=tmp)
+    except ValueError as e:
+        assert "stop_distance" in str(e), e
+    else:
+        raise AssertionError(
+            "a second stop_distance outcome for one signal was accepted; "
+            "a result could be revised after the fact")
+    fl.record_outcome(sig["seq"], "win", 0.4, "premium", trade_id="CKT1",
+                      path=tmp)
+    sm = fl.summary(tmp)
+    assert "mean_r" not in sm and "settled" not in sm, (
+        f"summary() still carries a pooled key ({[k for k in ('mean_r', 'settled') if k in sm]}); "
+        f"premium and stop-distance R must never be summed")
+    bb = sm["by_basis"]
+    assert bb["premium"]["settled"] == 1 and bb["stop_distance"]["settled"] == 1
+    assert abs(bb["premium"]["mean_r"] - 0.4) < 1e-9 and abs(bb["stop_distance"]["mean_r"] + 1.3) < 1e-9, bb
+
+    src = inspect.getsource(fl.resolve_signal)
+    for banned in ("yfinance", "requests", "pandas", "urllib", "data_source"):
+        assert banned not in src, f"resolve_signal() must be pure: found {banned!r}"
+    sc_src = Path("scanner.py").read_text()
+    assert "forward_log.grade_open_signals(" in sc_src, \
+        "scanner.py does not call the grader; the record has intake and no grading"
+    print("  one outcome per (ref_seq, basis); summary/report split by basis; "
+          "grader pure and wired into scanner.py")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -2251,6 +2302,7 @@ CHECKS = [
     ("post-close record-only run is wired",       check_post_close_record_wired),
     ("research/live config divergence declared",   check_research_config_divergence_declared),
     ("HQ tier tags the record, gates only alerts", check_hq_tier_annotates_record),
+    ("outcome bases coexist, never pooled",        check_outcome_bases_never_pooled),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),

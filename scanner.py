@@ -386,6 +386,23 @@ def get_data(ticker: str) -> pd.DataFrame | None:
     return df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
 
 
+def bars_for_grading(df: pd.DataFrame) -> list:
+    """
+    A raw OHLC frame as the plain rows forward_log.resolve_signal() reads:
+    [{"date": "YYYY-MM-DD", "open", "high", "low", "close"}, ...], ascending.
+
+    forward_log is stdlib-only by design (it is the tamper-evident record and
+    must stay importable anywhere), so pandas stops here.
+    """
+    out = []
+    dates = sc._bar_dates(df, None)
+    for d, (o, h, l, c) in zip(dates, df[["Open", "High", "Low", "Close"]].itertuples(index=False)):
+        out.append({"date": str(pd.Timestamp(d).date()), "open": float(o),
+                    "high": float(h), "low": float(l), "close": float(c)})
+    out.sort(key=lambda b: b["date"])
+    return out
+
+
 def compute(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["EMA20"]  = ta.trend.ema_indicator(df["Close"], 20)
@@ -832,6 +849,9 @@ def run(args) -> int:
     # because a frame that lags a day (a stale snapshot, a late Yahoo bar)
     # would otherwise be recorded under the wrong date.
     bars_scanned: dict = {}
+    # RAW FRAMES, kept for the grader below so a watchlist ticker with an open
+    # signal is not fetched twice in one run.
+    frames: dict = {}
 
     for tk in WATCHLIST:
         try:
@@ -840,6 +860,7 @@ def run(args) -> int:
             if df is None:
                 failed.append(f"{tk} (no data)")
                 continue
+            frames[tk] = df
             # BUG FIX: the scanner used to analyse df.iloc[-1] directly, so a
             # mid-session run read TODAY'S PARTIAL BAR — a Close that is just
             # the live price and a Volume only partly accumulated. That is why
@@ -942,6 +963,37 @@ def run(args) -> int:
         else:
             logger.warning("Total scan outage, but an outage alert was sent "
                            "within %dh — suppressed.", ALERT_COOLDOWN_HRS)
+
+    # ── GRADE EVERY TAKEN SIGNAL WHOSE WINDOW HAS CLOSED ──
+    #
+    # results/forward_grading_preregistration.md. The forward record had intake
+    # and no grading: outcomes came only from journal trades, and base signals
+    # are not alerted, so they were never traded, so they were never graded.
+    # forward_log.resolve_signal() is a pure function of the row and the bars
+    # that followed it (stdlib only; the frame is handed over as plain dicts);
+    # this is the one place that feeds it market data. Runs on every run(),
+    # including --record-only. Non-fatal: a grading failure never costs an
+    # alert. Placed AFTER the scan loop so a watchlist ticker reuses the
+    # frame already fetched; a ticker that has left the watchlist is fetched
+    # here, once.
+    try:
+        def _bars_for(tk: str):
+            _df = frames.get(tk)
+            if _df is None:
+                time.sleep(FETCH_GAP_SEC)
+                _df = get_data(tk)
+            return bars_for_grading(_df) if _df is not None else None
+        _grep = forward_log.grade_open_signals(_bars_for)
+        if _grep["graded"] or _grep["void"]:
+            logger.info("forward log: graded %d signal(s), %d void, %d still open",
+                        _grep["graded"], _grep["void"], _grep["unsettled"])
+        for _d in _grep["detail"][:10]:
+            logger.info("forward log: %s", _d)
+        if _grep["failed"] or _grep["no_data"]:
+            logger.warning("forward log: grading skipped %d (no data) / %d (error)",
+                           _grep["no_data"], _grep["failed"])
+    except Exception as _exc:                          # noqa: BLE001
+        logger.warning("forward log: grading failed: %s", _exc)
 
     # ── RECORD THAT THIS SCAN HAPPENED ──
     #
@@ -1533,6 +1585,60 @@ def _selftest_body() -> int:
     finally:
         forward_log.LOG = _real_log3
         globals()["send_alert"] = _real_send3
+
+    # ── THE GRADER IS WIRED INTO run(), AND REUSES THE SCAN'S FRAMES ──
+    # results/forward_grading_preregistration.md. A taken signal on a
+    # watchlist ticker is graded from the frame the scan already fetched; one
+    # on a ticker that left the watchlist costs exactly one extra fetch.
+    _tmpl4 = _pl2.Path(_tf2.mkdtemp()) / "grade.jsonl"
+    _real_log4 = forward_log.LOG
+    _real_send4 = globals()["send_alert"]
+    try:
+        forward_log.LOG = _tmpl4
+        globals()["send_alert"] = lambda m, dry_run=False: True
+        import pandas as _pd4
+        _idx = _pd4.bdate_range("2026-03-02", periods=30)
+        _fr4 = _pd4.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0,
+                               "Close": 100.0, "Volume": 1e6}, index=_idx)
+        _fr4.loc[_idx[5], ["Open", "High", "Low", "Close"]] = [107.0, 108.0, 106.5, 107.5]   # gaps through the target
+        _setup4 = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0}
+        forward_log.record_signal("AAA", "Bullish", _setup4, "taken", "", {"k": 1},
+                                  bar_date=str(_idx[0].date()), hq=False)
+        forward_log.record_signal("GONE", "Bullish", _setup4, "taken", "", {"k": 1},
+                                  bar_date=str(_idx[0].date()), hq=False)
+        _fetched: list = []
+        _g = globals()
+        _saved = {k: _g[k] for k in ("get_data", "compute", "analyze",
+                                     "get_spy_regime", "save_state", "load_state",
+                                     "WATCHLIST", "FETCH_GAP_SEC")}
+        try:
+            _g["get_data"] = lambda tk: (_fetched.append(tk) or _fr4)
+            _g["compute"] = lambda df: df
+            _g["analyze"] = lambda df, tk, spy_regime=None, tally=None: None
+            _g["get_spy_regime"] = lambda: None
+            _g["save_state"] = lambda st: None
+            _g["load_state"] = lambda: {}
+            _g["WATCHLIST"] = ["AAA"]
+            _g["FETCH_GAP_SEC"] = 0
+            import argparse as _ap4
+            run(_ap4.Namespace(force=True, dry_run=True))
+        finally:
+            _g.update(_saved)
+        _outs4 = {o["ticker"]: o for o in forward_log.read_all(_tmpl4)
+                  if o["kind"] == "outcome"}
+        assert set(_outs4) == {"AAA", "GONE"}, (
+            f"run() must grade every open taken signal; graded {sorted(_outs4)}")
+        assert _outs4["AAA"]["basis"] == "stop_distance" \
+            and _outs4["AAA"]["detail"]["exit_rule"] == "target" \
+            and _outs4["AAA"]["detail"]["gap_fill"] is True, _outs4["AAA"]
+        assert _fetched == ["AAA", "GONE"], (
+            f"fetches {_fetched}: the watchlist frame must be reused for AAA "
+            f"and GONE fetched exactly once")
+        print("grader wiring           : run() grades open signals after the "
+              "scan, reusing the scan's frame; one fetch for a departed ticker")
+    finally:
+        forward_log.LOG = _real_log4
+        globals()["send_alert"] = _real_send4
 
     print("\nAll self-tests passed.")
     return 0
