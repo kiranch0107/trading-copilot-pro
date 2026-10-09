@@ -353,7 +353,7 @@ def record_outcome(ref_seq: int, outcome: str, r: float | None, basis: str,
             f"no signal at seq {ref_seq} to attach an outcome to. An outcome "
             f"pointing at nothing is how a result gets recorded for a trade "
             f"that was never logged")
-    if ref.get("decision") != "taken":
+    if not counts_as_taken(ref):
         raise ValueError(
             f"seq {ref_seq} was {ref.get('decision')!r}, not taken. A skipped "
             f"signal has no outcome to record — inventing one would put "
@@ -539,8 +539,7 @@ def grade_open_signals(fetch, path: Path | None = None, today=None) -> dict:
     rows = read_all(path)
     have = {(o.get("ref_seq"), o.get("basis")) for o in rows
             if o.get("kind") == "outcome"}
-    open_sigs = [s for s in rows if s.get("kind") == "signal"
-                 and s.get("decision") == "taken"
+    open_sigs = [s for s in rows if counts_as_taken(s)
                  and (s.get("seq"), "stop_distance") not in have]
     report = {"graded": 0, "void": 0, "unsettled": 0, "no_data": 0,
               "failed": 0, "detail": []}
@@ -663,8 +662,7 @@ def attach_outcomes(journal: list, path: Path | None = None,
     """
     import datetime as _dt
     rows = read_all(path)
-    taken = [r for r in rows if r.get("kind") == "signal"
-             and r.get("decision") == "taken"]
+    taken = [r for r in rows if counts_as_taken(r)]
     # PREMIUM BASIS ONLY. A signal the grader has already resolved on the
     # stop-distance basis can still take the journal's premium outcome; the
     # two are different measurements of one signal and coexist.
@@ -719,7 +717,7 @@ def attach_outcomes(journal: list, path: Path | None = None,
                 report["detail"].append(f"{tid}: signal_key {key!r} is not in the log")
                 continue
             sig = keyed[0]
-            if sig.get("decision") != "taken":
+            if not counts_as_taken(sig):
                 report["no_match"] += 1
                 report["detail"].append(
                     f"{tid}: signal_key {key!r} names a {sig.get('decision')} "
@@ -804,6 +802,29 @@ def attach_outcomes(journal: list, path: Path | None = None,
     return report
 
 
+# THE 19 ROWS FROM BEFORE THE TAG. Until 2026-10-08 a long base signal that
+# failed the HQ tier was written as `skipped: not high-quality`. The owner's
+# decision on BACKLOG 24 (results/forward_record_preregistration.md) fixed,
+# before any outcome was seen, that those rows "count as taken, hq=false for
+# every analysis". So they are graded, attachable and counted exactly like a
+# taken row written after the change. The rule is dated and literal on
+# purpose: a `skipped` row with any other reason, or this reason after the
+# cutoff, is a real skip and stays one.
+LEGACY_BASE_REASON = "not high-quality"
+LEGACY_BASE_CUTOFF = "2026-10-08"
+
+
+def counts_as_taken(row: dict) -> bool:
+    """A taken signal, or a pre-tag base signal the pre-registration reads as one."""
+    if row.get("kind") != "signal":
+        return False
+    if row.get("decision") == "taken":
+        return True
+    return (row.get("decision") == "skipped"
+            and row.get("reason") == LEGACY_BASE_REASON
+            and str(row.get("bar_date") or "9999") < LEGACY_BASE_CUTOFF)
+
+
 def _is_hq(row: dict) -> bool:
     """The HQ tag, reading the top-level field first and the setup for rows
     written before it existed."""
@@ -824,8 +845,8 @@ def summary(path: Path | None = None) -> dict:
     sigs = [r for r in rows if r.get("kind") == "signal"]
     outs = [r for r in rows if r.get("kind") == "outcome"]
     scans = [r for r in rows if r.get("kind") == "scan"]
-    taken = [s for s in sigs if s.get("decision") == "taken"]
-    skipped = [s for s in sigs if s.get("decision") == "skipped"]
+    taken = [s for s in sigs if counts_as_taken(s)]
+    skipped = [s for s in sigs if not counts_as_taken(s)]
     taken_hq = [s for s in taken if _is_hq(s)]
     configs = sorted({s.get("config") for s in sigs if s.get("config")})
     # BY BASIS, AND ONLY BY BASIS. A premium R and a stop-distance R are
@@ -1180,6 +1201,50 @@ def selftest() -> int:
     assert (_hs["taken"], _hs["taken_hq"], _hs["taken_base"]) == (3, 2, 1), _hs
     print("hq tag           : on the row when given; summary splits taken "
           "2 hq / 1 base, legacy rows read from setup")
+
+    # ── THE 19 PRE-TAG ROWS COUNT AS TAKEN, hq=False — dated and literal ──
+    legacy = {"kind": "signal", "decision": "skipped", "reason": "not high-quality",
+              "bar_date": "2026-09-16", "setup": {"high_quality": False}}
+    assert counts_as_taken(legacy) is True
+    assert counts_as_taken(dict(legacy, bar_date="2026-10-08")) is False, \
+        "on or after the cutoff the tag exists; a skip is a skip"
+    assert counts_as_taken(dict(legacy, reason="direction gate: shorts are switched off")) is False, \
+        "only the not-high-quality reason is the pre-tag base signal"
+    assert counts_as_taken(dict(legacy, decision="taken")) is True
+    assert counts_as_taken({"kind": "scan"}) is False
+    ao_leg = Path(tempfile.mkdtemp()) / "legacy.jsonl"
+    record_signal("TMO", "Bullish", dict(setup, high_quality=False), "skipped",
+                  "not high-quality", cfg, bar_date="2026-09-30", path=ao_leg)
+    record_signal("TMO", "Bearish", setup, "skipped", "direction gate", cfg,
+                  bar_date="2026-09-30", path=ao_leg)
+    _ls = summary(ao_leg)
+    assert (_ls["taken"], _ls["taken_base"], _ls["skipped"]) == (1, 1, 1), _ls
+    record_outcome(1, "loss", -1.2, "stop_distance", path=ao_leg)     # legacy row: allowed
+    try:
+        record_outcome(2, "loss", -1.0, "stop_distance", path=ao_leg)
+    except ValueError as e:
+        assert "not taken" in str(e), e
+    else:
+        raise AssertionError("a real skip (direction gate) took an outcome")
+    # ...and the GRADER grades them: the 19 rows on file are exactly this.
+    _lb = [{"date": "2026-09-30", "open": 99.0, "high": 101.0, "low": 98.5, "close": 100.0}]
+    import datetime as _dtl
+    for i in range(1, 25):
+        d = (_dtl.date(2026, 9, 30) + _dtl.timedelta(days=i)).isoformat()
+        _lb.append({"date": d, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0})
+    ao_leg2 = Path(tempfile.mkdtemp()) / "legacy2.jsonl"
+    record_signal("TMO", "Bullish", dict(setup, price=100.0, stop=98.0, target=106.0,
+                                        high_quality=False), "skipped",
+                  "not high-quality", cfg, bar_date="2026-09-30", path=ao_leg2)
+    record_signal("TMO", "Bearish", dict(setup, price=100.0, stop=102.0, target=94.0),
+                  "skipped", "direction gate", cfg, bar_date="2026-09-30", path=ao_leg2)
+    _lg = grade_open_signals(lambda tk: _lb, path=ao_leg2, today=_dtl.date(2026, 12, 1))
+    assert _lg["graded"] == 1 and _lg["failed"] == 0, (
+        _lg, "the pre-tag base row must be graded; the direction-gate skip must not be offered")
+    _lo = [x for x in read_all(ao_leg2) if x["kind"] == "outcome"]
+    assert len(_lo) == 1 and _lo[0]["ref_seq"] == 1 and _lo[0]["detail"]["exit_rule"] == "timeout"
+    print("legacy base rows : pre-2026-10-08 'not high-quality' skips count as "
+          "taken hq=False (graded, counted); other skips do not")
 
     # ── THE GRADER: every row of the pre-registration's rules table ──
     # (results/forward_grading_preregistration.md)

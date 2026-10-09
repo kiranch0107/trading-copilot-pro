@@ -2159,8 +2159,17 @@ def check_post_close_record_wired() -> None:
     j = wf.find("name: Run scanner")
     assert j > 0 and "outputs.open == 'true'" in wf[j:j + 400], \
         "the alerting scan step must stay gated on the market being OPEN"
-    print("  scanner.yml        runs --record-only in the post-close window, "
-          "alerting scan stays session-only")
+    # A manual record_only dispatch runs the post-close pass and ONLY that:
+    # the alerting step must exclude it, or an evening dispatch would send
+    # trade alerts on a closed market.
+    import re as _re
+    _if = _re.search(r"name: Record the closed bar\n\s+if: ([^\n]+)", wf)
+    assert _if and "inputs.record_only == true" in _if.group(1), \
+        "the post-close step's `if:` must honour a manual record_only dispatch"
+    assert "inputs.record_only != true" in wf[j:j + 400], \
+        "the alerting scan must not run on a record_only dispatch"
+    print("  scanner.yml        runs --record-only in the post-close window or on a "
+          "record_only dispatch; alerting scan stays session-only")
 
 
 def check_hq_tier_annotates_record() -> None:
