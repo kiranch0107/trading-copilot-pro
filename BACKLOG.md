@@ -1277,6 +1277,17 @@ naming a skipped, missing or later-bar signal is refused with the reason, and
 an unkeyed row falls back to the five-day heuristic unchanged.
 `check_signal_key_round_trip()` pins the chain end to end. Item closed.
 
+**Gap found and closed 2026-10-09, before any outcome row existed.** The first
+grading run (10-09 11:07 ET) wrote nothing: `grade_open_signals()` graded only
+`decision == "taken"` rows, and the 19 pre-tag rows are `skipped: not
+high-quality`. The record pre-registration had fixed that those rows "count as
+taken, hq=false for every analysis"; the code did not say so. Now
+`forward_log.counts_as_taken()` does — dated (`bar_date < 2026-10-08`) and
+literal (that one reason) — and the grader, the journal attachment, the
+outcome guard and `summary()` all read through it. A `record_only` dispatch
+input on `scanner.yml` runs the post-close pass on demand, so the 19 rows were
+graded the same evening rather than on Monday.
+
 Outcome rows exist only through `attach_outcomes()`, which matches journal
 trades the owner actually took. Base signals are not alerted, so they are not
 traded, so they never get an outcome that way. Until something grades them the

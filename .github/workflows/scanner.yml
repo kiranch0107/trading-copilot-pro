@@ -123,6 +123,10 @@ on:
         description: 'Run even if the market is closed'
         type: boolean
         default: false
+      record_only:
+        description: 'Run the post-close record pass now (forward-log rows, grading, IV snapshot), whatever the clock says. No alerts.'
+        type: boolean
+        default: false
 
 concurrency:
   # A delayed run must never overlap the next scheduled one.
@@ -224,11 +228,11 @@ jobs:
           PY
 
       - name: Skip notice
-        if: steps.market.outputs.open != 'true' && steps.market.outputs.postclose != 'true' && inputs.force != true
+        if: steps.market.outputs.open != 'true' && steps.market.outputs.postclose != 'true' && inputs.force != true && inputs.record_only != true
         run: echo "Market closed — scan skipped. The coverage check below still runs."
 
       - name: Run scanner
-        if: steps.market.outputs.open == 'true' || inputs.force == true
+        if: (steps.market.outputs.open == 'true' || inputs.force == true) && inputs.record_only != true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -257,15 +261,19 @@ jobs:
       # shut; the next session's first scan alerts, because the cooldown does
       # not read the log) and no chain fetch. A forced dispatch takes the
       # alerting path above instead, as before.
+      # A manual dispatch with record_only=true runs this pass outside the
+      # window (--force skips the clock, nothing else): the day's bar is still
+      # the settled one after 18:00 ET, and this is how a grading or snapshot
+      # run is repeated the same evening without waiting for the next close.
       - name: Record the closed bar
-        if: steps.market.outputs.postclose == 'true' && inputs.force != true
+        if: (steps.market.outputs.postclose == 'true' && inputs.force != true) || inputs.record_only == true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}   # outage alert only
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
           USE_DYNAMIC_UNIVERSE: '1'
           LOG_LEVEL: ${{ inputs.log_level || 'INFO' }}
-        run: python scanner.py --record-only
+        run: python scanner.py --record-only ${{ inputs.record_only && '--force' || '' }}
 
       # ── THE ALARM FOR SILENCE — runs on EVERY run, scanned or not ──
       #
