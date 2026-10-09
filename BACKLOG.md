@@ -1288,6 +1288,17 @@ outcome guard and `summary()` all read through it. A `record_only` dispatch
 input on `scanner.yml` runs the post-close pass on demand, so the 19 rows were
 graded the same evening rather than on Monday.
 
+**First grading run 2026-10-09 22:20 UTC (`results/forward_grading_run1.txt`).**
+24 eligible signals, 12 settled, 12 still inside their windows, 0 void. Every
+graded row is hq=false. Rows: mean −0.60 R (3 wins, 9 losses). Episodes, the
+pre-registered unit: 5 settled of 12, mean −0.71 R. **Not a result** (5 against
+349). Descriptive by-products: no stop exit was gapped through, so the real-fill
+rule moved nothing on stops here and improved the three target fills; base
+signals carry small planned R:R (0.5–0.9 on the winners), so a target books well
+under +1 R against a −1 R stop; TMO's seven consecutive bars are one episode.
+No hq=true signal has fired since the log began, so the H0/H1 comparison has no
+hq arm yet.
+
 Outcome rows exist only through `attach_outcomes()`, which matches journal
 trades the owner actually took. Base signals are not alerted, so they are not
 traded, so they never get an outcome that way. Until something grades them the
