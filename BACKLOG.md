@@ -1313,6 +1313,26 @@ Two pieces, each needing its own pre-registration before a row is written:
 
 ---
 
+## 29. Day trading by chart reading — screened, not started
+
+**Owner's idea, 2026-10-08; screened 2026-10-09 in `results/day_trading_screen.md`.**
+
+Base rates first: fewer than 1 % of day traders profit persistently (Taiwan,
+every trader 1992–2006); 97 % of those who persist lose (Brazil, every trader
+2013–2015). RSI, volume and ADX measured d ≈ 0 on 1,457 daily setups here;
+Fibonacci has no controlled evidence; patterns and trendlines are testable only
+as rules. Power: 349 independent trades for +0.15 R, four to twelve months at
+intraday frequency, costs inside the bar, and a $5,000 account under the
+pattern-day-trader rule. The screen fixes a three-phase path: codify six rules
+and test them on 60 days of 5-minute bars against random entry (weeks); then,
+for what cannot be codified, a paper forward test of the owner's own chart
+reading read at 349 episodes against the base rate; live only on a cleared
+bar. Prediction on file: the indicator, Fibonacci and trendline rules show
+nothing; the opening-range rule is the one with a chance, and costs likely eat
+it. **Decision for the owner: whether to run Phase 1.**
+
+---
+
 ## Working conventions
 
 - `signal_core.py` is canonical. `consistency_check.py` enforces 41 cross-module
