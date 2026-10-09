@@ -1,0 +1,70 @@
+FORWARD GRADING — RUN 1 (results/forward_grading_preregistration.md)
+==============================================================================
+Run 2026-10-09 22:20 UTC by the scanner's post-close pass (record_only dispatch),
+main @ c361cdd, the first run after forward_log.counts_as_taken() made the
+19 pre-tag rows eligible as the pre-registration fixed. Bars: Yahoo, raw,
+through the scanner's own get_data(). Rules: the pre-registration's table,
+unchanged. Nobody computed or inspected these paths before this run.
+
+  eligible signals (taken, or pre-tag base): 24
+  graded this run: 12   still inside their 20-bar window: 12   void: 0
+
+   seq ticker bar         hq       rr outcome         r    r_lvl rule     gap   held episode 
+     1 TMO    2026-09-16  False   3.2 open                                           head    
+     2 TMO    2026-09-17  False   3.2 loss       -1.007   -1.007 stop     False   15 run     
+     3 TMO    2026-09-18  False   3.2 open                                           run     
+     4 TMO    2026-09-21  False   3.2 loss       -1.008   -1.008 stop     False   13 run     
+     5 TMO    2026-09-23  False   3.2 loss       -1.009   -1.009 stop     False   11 head    
+     6 TMO    2026-09-24  False   3.2 loss       -1.007   -1.007 stop     False    5 run     
+     7 CRWD   2026-09-28  False   3.2 open                                           head    
+     8 TMO    2026-09-28  False   3.2 loss       -1.007   -1.007 stop     False    3 head    
+     9 AMD    2026-09-28  False  0.88 win        +0.465   +0.461 target   True     4 head    
+    10 PFE    2026-09-28  False  3.21 loss       -1.011   -1.011 stop     False    3 head    
+    11 NVDA   2026-09-28  False   3.2 open                                           head    
+    12 TMO    2026-09-29  False   3.2 loss       -1.008   -1.008 stop     False    2 run     
+    13 AMD    2026-09-29  False  0.91 win        +0.767   +0.763 target   True     3 run     
+    14 PFE    2026-09-29  False  3.21 loss       -1.008   -1.008 stop     False    2 run     
+    15 NVDA   2026-09-29  False  0.85 win        +0.696   +0.439 target   True     3 run     
+    16 AMD    2026-10-01  False   3.2 open                                           head    
+    17 NVDA   2026-10-01  False   3.2 open                                           head    
+    18 ACN    2026-10-07  False  2.67 open                                           head    
+    19 NVDA   2026-10-07  False  0.67 loss       -1.010   -1.010 stop     False    1 head    
+    24 PSX    2026-10-08  False   3.2 open                                           head    
+    25 ACN    2026-10-08  False  1.54 open                                           run     
+    26 NVDA   2026-10-08  False  1.62 open                                           run     
+    32 PSX    2026-10-09  False   3.2 open                                           run     
+    33 NVDA   2026-10-09  False  4.56 open                                           run     
+
+ROWS (descriptive, every graded row)
+  settled 12: mean R -0.596, wins 3, losses 9, breakeven 0
+  stop exits 9, of which gapped through: 0  -> mean(r - r_at_level) on stops +0.0000 (the BACKLOG 21 by-product)
+  target exits 3, of which filled at a better open: 3  -> mean(r - r_at_level) on targets +0.0882
+
+EPISODES (the pre-registered unit: first bar of a consecutive run per name and side)
+  ACN    2026-10-07  open
+  AMD    2026-09-28  win      +0.465 via target
+  AMD    2026-10-01  open
+  CRWD   2026-09-28  open
+  NVDA   2026-09-28  open
+  NVDA   2026-10-01  open
+  NVDA   2026-10-07  loss     -1.010 via stop
+  PFE    2026-09-28  loss     -1.011 via stop
+  PSX    2026-10-08  open
+  TMO    2026-09-16  open
+  TMO    2026-09-23  loss     -1.009 via stop
+  TMO    2026-09-28  loss     -1.007 via stop
+  settled episodes 5 of 12: mean R -0.714
+
+READING
+  NOT A RESULT. 5 settled episodes against the pre-registered 349.
+  Every graded row is hq=false (base signal below the tier); no hq=true signal
+  has fired since the log began, so the H0/H1 comparison has no hq arm yet.
+  Three observations for the record, descriptive only:
+    - every stop exit was touched intrabar with the open inside the levels, so
+      no stop filled worse than the level; the real-fill rule changed nothing on
+      stops here and improved the three target fills (they opened beyond target)
+    - the wins are small because base signals carry small planned R:R (rr 0.5-0.8
+      on these rows), so a target hit books well under +1 R while a stop books -1
+    - TMO ran seven consecutive bars and stopped on every one; as episodes that is
+      one observation, which is what the episode rule exists for
+==============================================================================
