@@ -137,11 +137,9 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
     """
     import ta
     d = df.copy().reset_index(drop=True)
-    ts = pd.to_datetime(d["Date"])
-    try:
-        ts = ts.dt.tz_convert("America/New_York")
-    except (TypeError, AttributeError):
-        pass
+    # utc=True for the same reason as bar_cache.frame_hash(): a cached hourly
+    # window across a daylight-saving change reads back with two UTC offsets.
+    ts = pd.to_datetime(d["Date"], utc=True).dt.tz_convert("America/New_York")
     d["session"] = ts.dt.date.astype(str)
     d["session_idx"] = d.groupby("session").ngroup()
     d["bar_in_session"] = d.groupby("session").cumcount()
@@ -768,6 +766,13 @@ def selftest() -> int:
         h_today = _session_frame([100.4, 99.6, 98.8, 99.9, 100.9, 101.6, 101.8], "2026-08-28",
                                  freq="60min", spread=0.2)
         hd = prepare(pd.concat(hdays + [h_orb, h_prev, h_today], ignore_index=True))
+        # A cached frame across the DST change arrives as mixed-offset STRINGS.
+        _dst = pd.concat([_session_frame([100.0] * 7, "2025-10-31", freq="60min"),
+                          _session_frame([100.0] * 7, "2025-11-03", freq="60min")],
+                         ignore_index=True)
+        _dst["Date"] = _dst["Date"].astype(str)
+        _pd = prepare(_dst)
+        assert sorted(_pd["session"].unique()) == ["2025-10-31", "2025-11-03"] and             _pd["bar_in_session"].max() == 6, "sessions must survive a DST change in ET"
         assert hd["bar_in_session"].max() == 6 and hd["session"].nunique() == 27
         def _hb(day):
             idx = hd.index[hd["session"] == day]; return int(idx[0]), int(idx[-1])

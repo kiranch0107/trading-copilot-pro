@@ -129,7 +129,13 @@ def frame_hash(df: "pd.DataFrame") -> str:
             d[c] = pd.NA
     d = d[COLUMNS]
     if "Date" in d.columns:
-        d["Date"] = pd.to_datetime(d["Date"]).dt.strftime("%Y-%m-%d")
+        # utc=True: intraday bars carry a UTC offset, and a window that spans a
+        # daylight-saving change carries TWO (-04:00 and -05:00). Read back
+        # from CSV those are mixed-offset strings, which pandas refuses to
+        # parse without a common zone -- the two-year hourly cache failed on
+        # exactly that (2026-10-10). Normalising through UTC gives one zone;
+        # tz-naive daily dates are unaffected (the selftest pins their hash).
+        d["Date"] = pd.to_datetime(d["Date"], utc=True).dt.strftime("%Y-%m-%d")
     # Cast the numeric columns explicitly. Without this the digest is
     # DTYPE-sensitive: a Volume column of constant 1000000 writes as "1000000"
     # and reads back as int64, whose %.6f rendering differs from the float64
@@ -382,6 +388,35 @@ def clear() -> int:
 # ---------------------------------------------------------------------------
 
 def selftest() -> int:
+    # ── a window across a daylight-saving change round-trips ──
+    # Two UTC offsets in one Date column. store() hashes real datetimes;
+    # load() re-reads strings with mixed offsets. Before utc=True that raised
+    # "Mixed timezones detected" on every hourly cache hit.
+    import tempfile as _tf
+    _dst = pd.DataFrame({
+        "Date": pd.date_range("2025-10-31 09:30", periods=14, freq="60min",
+                              tz="America/New_York").append(
+                pd.date_range("2025-11-03 09:30", periods=7, freq="60min",
+                              tz="America/New_York")),
+        "Open": 1.0, "High": 2.0, "Low": 0.5, "Close": 1.5, "Volume": 10.0})
+    assert len({t.utcoffset() for t in _dst["Date"]}) == 2, "fixture must span the DST change"
+    _h0 = frame_hash(_dst)
+    _saved_dir, _saved_manifest = globals()["CACHE_DIR"], globals()["MANIFEST"]
+    try:
+        _tmpd = Path(_tf.mkdtemp())
+        globals()["CACHE_DIR"], globals()["MANIFEST"] = _tmpd, _tmpd / "manifest.json"
+        store("DST", "1h", 0, _dst, variant="2y-raw")
+        _back, _meta = load("DST", "1h", 0, "2y-raw")
+        assert _back is not None and _meta["hash"] == _h0 == frame_hash(_back),             "a DST-spanning hourly frame must load back with the hash it was stored under"
+    finally:
+        globals()["CACHE_DIR"], globals()["MANIFEST"] = _saved_dir, _saved_manifest
+    # And a tz-naive daily frame hashes exactly as it did before the fix, so
+    # no existing cache entry is orphaned.
+    _naive = pd.DataFrame({"Date": pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]),
+                           "Open": [1.0, 2.0, 3.0], "High": [1.5, 2.5, 3.5], "Low": [0.5, 1.5, 2.5],
+                           "Close": [1.2, 2.2, 3.2], "Volume": [100.0, 200.0, 300.0]})
+    assert frame_hash(_naive) == "04b95cf8f7452a7b",         "the hash of a tz-naive daily frame changed; every existing cache entry would miss"
+    print("DST round-trip   : mixed-offset hourly bars load with their stored hash; naive daily hash unchanged")
     global CACHE_DIR, MANIFEST
     import tempfile
 
