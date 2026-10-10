@@ -1,0 +1,108 @@
+intraday_rules: timeframe 1h (2y of 1h bars), 20 names
+intraday_rules: timeframe 1h (2y of 1h bars), 20 names
+  AAPL: 3459 bars, 499 sessions, 311 trades
+  AAPL: 3459 bars, 499 sessions, 311 trades
+  ADBE: 3459 bars, 499 sessions, 325 trades
+  ADBE: 3459 bars, 499 sessions, 325 trades
+  AMD: 3487 bars, 501 sessions, 319 trades
+  AMD: 3487 bars, 501 sessions, 319 trades
+  AMZN: 3487 bars, 501 sessions, 317 trades
+  AMZN: 3487 bars, 501 sessions, 317 trades
+  AVGO: 3487 bars, 501 sessions, 326 trades
+  AVGO: 3487 bars, 501 sessions, 326 trades
+  CRM: 3487 bars, 501 sessions, 315 trades
+  CRM: 3487 bars, 501 sessions, 315 trades
+  GOOGL: 3487 bars, 501 sessions, 310 trades
+  GOOGL: 3487 bars, 501 sessions, 310 trades
+  LRCX: 3464 bars, 499 sessions, 306 trades
+  LRCX: 3464 bars, 499 sessions, 306 trades
+  META: 3487 bars, 501 sessions, 336 trades
+  META: 3487 bars, 501 sessions, 336 trades
+  MSFT: 3462 bars, 499 sessions, 312 trades
+  MSFT: 3462 bars, 499 sessions, 312 trades
+  MU: 3487 bars, 501 sessions, 303 trades
+  MU: 3487 bars, 501 sessions, 303 trades
+  NFLX: 3487 bars, 501 sessions, 339 trades
+  NFLX: 3487 bars, 501 sessions, 339 trades
+  NOW: 3458 bars, 499 sessions, 323 trades
+  NOW: 3458 bars, 499 sessions, 323 trades
+  NVDA: 3459 bars, 499 sessions, 310 trades
+  NVDA: 3459 bars, 499 sessions, 310 trades
+  ORCL: 3487 bars, 501 sessions, 320 trades
+  ORCL: 3487 bars, 501 sessions, 320 trades
+  PANW: 3462 bars, 499 sessions, 336 trades
+  PANW: 3462 bars, 499 sessions, 336 trades
+  QCOM: 3487 bars, 501 sessions, 325 trades
+  QCOM: 3487 bars, 501 sessions, 325 trades
+  QQQ: 3487 bars, 501 sessions, 299 trades
+  QQQ: 3487 bars, 501 sessions, 299 trades
+  SPY: 3487 bars, 501 sessions, 283 trades
+  SPY: 3487 bars, 501 sessions, 283 trades
+  TSLA: 3487 bars, 501 sessions, 286 trades
+  TSLA: 3487 bars, 501 sessions, 286 trades
+  engine tally: {'skipped: position open': 2571, 'gapped past target before fill': 20}
+  engine tally: {'skipped: position open': 2571, 'gapped past target before fill': 20}
+==============================================================================
+SIX INTRADAY RULES ON 1H BARS — results/intraday_rules_hourly_preregistration.md
+==============================================================================
+  timeframe 1h (2y)   names 20   sessions 495   costs 5 bps/side   flat at the close   CI z=2.24   fingerprint v2-eb11301b7b4c55e4
+
+  orb
+    setups   820   mean R -0.006   97.5% CI [-0.047, +0.035]   wins 13   timeouts 779
+    random null +0.021 over 20 draws; real at percentile 0
+    RVOL T1 [1.50..1.75]        n  273  mean R -0.009
+    RVOL T2 [1.75..2.20]        n  273  mean R -0.034
+    RVOL T3 [2.20..22.02]       n  274  mean R +0.024
+      - mean R -0.006 < +0.15
+      - clustered CI lower -0.047 <= 0 (349 session clusters, z=2.24)
+      - over random null -0.027 < +0.15
+    VERDICT: does not clear
+
+  vwap_reclaim
+    setups   100   mean R -0.184   97.5% CI [-0.310, -0.059]   wins 29   timeouts 61
+    random null +0.098 over 20 draws; real at percentile 0
+      - mean R -0.184 < +0.15
+      - clustered CI lower -0.310 <= 0 (65 session clusters, z=2.24)
+      - over random null -0.282 < +0.15
+    VERDICT: does not clear
+
+  ema_pullback
+    setups  1076   mean R -0.141   97.5% CI [-0.205, -0.077]   wins 54   timeouts 792
+    random null -0.118 over 20 draws; real at percentile 0
+      - mean R -0.141 < +0.15
+      - clustered CI lower -0.205 <= 0 (408 session clusters, z=2.24)
+      - over random null -0.023 < +0.15
+    VERDICT: does not clear
+
+  rsi_divergence
+    setups  1709   mean R -0.136   97.5% CI [-0.189, -0.083]   wins 89   timeouts 1273
+    random null -0.135 over 20 draws; real at percentile 55
+      - mean R -0.136 < +0.15
+      - clustered CI lower -0.189 <= 0 (456 session clusters, z=2.24)
+      - over random null -0.001 < +0.15
+    VERDICT: does not clear
+
+  fib_pullback
+    setups  1742   mean R -0.099   97.5% CI [-0.134, -0.064]   wins 592   timeouts 952
+    random null -0.078 over 20 draws; real at percentile 0
+    zone named         n  510  mean R -0.163
+    zone control_low   n  985  mean R -0.054
+    zone control_high  n  247  mean R -0.144
+      - mean R -0.099 < +0.15
+      - clustered CI lower -0.134 <= 0 (471 session clusters, z=2.24)
+      - over random null -0.021 < +0.15
+      - rule-specific clause failed
+    VERDICT: does not clear
+
+  trendline_break
+    setups   854   mean R -0.150   97.5% CI [-0.203, -0.097]   wins 20   timeouts 713
+    random null -0.063 over 20 draws; real at percentile 0
+      - mean R -0.150 < +0.15
+      - clustered CI lower -0.203 <= 0 (387 session clusters, z=2.24)
+      - over random null -0.087 < +0.15
+    VERDICT: does not clear
+
+==============================================================================
+  No rule clears. On these names, over this window, net of costs, none of the
+  six objective versions of the proposed tools beat random entry by the bar.
+==============================================================================
