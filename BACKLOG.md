@@ -1324,7 +1324,7 @@ Two pieces, each needing its own pre-registration before a row is written:
 
 ---
 
-## 29. Day trading by chart reading — screened, not started
+## 29. Day trading by chart reading — PHASE 1 RUN 2026-10-10: NO RULE CLEARS
 
 **Owner's idea, 2026-10-08; screened 2026-10-09 in `results/day_trading_screen.md`.**
 
@@ -1348,7 +1348,22 @@ with twenty fixed seeds, a session-clustered CI, and the three-part bar.
 `check_intraday_rules_match_preregistration()` holds the code's constants to
 the document's numbers. **Owed: the run, on the laptop** — `python
 intraday_rules.py | tee results/intraday_rules_run1.txt` — which fetches 60
-days of 5-minute bars for 21 names into `.bar_cache/` on first use.
+days of 5-minute bars for 20 names into `.bar_cache/` on first use.
+
+**Run 2026-10-10 by the owner (`results/intraday_rules_run1.md`, raw
+`_run1.txt`).** 20 names, 60 sessions, fingerprint `v2-9b37aca34d3c5b84`.
+**No rule clears; five of six have a session-clustered CI entirely below
+zero.** Opening-range breakout: 127 setups, zero reached target, RVOL
+dose-response absent (−0.04 → −0.12 → −0.11). VWAP reclaim: 72 % wins,
+−0.16 R. EMA pullback: −0.39 R, worse than random by 0.17. RSI divergence:
+−0.19 R but beats random entry by +0.27 (the one timing effect; it does not
+pay for its geometry). Fibonacci: the named zone (−0.20) was WORSE than both
+arbitrary control zones (−0.10, −0.16) — the tool is refuted, not just the
+signal. Trendline break: −0.27 R, beats random by +0.11, below the margin.
+Prediction scored: rules 3 and 5 as predicted, 4 and 6 partly wrong (timing
+content exists, does not survive costs), rule 1 wrong. No confirmation window
+is owed and none will be run. Phase 2 (paper forward test of the owner's own
+reading, 349 episodes, base-rate framing) remains the owner's call.
 
 ---
 
