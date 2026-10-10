@@ -1,0 +1,64 @@
+==============================================================================
+SIX INTRADAY RULES ON 5-MINUTE BARS — results/intraday_rules_preregistration.md
+==============================================================================
+  names 20   sessions 60   costs 5 bps/side   flat at the close   fingerprint v2-9b37aca34d3c5b84
+
+  orb
+    setups   127   mean R -0.090   95% CI [-0.184, +0.004]   wins 0   timeouts 113
+    random null -0.013 over 20 draws; real at percentile 0
+    RVOL T1 [1.51..1.70]        n   42  mean R -0.041
+    RVOL T2 [1.71..2.12]        n   42  mean R -0.115
+    RVOL T3 [2.12..10.02]       n   43  mean R -0.114
+      - mean R -0.090 < +0.15
+      - clustered CI lower -0.184 <= 0 (43 session clusters)
+      - over random null -0.077 < +0.15
+    VERDICT: does not clear
+
+  vwap_reclaim
+    setups   646   mean R -0.159   95% CI [-0.209, -0.108]   wins 463   timeouts 22
+    random null -0.111 over 20 draws; real at percentile 0
+      - mean R -0.159 < +0.15
+      - clustered CI lower -0.209 <= 0 (60 session clusters)
+      - over random null -0.048 < +0.15
+    VERDICT: does not clear
+
+  ema_pullback
+    setups   440   mean R -0.394   95% CI [-0.483, -0.305]   wins 82   timeouts 114
+    random null -0.225 over 20 draws; real at percentile 0
+      - mean R -0.394 < +0.15
+      - clustered CI lower -0.483 <= 0 (60 session clusters)
+      - over random null -0.169 < +0.15
+    VERDICT: does not clear
+
+  rsi_divergence
+    setups   277   mean R -0.194   95% CI [-0.354, -0.035]   wins 84   timeouts 57
+    random null -0.467 over 20 draws; real at percentile 100
+      - mean R -0.194 < +0.15
+      - clustered CI lower -0.354 <= 0 (58 session clusters)
+      - over random null +0.273 >= +0.15
+    VERDICT: does not clear
+
+  fib_pullback
+    setups   741   mean R -0.145   95% CI [-0.214, -0.076]   wins 392   timeouts 104
+    random null -0.154 over 20 draws; real at percentile 65
+    zone named         n  213  mean R -0.198
+    zone control_low   n  352  mean R -0.104
+    zone control_high  n  176  mean R -0.162
+      - mean R -0.145 < +0.15
+      - clustered CI lower -0.214 <= 0 (60 session clusters)
+      - over random null +0.009 < +0.15
+      - rule-specific clause failed
+    VERDICT: does not clear
+
+  trendline_break
+    setups   420   mean R -0.273   95% CI [-0.384, -0.163]   wins 93   timeouts 121
+    random null -0.380 over 20 draws; real at percentile 100
+      - mean R -0.273 < +0.15
+      - clustered CI lower -0.384 <= 0 (60 session clusters)
+      - over random null +0.107 < +0.15
+    VERDICT: does not clear
+
+==============================================================================
+  No rule clears. On these names, over this window, net of costs, none of the
+  six objective versions of the proposed tools beat random entry by the bar.
+==============================================================================
