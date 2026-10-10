@@ -182,6 +182,8 @@ jobs:
         run: python forward_log.py --selftest
       - name: iv_snapshot.py — the forward single-name premium (BACKLOG 25 Part B)
         run: python iv_snapshot.py --selftest
+      - name: intraday_rules.py — six chart-reading rules on 5-minute bars (BACKLOG 29 Phase 1)
+        run: python intraday_rules.py --selftest
 
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py
