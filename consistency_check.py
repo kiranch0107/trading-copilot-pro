@@ -2493,7 +2493,8 @@ def check_intraday_rules_match_preregistration() -> None:
             p5["structure_sessions"], p5["ci_z"]) == ("60d", "5m", 6, 3, 10, 1, 1.96), p5
     hdoc = Path("results/intraday_rules_hourly_preregistration.md").read_text(encoding="utf-8")
     p1 = ir.TIMEFRAMES["1h"]
-    assert "**730 calendar days**" in hdoc and p1["period"] == "730d" and p1["interval"] == "1h"
+    assert "**730 calendar days**" in hdoc and p1["period"] == "2y" and p1["interval"] == "1h", \
+        "the hourly fetch is the provider's canonical 2y (= 730 days)"
     assert "opening range = the first bar" in hdoc and p1["or_bars"] == 1, "hourly opening range"
     assert "pivots over ±1 bar" in hdoc and p1["pivot_w"] == 1, "hourly pivot window"
     assert "≥ 3 bars apart" in hdoc and p1["div_min_bars"] == 3, "hourly divergence spacing"
