@@ -28,7 +28,7 @@ return "unmeasurable".
 
 | item | value |
 |---|---|
-| bars | Yahoo, 1-hour, regular hours only, `auto_adjust=False`, **730 calendar days** ending the run date, frozen in `.bar_cache/` under its own key. Sessions have 7 bars starting 09:30; the last (15:30) is a half-hour bar and is treated like any other |
+| bars | Yahoo, 1-hour, regular hours only, `auto_adjust=False`, **730 calendar days** (the provider's `2y`) ending the run date, frozen in `.bar_cache/` under its own key. Sessions have 7 bars starting 09:30; the last (15:30) is a half-hour bar and is treated like any other |
 | universe | the same 20 symbols as the 5-minute test |
 | sessions | one trade per rule per name per session; one position per name at a time; **flat at the session's last bar** |
 | entry / exit / costs / fills | identical to the 5-minute test: next-bar open + 5 bps, stop first, target, else the close; gapped levels fill at the open; 5 bps a side |
