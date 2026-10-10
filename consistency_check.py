@@ -2459,6 +2459,36 @@ def check_iv_snapshot_single_writer_and_committed() -> None:
     print("  one writer (scanner.py, post-close only), stdlib reader, committed by scanner.yml")
 
 
+def check_intraday_rules_match_preregistration() -> None:
+    """
+    intraday_rules.py's constants are the numbers its pre-registration fixed.
+
+    The document was written first and the code from it; a constant edited in
+    the code without a dated amendment in the document is the drift the
+    pre-registration exists to prevent. Each number below is read from the
+    document's text and compared to the module.
+    """
+    import intraday_rules as ir
+    doc = Path("results/intraday_rules_preregistration.md").read_text(encoding="utf-8")
+    assert "5 bps per side" in doc and ir.SLIPPAGE_BPS == 5.0, "slippage"
+    assert "first 6 bars" in doc and ir.OR_BARS == 6, "opening range"
+    assert "RVOL ≥ 1.5" in doc and ir.RVOL_MIN == 1.5, "RVOL floor"
+    assert "≥ 1 ATR below VWAP" in doc and ir.VWAP_DEV_ATR == 1.0, "VWAP deviation"
+    assert "≥ 10 bars" in doc and ir.DIV_MIN_BARS == 10, "divergence spacing"
+    assert "±3 bars" in doc and ir.PIVOT_W == 3, "pivot window"
+    assert "prior 20 sessions" in doc and ir.RVOL_LOOKBACK == 20, "RVOL lookback"
+    assert "named 50.0–61.8 %" in doc and ir.FIB_ZONES["named"] == (0.500, 0.618), "named zone"
+    assert "control-low 30.0–41.8 %" in doc and ir.FIB_ZONES["control_low"] == (0.300, 0.418)
+    assert "control-high 70.0–81.8 %" in doc and ir.FIB_ZONES["control_high"] == (0.700, 0.818)
+    assert "mean R ≥ **+0.15**" in doc and ir.BAR_MEAN_R == 0.15, "bar on the mean"
+    assert "≥ **+0.15 R**" in doc and ir.BAR_OVER_NULL == 0.15, "bar over the null"
+    assert "Twenty draws" in doc and ir.NULL_DRAWS == 20, "null draws"
+    assert "20 symbols" in doc and len(ir.UNIVERSE) == 20, f"universe has {len(ir.UNIVERSE)} names"
+    assert "60 calendar days" in doc and ir.PERIOD == "60d" and ir.INTERVAL == "5m"
+    assert "python intraday_rules.py --selftest" in Path(".github/workflows/tests.yml").read_text()
+    print("  intraday_rules constants equal the pre-registration's numbers; selftest in CI")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -2479,6 +2509,7 @@ CHECKS = [
     ("signal key rides alert->app->journal->log", check_signal_key_round_trip),
     ("option IV multiplier has one home",          check_option_iv_single_source),
     ("IV snapshot: one writer, committed, post-close", check_iv_snapshot_single_writer_and_committed),
+    ("intraday rules match their pre-registration", check_intraday_rules_match_preregistration),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),

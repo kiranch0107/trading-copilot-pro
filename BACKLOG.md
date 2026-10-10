@@ -1340,14 +1340,22 @@ for what cannot be codified, a paper forward test of the owner's own chart
 reading read at 349 episodes against the base rate; live only on a cleared
 bar. Prediction on file: the indicator, Fibonacci and trendline rules show
 nothing; the opening-range rule is the one with a chance, and costs likely eat
-it. **Decision for the owner: whether to run Phase 1.**
+it. **Owner decided 2026-10-09: run Phase 1.** Pre-registered in
+`results/intraday_rules_preregistration.md` and built the same day as
+`intraday_rules.py`: six detectors on one shared feature set, next-open entry,
+flat at the session's close, 5 bps a side, drift_null's random-entry benchmark
+with twenty fixed seeds, a session-clustered CI, and the three-part bar.
+`check_intraday_rules_match_preregistration()` holds the code's constants to
+the document's numbers. **Owed: the run, on the laptop** — `python
+intraday_rules.py | tee results/intraday_rules_run1.txt` — which fetches 60
+days of 5-minute bars for 21 names into `.bar_cache/` on first use.
 
 ---
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 41 cross-module
-  invariants (41 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 42 cross-module
+  invariants (42 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip
