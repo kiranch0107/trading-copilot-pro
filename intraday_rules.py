@@ -29,9 +29,17 @@ THE BAR (per rule)
     over the random null. Rule 5 additionally: the named Fibonacci zone beats
     both control zones by >= +0.15 R.
 
+TIMEFRAME PROFILES (each its own pre-registration; see TIMEFRAMES)
+    5m  60 days, flat at the session's close              (run 2026-10-10)
+    1h  two years, flat at the session's close            (run 2026-10-10)
+    4h  resampled from the hourly cache, the rules read the trading WEEK
+        and hold up to ten bars across sessions: a SWING test of the same
+        tools, not day trading, because a session holds only two 4h bars
+
 Run
 ---
     python intraday_rules.py                 # fetch (or read the cache) and report
+    python intraday_rules.py --timeframe 1h  # or 4h
     python intraday_rules.py --selftest      # offline, synthetic sessions
 """
 from __future__ import annotations
@@ -67,28 +75,52 @@ VWAP_DEV_ATR = 1.0               # rule 2
 #   5m : results/intraday_rules_preregistration.md        (run 2026-10-10)
 #   1h : results/intraday_rules_hourly_preregistration.md (the second test of
 #        the family, so its interval is 97.5%: multiplicity paid up front)
+#   4h : results/intraday_rules_4h_preregistration.md (the THIRD test, 99%).
+#        Yahoo serves no 4h interval: the profile reads the HOURLY cache key
+#        and resamples in code, so it carries the hourly run's fingerprint.
+#        A session holds two 4h bars, so the rules' window ("session" in the
+#        code) is the trading WEEK and a position is held up to ten bars
+#        across sessions: swing, not day trading. The document says why.
+# Keys: resample (None or "4h"), group ("session" = calendar date, "week" =
+# ISO week), hold_bars (None = flat at the window's last bar, else a fixed
+# bar count), doc (the pre-registration the report names).
 TIMEFRAMES = {
-    "5m": {"period": "60d", "interval": "5m", "or_bars": 6, "pivot_w": 3,
-           "div_min_bars": 10, "structure_sessions": 1, "ci_z": 1.96},
-    "1h": {"period": "2y", "interval": "1h", "or_bars": 1, "pivot_w": 1,     # 2y = 730 days
-           "div_min_bars": 3, "structure_sessions": 2, "ci_z": 2.24},
+    "5m": {"period": "60d", "interval": "5m", "resample": None, "group": "session",
+           "hold_bars": None, "or_bars": 6, "pivot_w": 3, "div_min_bars": 10,
+           "structure_sessions": 1, "ci_z": 1.96,
+           "doc": "results/intraday_rules_preregistration.md"},
+    "1h": {"period": "2y", "interval": "1h", "resample": None, "group": "session",   # 2y = 730 days
+           "hold_bars": None, "or_bars": 1, "pivot_w": 1, "div_min_bars": 3,
+           "structure_sessions": 2, "ci_z": 2.24,
+           "doc": "results/intraday_rules_hourly_preregistration.md"},
+    "4h": {"period": "2y", "interval": "1h", "resample": "4h", "group": "week",
+           "hold_bars": 10, "or_bars": 1, "pivot_w": 1, "div_min_bars": 3,
+           "structure_sessions": 2, "ci_z": 2.576,
+           "doc": "results/intraday_rules_4h_preregistration.md"},
 }
 TIMEFRAME = "5m"
 PERIOD = TIMEFRAMES["5m"]["period"]
 INTERVAL = TIMEFRAMES["5m"]["interval"]
+RESAMPLE = TIMEFRAMES["5m"]["resample"]
+GROUP = TIMEFRAMES["5m"]["group"]
+HOLD_BARS = TIMEFRAMES["5m"]["hold_bars"]
 OR_BARS = TIMEFRAMES["5m"]["or_bars"]
 PIVOT_W = TIMEFRAMES["5m"]["pivot_w"]
 DIV_MIN_BARS = TIMEFRAMES["5m"]["div_min_bars"]
 STRUCTURE_SESSIONS = TIMEFRAMES["5m"]["structure_sessions"]
 CI_Z = TIMEFRAMES["5m"]["ci_z"]
+DOC = TIMEFRAMES["5m"]["doc"]
+CI_LABEL = {1.96: "95", 2.24: "97.5", 2.576: "99"}
 
 
 def set_timeframe(name: str) -> dict:
     """Apply a pre-registered profile. Module constants are rebound so every
     detector and the statistics read the same profile."""
-    global TIMEFRAME, PERIOD, INTERVAL, OR_BARS, PIVOT_W, DIV_MIN_BARS, STRUCTURE_SESSIONS, CI_Z
+    global TIMEFRAME, PERIOD, INTERVAL, RESAMPLE, GROUP, HOLD_BARS, DOC
+    global OR_BARS, PIVOT_W, DIV_MIN_BARS, STRUCTURE_SESSIONS, CI_Z
     prof = TIMEFRAMES[name]
     TIMEFRAME, PERIOD, INTERVAL = name, prof["period"], prof["interval"]
+    RESAMPLE, GROUP, HOLD_BARS, DOC = prof["resample"], prof["group"], prof["hold_bars"], prof["doc"]
     OR_BARS, PIVOT_W, DIV_MIN_BARS = prof["or_bars"], prof["pivot_w"], prof["div_min_bars"]
     STRUCTURE_SESSIONS, CI_Z = prof["structure_sessions"], prof["ci_z"]
     return prof
@@ -117,12 +149,36 @@ def _yahoo_intraday(ticker: str) -> pd.DataFrame | None:
     return df[["Date", "Open", "High", "Low", "Close", "Volume"]]
 
 
+def resample_4h(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Two 4-hour bars per session from Yahoo's hourly bars: 09:30-13:30 (four
+    hourly bars) and 13:30-16:00 (three; the last is the half-hour bar). A
+    half-day session yields one bar. OHLC aggregate, volume sums, and the
+    bar's Date is its first hourly bar's. Yahoo serves no 4h interval, so the
+    4h profile is built from the frozen hourly cache and carries its
+    fingerprint: no new fetch.
+    """
+    d = df.copy().reset_index(drop=True)
+    ts = pd.to_datetime(d["Date"], utc=True).dt.tz_convert("America/New_York")
+    pm = ((ts.dt.hour * 60 + ts.dt.minute) >= 13 * 60 + 30).astype(int)
+    d["_key"] = ts.dt.strftime("%Y-%m-%d") + "-" + pm.astype(str)
+    d["_ts"] = ts
+    out = d.groupby("_key", sort=False).agg(
+        Date=("_ts", "first"), Open=("Open", "first"), High=("High", "max"),
+        Low=("Low", "min"), Close=("Close", "last"), Volume=("Volume", "sum"))
+    return out.sort_values("Date").reset_index(drop=True)
+
+
 def fetch_intraday(ticker: str) -> pd.DataFrame | None:
-    """60 days of 5-minute bars, frozen under their own cache key."""
+    """The profile's bars, frozen under their own cache key (the 4h profile
+    reads the hourly key and resamples)."""
     if bar_cache is None:
-        return _yahoo_intraday(ticker)
-    df, _meta, _status = bar_cache.get_or_fetch(
-        ticker, INTERVAL, 0, lambda: _yahoo_intraday(ticker), variant=f"{PERIOD}-raw")
+        df = _yahoo_intraday(ticker)
+    else:
+        df, _meta, _status = bar_cache.get_or_fetch(
+            ticker, INTERVAL, 0, lambda: _yahoo_intraday(ticker), variant=f"{PERIOD}-raw")
+    if df is not None and RESAMPLE == "4h":
+        df = resample_4h(df)
     return df
 
 
@@ -130,7 +186,8 @@ def fetch_intraday(ticker: str) -> pd.DataFrame | None:
 
 def prepare(df: pd.DataFrame) -> pd.DataFrame:
     """
-    One feature set for every rule. Adds: session (date), bar_in_session,
+    One feature set for every rule. Adds: session (the calendar date, or
+    the ISO week when the profile groups by week), bar_in_session,
     session_last (index of the session's last bar), EMA9, EMA20, RSI14,
     ATR14, VWAP, pivot_high / pivot_low flags, or_high / or_low (opening
     range), rvol (first-30-minute volume over the prior-20-session median).
@@ -140,7 +197,7 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
     # utc=True for the same reason as bar_cache.frame_hash(): a cached hourly
     # window across a daylight-saving change reads back with two UTC offsets.
     ts = pd.to_datetime(d["Date"], utc=True).dt.tz_convert("America/New_York")
-    d["session"] = ts.dt.date.astype(str)
+    d["session"] = ts.dt.strftime("%G-W%V") if GROUP == "week" else ts.dt.date.astype(str)
     d["session_idx"] = d.groupby("session").ngroup()
     d["bar_in_session"] = d.groupby("session").cumcount()
     d["session_last"] = d.groupby("session")["bar_in_session"].transform("max") + \
@@ -369,12 +426,20 @@ DETECTORS = {"orb": detect_orb, "vwap_reclaim": detect_vwap_reclaim,
 # ── simulation ──────────────────────────────────────────────────────────
 
 def simulate(d: pd.DataFrame, setup: dict, tally: dict | None = None) -> dict | None:
-    """One setup through backtest.simulate_trade, flat at the session's last bar."""
+    """One setup through backtest.simulate_trade: flat at the window's last
+    bar, or (hold_bars set) marked at the close of the hold_bars-th bar held,
+    the entry bar included, wherever that falls."""
     i = setup["signal_i"]
     _first, last = _session_bounds(d, i)
-    if i + 1 > last:
-        return None
-    cfg = {"slippage_bps": SLIPPAGE_BPS, "commission": 0.0, "max_hold": last - i}
+    if HOLD_BARS is None:
+        if i + 1 > last:
+            return None
+        max_hold = last - i
+    else:
+        if i + 1 >= len(d):
+            return None
+        max_hold = HOLD_BARS
+    cfg = {"slippage_bps": SLIPPAGE_BPS, "commission": 0.0, "max_hold": max_hold}
     r = bt.simulate_trade(d, i, {"trend": setup["trend"], "entry": setup["entry"],
                                  "stop": setup["stop"], "target": setup["target"],
                                  "rr": setup["rr"]}, cfg, tally=tally)
@@ -486,13 +551,14 @@ def terciles(trades: list[dict], key=lambda t: t["feature"]) -> list[tuple[str, 
 
 def analyse(all_trades: list[dict], frames: dict, fingerprint: str | None = None) -> int:
     print("=" * 78)
-    doc = ("results/intraday_rules_preregistration.md" if TIMEFRAME == "5m"
-           else "results/intraday_rules_hourly_preregistration.md")
-    print(f"SIX INTRADAY RULES ON {INTERVAL.upper()} BARS — {doc}")
+    print(f"SIX INTRADAY RULES ON {TIMEFRAME.upper()} BARS — {DOC}")
     print("=" * 78)
-    print(f"  timeframe {TIMEFRAME} ({PERIOD})   names {len(frames)}   "
-          f"sessions {len({t['session'] for t in all_trades}) if all_trades else 0}"
-          f"   costs {SLIPPAGE_BPS:g} bps/side   flat at the close   CI z={CI_Z}   "
+    hold = "flat at the close" if HOLD_BARS is None else f"held <= {HOLD_BARS} bars across sessions"
+    print(f"  timeframe {TIMEFRAME} ({PERIOD} of {INTERVAL}"
+          f"{', resampled' if RESAMPLE else ''})   names {len(frames)}   "
+          f"{'weeks' if GROUP == 'week' else 'sessions'} "
+          f"{len({t['session'] for t in all_trades}) if all_trades else 0}"
+          f"   costs {SLIPPAGE_BPS:g} bps/side   {hold}   CI z={CI_Z}   "
           f"fingerprint {fingerprint or 'n/a'}")
     worst_clear = []
     for rule in RULES:
@@ -509,7 +575,7 @@ def analyse(all_trades: list[dict], frames: dict, fingerprint: str | None = None
         pct = (100.0 * sum(1 for x in nulls if x < st["mean"]) / len(nulls)) if nulls and real else float("nan")
         print(f"\n  {rule}")
         print(f"    setups {st['n']:>5}   mean R {st['mean']:+.3f}   "
-              f"{'95' if CI_Z < 2 else '97.5'}% CI [{st['lo']:+.3f}, {st['hi']:+.3f}]"
+              f"{CI_LABEL.get(CI_Z, '?')}% CI [{st['lo']:+.3f}, {st['hi']:+.3f}]"
               f"   wins {sum(1 for t in real if t['outcome'] == 'win')}   timeouts {sum(1 for t in real if t['outcome'] == 'timeout')}")
         print(f"    random null {null_mean:+.3f} over {len(nulls)} draws; real at percentile {pct:.0f}")
         extra_ok = True
@@ -566,7 +632,8 @@ def run(tickers: list[str]) -> int:
             frames[tk] = d
             n_before = len(trades)
             trades += run_rules(d, tk, tally)
-            _say(f"  {tk}: {len(d)} bars, {d['session'].nunique()} sessions, "
+            _say(f"  {tk}: {len(d)} bars, {d['session'].nunique()} "
+                 f"{'weeks' if GROUP == 'week' else 'sessions'}, "
                  f"{len(trades) - n_before} trades")
             if bar_cache is not None:
                 _df, meta = bar_cache.load(tk, INTERVAL, 0, f"{PERIOD}-raw")
@@ -792,6 +859,90 @@ def selftest() -> int:
         assert st["z"] == 2.24 and st["hi"] > 2.0, "97.5% interval under the hourly profile"
         print("hourly profile   : 7-bar sessions, 1-bar opening range, two-session structure, "
               "divergence across the session boundary, 97.5% interval")
+    finally:
+        set_timeframe("5m")
+
+    # ── THE 4-HOUR PROFILE (results/intraday_rules_4h_preregistration.md) ──
+    # Built from hourly bars, read by the trading week, held across sessions.
+    p4 = TIMEFRAMES["4h"]
+    assert (p4["interval"], p4["period"]) == (TIMEFRAMES["1h"]["interval"], TIMEFRAMES["1h"]["period"]), \
+        "the 4h profile must read the hourly cache key: same bars, no new fetch"
+    # Seven weeks of hourly sessions (Mon-Fri), the last one shaped for a
+    # weekly opening-range breakout on 4x volume; one half-day session.
+    bdays = pd.bdate_range("2026-08-03", periods=35)
+    hsess = []
+    for k, day in enumerate(bdays):
+        rng = random.Random(500 + k)
+        n = 4 if k == 9 else 7                       # 2026-08-14 is a half day
+        if k < 30:
+            closes = [100 + rng.uniform(-0.2, 0.2) for _ in range(n)]
+            hsess.append(_session_frame(closes, day.strftime("%Y-%m-%d"), freq="60min", spread=0.3))
+        else:
+            step = k - 30                            # the shaped week
+            if step == 0:
+                closes = [100.0, 100.1, 99.9, 100.0, 100.4, 100.9, 101.4]   # am range, pm breakout
+                vols = [4e5] * 4 + [1e5] * 3
+            else:
+                base = 101.4 + 1.2 * step
+                closes = [base + 0.2 * j for j in range(7)]
+                vols = [1e5] * 7
+            hsess.append(_session_frame(closes, day.strftime("%Y-%m-%d"), freq="60min",
+                                        spread=0.3, vols=vols))
+    hourly = pd.concat(hsess, ignore_index=True)
+    h4 = resample_4h(hourly)
+    assert len(h4) == 2 * 34 + 1, f"two 4h bars a session, one on the half day: {len(h4)}"
+    am = hourly.iloc[0:4]; pm = hourly.iloc[4:7]
+    assert h4["Open"].iloc[0] == am["Open"].iloc[0] and h4["Close"].iloc[0] == am["Close"].iloc[-1]
+    assert h4["High"].iloc[0] == am["High"].max() and h4["Low"].iloc[0] == am["Low"].min()
+    assert h4["Volume"].iloc[0] == am["Volume"].sum() and h4["Volume"].iloc[1] == pm["Volume"].sum()
+    assert h4["Date"].iloc[1] == pm["Date"].iloc[0], "the pm bar is stamped 13:30"
+    assert h4["Date"].is_monotonic_increasing
+    # Mixed-offset strings (a cached frame across DST) resample the same way.
+    _s = hourly.copy(); _s["Date"] = _s["Date"].astype(str)
+    assert resample_4h(_s)["Close"].tolist() == h4["Close"].tolist()
+    print("4h resample      : 09:30-13:30 and 13:30-16:00 from hourly bars, OHLCV aggregated, "
+          "half day gives one bar")
+    set_timeframe("4h")
+    try:
+        assert (OR_BARS, PIVOT_W, DIV_MIN_BARS, STRUCTURE_SESSIONS, CI_Z, HOLD_BARS, GROUP, RESAMPLE) == \
+            (1, 1, 3, 2, 2.576, 10, "week", "4h"), "the 4h profile did not bind"
+        d4 = prepare(h4)
+        assert d4["session"].nunique() == 7 and d4["session"].str.match(r"^\d{4}-W\d{2}$").all(), \
+            "the window is the ISO week"
+        assert d4["bar_in_session"].max() == 9, "a full week is ten 4h bars"
+        weeks = sorted(d4["session"].unique())
+        def _wb(w):
+            idx = d4.index[d4["session"] == w]; return int(idx[0]), int(idx[-1])
+        f7, l7 = _wb(weeks[-1])
+        assert abs(d4["rvol"].iloc[f7] - 4.0) < 0.1, "RVOL 4x on the shaped week's first bar"
+        o = detect_orb(d4, f7, l7)
+        assert o and o["trend"] == "Bullish" and o["signal_i"] == f7 + 1, o
+        ro = simulate(d4, o)
+        assert ro and ro["outcome"] == "win" and ro["exit_i"] > f7 + 2, \
+            "the weekly breakout runs to target over later sessions"
+        assert _structure_start(d4, f7) == _wb(weeks[-2])[0], "4h structure reads the previous week"
+        # The hold crosses the week boundary and stops at the tenth bar held.
+        f3, l3 = _wb(weeks[2])
+        s = _setup("orb", l3 - 1, "Bullish", 100.0, 90.0, 130.0)
+        r = simulate(d4, s)
+        assert r and r["outcome"] == "timeout" and r["exit_i"] == (l3 - 1) + HOLD_BARS, (r["exit_i"], l3)
+        assert r["exit_i"] > l3 and d4["session"].iloc[r["exit_i"]] == weeks[3], "exits in the next week"
+        s_last = _setup("orb", l3, "Bullish", 100.0, 90.0, 130.0)
+        assert simulate(d4, s_last) is not None, "a signal on the week's last bar fills Monday's open"
+        s_end = _setup("orb", len(d4) - 1, "Bullish", 100.0, 90.0, 130.0)
+        assert simulate(d4, s_end) is None, "no bar after the last one: no fill"
+        # Weekly trades stay one-position-per-name across the boundary.
+        tally4: dict = {}
+        t4 = run_rules(d4, "SYN", tally4)
+        seq = sorted((t["signal_i"], t["exit_i"]) for t in t4)
+        assert all(b[0] > a[1] for a, b in zip(seq, seq[1:])), seq
+        st = clustered([{"r": 1.0, "session": "a"}] * 5 + [{"r": -1.0, "session": "b"}] * 5)
+        assert st["z"] == 2.576 and CI_LABEL[CI_Z] == "99", "99% interval under the 4h profile"
+        set_timeframe("1h")
+        assert prepare(h4)["session"].nunique() == 35, "hourly groups by date; 4h by week"
+        print(f"4h profile       : weekly window of 10 bars, weekly opening range, hold crosses the "
+              f"week and stops at bar {p4['hold_bars']}, two-week structure, 99% interval "
+              f"({len(t4)} synthetic trades)")
     finally:
         set_timeframe("5m")
     print("=" * 72)
