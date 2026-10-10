@@ -2486,7 +2486,22 @@ def check_intraday_rules_match_preregistration() -> None:
     assert "20 symbols" in doc and len(ir.UNIVERSE) == 20, f"universe has {len(ir.UNIVERSE)} names"
     assert "60 calendar days" in doc and ir.PERIOD == "60d" and ir.INTERVAL == "5m"
     assert "python intraday_rules.py --selftest" in Path(".github/workflows/tests.yml").read_text()
-    print("  intraday_rules constants equal the pre-registration's numbers; selftest in CI")
+    # The 5-minute profile is the numbers above and must not drift while
+    # other profiles are added; the hourly profile is its own document's.
+    p5 = ir.TIMEFRAMES["5m"]
+    assert (p5["period"], p5["interval"], p5["or_bars"], p5["pivot_w"], p5["div_min_bars"],
+            p5["structure_sessions"], p5["ci_z"]) == ("60d", "5m", 6, 3, 10, 1, 1.96), p5
+    hdoc = Path("results/intraday_rules_hourly_preregistration.md").read_text(encoding="utf-8")
+    p1 = ir.TIMEFRAMES["1h"]
+    assert "**730 calendar days**" in hdoc and p1["period"] == "730d" and p1["interval"] == "1h"
+    assert "opening range = the first bar" in hdoc and p1["or_bars"] == 1, "hourly opening range"
+    assert "pivots over ±1 bar" in hdoc and p1["pivot_w"] == 1, "hourly pivot window"
+    assert "≥ 3 bars apart" in hdoc and p1["div_min_bars"] == 3, "hourly divergence spacing"
+    assert "the current and the previous session" in hdoc and p1["structure_sessions"] == 2
+    assert "**97.5 %**" in hdoc and "z = 2.24" in hdoc and p1["ci_z"] == 2.24, "hourly interval"
+    assert ir.TIMEFRAME == "5m", "the module must default to the 5-minute profile"
+    print("  intraday_rules constants equal the pre-registration's numbers (both profiles); "
+          "selftest in CI")
 
 
 CHECKS = [

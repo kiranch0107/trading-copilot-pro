@@ -56,15 +56,42 @@ SWEEP_7 = ["TSLA", "NVDA", "AAPL", "MSFT", "AMZN", "META", "SPY"]
 OOS_12 = ["GOOGL", "AVGO", "AMD", "NFLX", "CRM", "ADBE", "QCOM", "MU",
           "ORCL", "NOW", "PANW", "LRCX"]
 UNIVERSE = sorted(set(SWEEP_7 + OOS_12 + ["QQQ"]))          # 20 symbols (SPY is in SWEEP_7)
-PERIOD = "60d"
-INTERVAL = "5m"
 SLIPPAGE_BPS = 5.0
-OR_BARS = 6                      # 09:30-10:00
-PIVOT_W = 3                      # ±3 bars
 RVOL_LOOKBACK = 20               # sessions
 RVOL_MIN = 1.5                   # rule 1
 VWAP_DEV_ATR = 1.0               # rule 2
-DIV_MIN_BARS = 10                # rule 4
+
+# TIMEFRAME PROFILES — each is its own pre-registration. Bar-count rules
+# (opening range, pivot window, divergence spacing, structure look-back) and
+# the confidence level are what change; everything else is shared.
+#   5m : results/intraday_rules_preregistration.md        (run 2026-10-10)
+#   1h : results/intraday_rules_hourly_preregistration.md (the second test of
+#        the family, so its interval is 97.5%: multiplicity paid up front)
+TIMEFRAMES = {
+    "5m": {"period": "60d", "interval": "5m", "or_bars": 6, "pivot_w": 3,
+           "div_min_bars": 10, "structure_sessions": 1, "ci_z": 1.96},
+    "1h": {"period": "730d", "interval": "1h", "or_bars": 1, "pivot_w": 1,
+           "div_min_bars": 3, "structure_sessions": 2, "ci_z": 2.24},
+}
+TIMEFRAME = "5m"
+PERIOD = TIMEFRAMES["5m"]["period"]
+INTERVAL = TIMEFRAMES["5m"]["interval"]
+OR_BARS = TIMEFRAMES["5m"]["or_bars"]
+PIVOT_W = TIMEFRAMES["5m"]["pivot_w"]
+DIV_MIN_BARS = TIMEFRAMES["5m"]["div_min_bars"]
+STRUCTURE_SESSIONS = TIMEFRAMES["5m"]["structure_sessions"]
+CI_Z = TIMEFRAMES["5m"]["ci_z"]
+
+
+def set_timeframe(name: str) -> dict:
+    """Apply a pre-registered profile. Module constants are rebound so every
+    detector and the statistics read the same profile."""
+    global TIMEFRAME, PERIOD, INTERVAL, OR_BARS, PIVOT_W, DIV_MIN_BARS, STRUCTURE_SESSIONS, CI_Z
+    prof = TIMEFRAMES[name]
+    TIMEFRAME, PERIOD, INTERVAL = name, prof["period"], prof["interval"]
+    OR_BARS, PIVOT_W, DIV_MIN_BARS = prof["or_bars"], prof["pivot_w"], prof["div_min_bars"]
+    STRUCTURE_SESSIONS, CI_Z = prof["structure_sessions"], prof["ci_z"]
+    return prof
 FIB_ZONES = {"named": (0.500, 0.618), "control_low": (0.300, 0.418),
              "control_high": (0.700, 0.818)}
 BAR_MEAN_R = 0.15
@@ -116,6 +143,7 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
     except (TypeError, AttributeError):
         pass
     d["session"] = ts.dt.date.astype(str)
+    d["session_idx"] = d.groupby("session").ngroup()
     d["bar_in_session"] = d.groupby("session").cumcount()
     d["session_last"] = d.groupby("session")["bar_in_session"].transform("max") + \
         d.index - d["bar_in_session"]
@@ -160,6 +188,16 @@ def _session_bounds(d: pd.DataFrame, i: int) -> tuple[int, int]:
     last = int(d["session_last"].iloc[i])
     first = last - int(d["bar_in_session"].iloc[last])
     return first, last
+
+
+def _structure_start(d: pd.DataFrame, first: int) -> int:
+    """First bar the structure rules may read: the current session alone at
+    5 minutes, the current and the previous at hourly (the profile says)."""
+    want = int(d["session_idx"].iloc[first]) - (STRUCTURE_SESSIONS - 1)
+    j = first
+    while j > 0 and int(d["session_idx"].iloc[j - 1]) >= want:
+        j -= 1
+    return j
 
 
 # ── the six detectors ───────────────────────────────────────────────────
@@ -225,8 +263,9 @@ def _trend(d, i, lo_idx):
 
 
 def detect_ema_pullback(d, first, last):
+    s0 = _structure_start(d, first)
     for i in range(first + OR_BARS, last - 1):
-        tr, last_pl, last_ph = _trend(d, i, first)
+        tr, last_pl, last_ph = _trend(d, i, s0)
         if tr is None:
             continue
         c, e9, e20 = d["Close"].iloc[i], d["EMA9"].iloc[i], d["EMA20"].iloc[i]
@@ -242,9 +281,10 @@ def detect_ema_pullback(d, first, last):
 
 
 def detect_rsi_divergence(d, first, last):
+    s0 = _structure_start(d, first)
     L, H, R = d["Low"].values, d["High"].values, d["RSI"].values
     for i in range(first + OR_BARS, last - 1):
-        pl = _known_pivots(d, i, "low", first)
+        pl = _known_pivots(d, i, "low", s0)
         if len(pl) >= 2 and pl[-1] - pl[-2] >= DIV_MIN_BARS and pl[-1] >= first:
             a, b = pl[-2], pl[-1]
             if L[b] < L[a] and R[b] == R[b] and R[a] == R[a] and R[b] > R[a] and b == i - PIVOT_W:
@@ -252,7 +292,7 @@ def detect_rsi_divergence(d, first, last):
                 s = _setup("rsi_divergence", i, "Bullish", c, float(L[b]), c + 2 * (c - L[b]),
                            feature=float(R[b] - R[a]))
                 if s: return s
-        ph = _known_pivots(d, i, "high", first)
+        ph = _known_pivots(d, i, "high", s0)
         if len(ph) >= 2 and ph[-1] - ph[-2] >= DIV_MIN_BARS and ph[-1] >= first:
             a, b = ph[-2], ph[-1]
             if H[b] > H[a] and R[b] == R[b] and R[a] == R[a] and R[b] < R[a] and b == i - PIVOT_W:
@@ -271,10 +311,11 @@ def fib_zone(retrace: float) -> str | None:
 
 
 def detect_fib_pullback(d, first, last):
+    s0 = _structure_start(d, first)
     L, H, C = d["Low"].values, d["High"].values, d["Close"].values
     for i in range(first + OR_BARS, last - 1):
-        pl = _known_pivots(d, i, "low", first)
-        ph = _known_pivots(d, i, "high", first)
+        pl = _known_pivots(d, i, "low", s0)
+        ph = _known_pivots(d, i, "high", s0)
         if pl and ph and ph[-1] > pl[-1] and H[ph[-1]] > L[pl[-1]]:        # bull impulse
             lo, hi = L[pl[-1]], H[ph[-1]]
             retr = (hi - C[i - 1]) / (hi - lo)
@@ -300,10 +341,11 @@ def _regress(xs, ys):
 
 
 def detect_trendline_break(d, first, last):
+    s0 = _structure_start(d, first)
     L, H, C = d["Low"].values, d["High"].values, d["Close"].values
     for i in range(first + OR_BARS, last - 1):
-        pl = _known_pivots(d, i, "low", first)
-        ph = _known_pivots(d, i, "high", first)
+        pl = _known_pivots(d, i, "low", s0)
+        ph = _known_pivots(d, i, "high", s0)
         if len(pl) >= 3:
             xs = pl[-3:]; b, a = _regress(xs, [L[x] for x in xs])
             if b is not None and b > 0 and C[i] < a + b * i:
@@ -355,7 +397,7 @@ def run_rules(d: pd.DataFrame, ticker: str, tally: dict | None = None) -> list[d
     for sess in sorted(sessions):
         idx = sessions[sess]
         first, last = int(idx[0]), int(idx[-1])
-        if last - first < OR_BARS + 4:
+        if last - first < OR_BARS + (4 if TIMEFRAME == "5m" else 2):
             continue
         setups = [s for s in (f(d, first, last) for f in DETECTORS.values()) if s]
         for s in sorted(setups, key=lambda s: s["signal_i"]):
@@ -378,7 +420,7 @@ def random_null(d: pd.DataFrame, trades: list[dict], draw: int) -> list[dict]:
     out = []
     for t in trades:
         first, last = _session_bounds(d, t["signal_i"])
-        lo, hi = first + OR_BARS, last - 4
+        lo, hi = (first + OR_BARS, last - 4) if TIMEFRAME == "5m" else (first + OR_BARS, last - 2)
         if hi <= lo:
             continue
         j = rng.randint(lo, hi)
@@ -412,9 +454,9 @@ def clustered(trades: list[dict]) -> dict:
     S = len(means)
     se = float(means.std(ddof=1) / math.sqrt(S)) if S > 1 else float("nan")
     m = float(rs.mean())
-    return {"n": len(rs), "sessions": S, "mean": m, "se": se,
-            "lo": m - 1.96 * se if S > 1 else float("nan"),
-            "hi": m + 1.96 * se if S > 1 else float("nan")}
+    return {"n": len(rs), "sessions": S, "mean": m, "se": se, "z": CI_Z,
+            "lo": m - CI_Z * se if S > 1 else float("nan"),
+            "hi": m + CI_Z * se if S > 1 else float("nan")}
 
 
 def verdict(real: dict, null_mean: float, extra_ok: bool = True) -> tuple[bool, list[str]]:
@@ -424,7 +466,7 @@ def verdict(real: dict, null_mean: float, extra_ok: bool = True) -> tuple[bool, 
     c3 = real["n"] > 0 and null_mean == null_mean and real["mean"] - null_mean >= BAR_OVER_NULL
     notes.append(f"mean R {real['mean']:+.3f} {'>=' if c1 else '<'} {BAR_MEAN_R:+.2f}")
     notes.append(f"clustered CI lower {real['lo']:+.3f} {'>' if c2 else '<='} 0 "
-                 f"({real['sessions']} session clusters)")
+                 f"({real['sessions']} session clusters, z={real.get('z', CI_Z)})")
     notes.append(f"over random null {real['mean'] - null_mean:+.3f} "
                  f"{'>=' if c3 else '<'} {BAR_OVER_NULL:+.2f}")
     if not extra_ok:
@@ -446,10 +488,14 @@ def terciles(trades: list[dict], key=lambda t: t["feature"]) -> list[tuple[str, 
 
 def analyse(all_trades: list[dict], frames: dict, fingerprint: str | None = None) -> int:
     print("=" * 78)
-    print("SIX INTRADAY RULES ON 5-MINUTE BARS — results/intraday_rules_preregistration.md")
+    doc = ("results/intraday_rules_preregistration.md" if TIMEFRAME == "5m"
+           else "results/intraday_rules_hourly_preregistration.md")
+    print(f"SIX INTRADAY RULES ON {INTERVAL.upper()} BARS — {doc}")
     print("=" * 78)
-    print(f"  names {len(frames)}   sessions {len({t['session'] for t in all_trades}) if all_trades else 0}"
-          f"   costs {SLIPPAGE_BPS:g} bps/side   flat at the close   fingerprint {fingerprint or 'n/a'}")
+    print(f"  timeframe {TIMEFRAME} ({PERIOD})   names {len(frames)}   "
+          f"sessions {len({t['session'] for t in all_trades}) if all_trades else 0}"
+          f"   costs {SLIPPAGE_BPS:g} bps/side   flat at the close   CI z={CI_Z}   "
+          f"fingerprint {fingerprint or 'n/a'}")
     worst_clear = []
     for rule in RULES:
         real = [t for t in all_trades if t["rule"] == rule]
@@ -464,7 +510,8 @@ def analyse(all_trades: list[dict], frames: dict, fingerprint: str | None = None
         null_mean = float(np.mean(nulls)) if nulls else float("nan")
         pct = (100.0 * sum(1 for x in nulls if x < st["mean"]) / len(nulls)) if nulls and real else float("nan")
         print(f"\n  {rule}")
-        print(f"    setups {st['n']:>5}   mean R {st['mean']:+.3f}   95% CI [{st['lo']:+.3f}, {st['hi']:+.3f}]"
+        print(f"    setups {st['n']:>5}   mean R {st['mean']:+.3f}   "
+              f"{'95' if CI_Z < 2 else '97.5'}% CI [{st['lo']:+.3f}, {st['hi']:+.3f}]"
               f"   wins {sum(1 for t in real if t['outcome'] == 'win')}   timeouts {sum(1 for t in real if t['outcome'] == 'timeout')}")
         print(f"    random null {null_mean:+.3f} over {len(nulls)} draws; real at percentile {pct:.0f}")
         extra_ok = True
@@ -523,9 +570,9 @@ def run(tickers: list[str]) -> int:
 # ── self-test on synthetic sessions ─────────────────────────────────────
 
 def _session_frame(closes: list[float], day: str, vol: float = 1e5, spread: float = 0.2,
-                   vols: list[float] | None = None) -> pd.DataFrame:
+                   vols: list[float] | None = None, freq: str = "5min") -> pd.DataFrame:
     n = len(closes)
-    ts = pd.date_range(f"{day} 09:30", periods=n, freq="5min", tz="America/New_York")
+    ts = pd.date_range(f"{day} 09:30", periods=n, freq=freq, tz="America/New_York")
     c = np.array(closes, dtype=float)
     o = np.concatenate([[c[0]], c[:-1]])
     return pd.DataFrame({"Date": ts, "Open": o, "High": np.maximum(o, c) + spread,
@@ -676,6 +723,49 @@ def selftest() -> int:
     ok3, _ = verdict({"n": 100, "sessions": 60, "mean": 0.30, "lo": -0.01, "hi": 0.61}, 0.0)
     assert not ok3, "a CI touching zero does not clear"
     print("bar              : mean, clustered CI, and margin over the null all required")
+
+    # ── THE HOURLY PROFILE (results/intraday_rules_hourly_preregistration.md) ──
+    set_timeframe("1h")
+    try:
+        assert (OR_BARS, PIVOT_W, DIV_MIN_BARS, STRUCTURE_SESSIONS, CI_Z, PERIOD) == \
+            (1, 1, 3, 2, 2.24, "730d"), "the hourly profile did not bind"
+        hdays = []
+        for k in range(24):
+            day = f"2026-08-{k + 1:02d}"
+            rng = random.Random(100 + k)
+            hdays.append(_session_frame([100 + rng.uniform(-0.2, 0.2) for _ in range(7)], day,
+                                        freq="60min", spread=0.3))
+        # ORB on a high-volume open: first bar 99.5-100.5, breakout at bar 1, target by bar 4.
+        h_orb = _session_frame([100.0, 101.0, 101.8, 102.5, 103.2, 103.4, 103.4], "2026-08-26",
+                               freq="60min", spread=0.5, vols=[4e5] + [1e5] * 6)
+        # Two-session structure: yesterday's pivot low (bar 2 of 08-27) and today's
+        # lower low with a higher RSI is a divergence only if yesterday is readable.
+        h_prev = _session_frame([101.0, 100.2, 99.0, 99.8, 100.6, 101.2, 101.0], "2026-08-27",
+                                freq="60min", spread=0.2)
+        h_today = _session_frame([100.4, 99.6, 98.8, 99.9, 100.9, 101.6, 101.8], "2026-08-28",
+                                 freq="60min", spread=0.2)
+        hd = prepare(pd.concat(hdays + [h_orb, h_prev, h_today], ignore_index=True))
+        assert hd["bar_in_session"].max() == 6 and hd["session"].nunique() == 27
+        def _hb(day):
+            idx = hd.index[hd["session"] == day]; return int(idx[0]), int(idx[-1])
+        o = detect_orb(hd, *_hb("2026-08-26"))
+        assert o and o["trend"] == "Bullish" and o["feature"] > 3.5, o
+        ro = simulate(hd, o)
+        assert ro and ro["exit_i"] <= _hb("2026-08-26")[1], "flat inside the 7-bar session"
+        f1, _ = _hb("2026-08-28")
+        assert _structure_start(hd, f1) == _hb("2026-08-27")[0], \
+            "hourly structure reads the previous session too"
+        rs = detect_rsi_divergence(hd, *_hb("2026-08-28"))
+        assert rs and rs["trend"] == "Bullish", rs
+        set_timeframe("5m")
+        assert _structure_start(hd, f1) == f1, "5m structure is session-local"
+        set_timeframe("1h")
+        st = clustered([{"r": 1.0, "session": "a"}] * 5 + [{"r": -1.0, "session": "b"}] * 5)
+        assert st["z"] == 2.24 and st["hi"] > 2.0, "97.5% interval under the hourly profile"
+        print("hourly profile   : 7-bar sessions, 1-bar opening range, two-session structure, "
+              "divergence across the session boundary, 97.5% interval")
+    finally:
+        set_timeframe("5m")
     print("=" * 72)
     print("All self-tests passed.")
     return 0
@@ -684,10 +774,13 @@ def selftest() -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description="six intraday rules on 5-minute bars")
     ap.add_argument("--tickers", default=",".join(UNIVERSE))
+    ap.add_argument("--timeframe", choices=sorted(TIMEFRAMES), default="5m",
+                    help="a pre-registered profile: 5m (60 days) or 1h (730 days)")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
         return selftest()
+    set_timeframe(a.timeframe)
     return run([t.strip().upper() for t in a.tickers.split(",") if t.strip()])
 
 

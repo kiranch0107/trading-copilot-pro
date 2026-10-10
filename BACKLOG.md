@@ -1365,6 +1365,18 @@ content exists, does not survive costs), rule 1 wrong. No confirmation window
 is owed and none will be run. Phase 2 (paper forward test of the owner's own
 reading, 349 episodes, base-rate framing) remains the owner's call.
 
+**Phase 1b, hourly, owner's request 2026-10-10.** Pre-registered in
+`results/intraday_rules_hourly_preregistration.md` before any hourly bar is
+fetched: the same six rules restated in hourly clock time (1-bar opening
+range, ±1-bar pivots, divergence ≥ 3 bars, structure may read the previous
+session), two years of bars (~500 session clusters), and the interval
+tightened to 97.5 % because this is the second test of the family. Built as
+the `1h` profile of `intraday_rules.py` (`--timeframe 1h`); the check pins
+both profiles to their documents. Prediction on file: no rule clears, and
+the intervals are tight enough that the verdict is a measured loss. **Owed:
+`python intraday_rules.py --timeframe 1h | tee results/intraday_rules_hourly_run1.txt`
+on the laptop.**
+
 ---
 
 ## Working conventions
