@@ -1,0 +1,34 @@
+Traceback (most recent call last):
+  File "/workspaces/trading-copilot-pro/intraday_rules.py", line 788, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/workspaces/trading-copilot-pro/intraday_rules.py", line 784, in main
+    return run([t.strip().upper() for t in a.tickers.split(",") if t.strip()])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/trading-copilot-pro/intraday_rules.py", line 551, in run
+    raw = fetch_intraday(tk)
+          ^^^^^^^^^^^^^^^^^^
+  File "/workspaces/trading-copilot-pro/intraday_rules.py", line 124, in fetch_intraday
+    df, _meta, _status = bar_cache.get_or_fetch(
+                         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/trading-copilot-pro/bar_cache.py", line 251, in get_or_fetch
+    df, meta = load(ticker, interval, years, variant)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/trading-copilot-pro/bar_cache.py", line 191, in load
+    if meta and meta.get("hash") and frame_hash(df) != meta["hash"]:
+                                     ^^^^^^^^^^^^^^
+  File "/workspaces/trading-copilot-pro/bar_cache.py", line 132, in frame_hash
+    d["Date"] = pd.to_datetime(d["Date"]).dt.strftime("%Y-%m-%d")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/trading-copilot-pro/trading-copilot-pro/.venv/lib/python3.11/site-packages/pandas/core/tools/datetimes.py", line 1040, in to_datetime
+    values = convert_listlike(arg._values, format)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/trading-copilot-pro/trading-copilot-pro/.venv/lib/python3.11/site-packages/pandas/core/tools/datetimes.py", line 435, in _convert_listlike_datetimes
+    return _array_strptime_with_fallback(arg, name, utc, format, exact, errors)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/trading-copilot-pro/trading-copilot-pro/.venv/lib/python3.11/site-packages/pandas/core/tools/datetimes.py", line 470, in _array_strptime_with_fallback
+    result, tz_out = array_strptime(arg, fmt, exact=exact, errors=errors, utc=utc)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "pandas/_libs/tslibs/strptime.pyx", line 566, in pandas._libs.tslibs.strptime.array_strptime
+  File "pandas/_libs/tslibs/strptime.pyx", line 317, in pandas._libs.tslibs.strptime.DatetimeParseState.check_for_mixed_inputs
+ValueError: Mixed timezones detected. Pass utc=True in to_datetime or tz='UTC' in DatetimeIndex to convert to a common timezone.
