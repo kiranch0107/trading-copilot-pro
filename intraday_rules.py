@@ -70,7 +70,7 @@ VWAP_DEV_ATR = 1.0               # rule 2
 TIMEFRAMES = {
     "5m": {"period": "60d", "interval": "5m", "or_bars": 6, "pivot_w": 3,
            "div_min_bars": 10, "structure_sessions": 1, "ci_z": 1.96},
-    "1h": {"period": "730d", "interval": "1h", "or_bars": 1, "pivot_w": 1,
+    "1h": {"period": "2y", "interval": "1h", "or_bars": 1, "pivot_w": 1,     # 2y = 730 days
            "div_min_bars": 3, "structure_sessions": 2, "ci_z": 2.24},
 }
 TIMEFRAME = "5m"
@@ -544,26 +544,49 @@ def analyse(all_trades: list[dict], frames: dict, fingerprint: str | None = None
     return 0
 
 
+def _say(msg: str) -> None:
+    """Progress and failures on BOTH streams, flushed: a report piped through
+    `tee` must carry them, and a run killed mid-way must not lose them to the
+    stdout buffer."""
+    print(msg, file=sys.stderr, flush=True)
+    print(msg, flush=True)
+
+
 def run(tickers: list[str]) -> int:
     frames, trades, tally = {}, [], {}
-    metas = []
+    metas, failed = [], []
+    _say(f"intraday_rules: timeframe {TIMEFRAME} ({PERIOD} of {INTERVAL} bars), "
+         f"{len(tickers)} names")
     for tk in tickers:
-        raw = fetch_intraday(tk)
-        if raw is None or len(raw) < 200:
-            print(f"  ! {tk}: no intraday bars", file=sys.stderr)
-            continue
-        d = prepare(raw)
-        frames[tk] = d
-        trades += run_rules(d, tk, tally)
-        print(f"  {tk}: {len(d)} bars, {d['session'].nunique()} sessions, "
-              f"{sum(1 for t in trades if t['ticker'] == tk)} trades", file=sys.stderr)
-        if bar_cache is not None:
-            _df, meta = bar_cache.load(tk, INTERVAL, 0, f"{PERIOD}-raw")
-            if meta:
-                metas.append(meta)
+        try:
+            raw = fetch_intraday(tk)
+            if raw is None or len(raw) < 200:
+                _say(f"  ! {tk}: no intraday bars returned")
+                failed.append(tk)
+                continue
+            d = prepare(raw)
+            frames[tk] = d
+            n_before = len(trades)
+            trades += run_rules(d, tk, tally)
+            _say(f"  {tk}: {len(d)} bars, {d['session'].nunique()} sessions, "
+                 f"{len(trades) - n_before} trades")
+            if bar_cache is not None:
+                _df, meta = bar_cache.load(tk, INTERVAL, 0, f"{PERIOD}-raw")
+                if meta:
+                    metas.append(meta)
+        except Exception as e:                           # noqa: BLE001
+            # One name must not take the run down; the report says what failed.
+            _say(f"  ! {tk}: FAILED: {type(e).__name__}: {e}")
+            failed.append(tk)
     fp = bar_cache.fingerprint(metas) if (bar_cache is not None and metas) else None
     if tally:
-        print(f"  engine tally: {tally}", file=sys.stderr)
+        _say(f"  engine tally: {tally}")
+    if failed:
+        _say(f"  ! {len(failed)} name(s) produced nothing: {', '.join(failed)} -- the "
+             f"universe below is NOT the pre-registered one; read accordingly")
+    if not frames:
+        _say("  NOTHING FETCHED. No report.")
+        return 2
     return analyse(trades, frames, fp)
 
 
@@ -728,7 +751,7 @@ def selftest() -> int:
     set_timeframe("1h")
     try:
         assert (OR_BARS, PIVOT_W, DIV_MIN_BARS, STRUCTURE_SESSIONS, CI_Z, PERIOD) == \
-            (1, 1, 3, 2, 2.24, "730d"), "the hourly profile did not bind"
+            (1, 1, 3, 2, 2.24, "2y"), "the hourly profile did not bind"
         hdays = []
         for k in range(24):
             day = f"2026-08-{k + 1:02d}"
