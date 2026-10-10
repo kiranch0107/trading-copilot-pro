@@ -2500,8 +2500,26 @@ def check_intraday_rules_match_preregistration() -> None:
     assert "≥ 3 bars apart" in hdoc and p1["div_min_bars"] == 3, "hourly divergence spacing"
     assert "the current and the previous session" in hdoc and p1["structure_sessions"] == 2
     assert "**97.5 %**" in hdoc and "z = 2.24" in hdoc and p1["ci_z"] == 2.24, "hourly interval"
+    # The 5-minute and hourly tests are DAY trades: flat at the session's close.
+    assert p5["group"] == "session" and p5["hold_bars"] is None and p5["resample"] is None, p5
+    assert p1["group"] == "session" and p1["hold_bars"] is None and p1["resample"] is None, p1
+    # The 4-hour profile is the third test (99%), built from the hourly cache,
+    # read by the trading week, held across sessions (its document says why).
+    fdoc = Path("results/intraday_rules_4h_preregistration.md").read_text(encoding="utf-8")
+    p4 = ir.TIMEFRAMES["4h"]
+    assert "**resampled from the frozen hourly cache**" in fdoc and \
+        (p4["interval"], p4["period"], p4["resample"]) == ("1h", "2y", "4h"), \
+        "the 4h profile reads the hourly cache key and resamples in code"
+    assert "**the trading week**" in fdoc and p4["group"] == "week", "4h window is the week"
+    assert "tenth 4-hour bar held" in fdoc and p4["hold_bars"] == 10, "4h hold"
+    assert "opening range = the first bar of the week" in fdoc and p4["or_bars"] == 1
+    assert "pivots over ±1 bar" in fdoc and p4["pivot_w"] == 1, "4h pivot window"
+    assert "≥ 3 bars apart" in fdoc and p4["div_min_bars"] == 3, "4h divergence spacing"
+    assert "the current and the previous week" in fdoc and p4["structure_sessions"] == 2
+    assert "**99 %**" in fdoc and "z = 2.576" in fdoc and p4["ci_z"] == 2.576, "4h interval"
+    assert "python intraday_rules.py --timeframe 4h" in fdoc
     assert ir.TIMEFRAME == "5m", "the module must default to the 5-minute profile"
-    print("  intraday_rules constants equal the pre-registration's numbers (both profiles); "
+    print("  intraday_rules constants equal the pre-registration's numbers (all three profiles); "
           "selftest in CI")
 
 

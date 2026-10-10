@@ -1388,6 +1388,25 @@ Timeouts dominate every rule (60–95 %). **Phase 1 is complete and negative on
 both timeframes; no confirmation window is owed.** Phase 2 remains the
 owner's decision.
 
+**Phase 1c, 4-hour, owner's request 2026-10-10 ("lets do 4hr timeframe").**
+A session holds two 4-hour bars, so the day-trade framing degenerates to
+"enter 13:30, exit 16:00"; the owner was told and the test is therefore
+pre-registered as a SWING test of the same six tools in
+`results/intraday_rules_4h_preregistration.md`: bars resampled in code from
+the frozen hourly cache (Yahoo has no 4h interval; the fingerprint must equal
+the hourly run's `v2-eb11301b7b4c55e4`), the rules read the trading week
+(weekly opening range, week-anchored VWAP, two-week structure), a position is
+held up to ten bars across sessions (five sessions), and the interval is
+tightened to 99 % because this is the third test of the family. Power stated
+honestly: ~100 week clusters, detection limit +0.15 to +0.30 R, so the "mean
+≥ +0.15" clause is decisive but a small loss may read as indistinguishable
+from zero. Built as the `4h` profile of `intraday_rules.py` (`--timeframe
+4h`, `resample_4h`); the check pins all three profiles. Prediction on file: no
+rule clears; timeouts fall well below the hourly run's; the named Fibonacci
+zone stays inside noise of its controls. **Owed: `python intraday_rules.py
+--timeframe 4h | tee results/intraday_rules_4h_run1.txt` on the laptop** (no
+fetch: it reads the hourly cache).
+
 ---
 
 ## Working conventions
