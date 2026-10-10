@@ -543,10 +543,10 @@ def analyse(all_trades: list[dict], frames: dict, fingerprint: str | None = None
 
 
 def _say(msg: str) -> None:
-    """Progress and failures on BOTH streams, flushed: a report piped through
-    `tee` must carry them, and a run killed mid-way must not lose them to the
-    stdout buffer."""
-    print(msg, file=sys.stderr, flush=True)
+    """Progress and failures on stdout, FLUSHED: a report piped through `tee`
+    carries them, and a run killed mid-way does not lose them to the buffer.
+    (Once on stdout only: the first hourly report, tee'd with 2>&1, printed
+    every line twice.)"""
     print(msg, flush=True)
 
 

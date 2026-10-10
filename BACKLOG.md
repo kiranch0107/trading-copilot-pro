@@ -1324,7 +1324,7 @@ Two pieces, each needing its own pre-registration before a row is written:
 
 ---
 
-## 29. Day trading by chart reading — PHASE 1 RUN 2026-10-10: NO RULE CLEARS
+## 29. Day trading by chart reading — PHASE 1 COMPLETE ON BOTH TIMEFRAMES 2026-10-10: NO RULE CLEARS
 
 **Owner's idea, 2026-10-08; screened 2026-10-09 in `results/day_trading_screen.md`.**
 
@@ -1375,7 +1375,18 @@ the `1h` profile of `intraday_rules.py` (`--timeframe 1h`); the check pins
 both profiles to their documents. Prediction on file: no rule clears, and
 the intervals are tight enough that the verdict is a measured loss. **Owed:
 `python intraday_rules.py --timeframe 1h | tee results/intraday_rules_hourly_run1.txt`
-on the laptop.**
+on the laptop.** **Run 2026-10-10 (`results/intraday_rules_hourly_run1.md`):**
+20 names, 495 sessions, fingerprint `v2-eb11301b7b4c55e4`. **No rule clears;
+five of six have a 97.5 % interval below zero, the sixth (opening range) is a
+measured zero** (820 setups, 13 target hits, 95 % timeouts, no RVOL
+dose-response). RSI divergence equals random entry exactly (−0.136 vs −0.135):
+the 5-minute timing effect did not survive the timeframe. Fibonacci's named
+zone was the worst of three for the second time (−0.163 vs −0.054 / −0.144).
+VWAP reclaim was worse than random by 0.28 R. Prediction scored: the verdict
+and the timeout and Fibonacci calls correct; "4 and 6 beat random" wrong.
+Timeouts dominate every rule (60–95 %). **Phase 1 is complete and negative on
+both timeframes; no confirmation window is owed.** Phase 2 remains the
+owner's decision.
 
 ---
 
