@@ -1,0 +1,76 @@
+{
+  "as_of": "2026-10-11",
+  "taken_at": "2026-10-11T17:45:56",
+  "tickers": [
+    "MPC",
+    "ACN",
+    "CRWD",
+    "PSX",
+    "TMO",
+    "MRK",
+    "CME",
+    "TGT"
+  ],
+  "passed_gates": 49,
+  "pool_size": 83,
+  "sector_mix": {
+    "Energy": 2,
+    "Tech": 2,
+    "Health": 2,
+    "Financials": 1,
+    "ConsDisc": 1
+  },
+  "rs_lookback": 63,
+  "top_n": 8,
+  "max_per_sector": 2,
+  "detail": [
+    {
+      "ticker": "MPC",
+      "rs": 49.35,
+      "price": 455.03,
+      "dollar_vol_m": 1239.7
+    },
+    {
+      "ticker": "ACN",
+      "rs": 47.0,
+      "price": 209.06,
+      "dollar_vol_m": 1463.2
+    },
+    {
+      "ticker": "CRWD",
+      "rs": 42.44,
+      "price": 275.04,
+      "dollar_vol_m": 2700.5
+    },
+    {
+      "ticker": "PSX",
+      "rs": 36.37,
+      "price": 278.18,
+      "dollar_vol_m": 850.9
+    },
+    {
+      "ticker": "TMO",
+      "rs": 20.58,
+      "price": 658.02,
+      "dollar_vol_m": 1578.7
+    },
+    {
+      "ticker": "MRK",
+      "rs": 13.47,
+      "price": 145.6,
+      "dollar_vol_m": 1444.8
+    },
+    {
+      "ticker": "CME",
+      "rs": 10.54,
+      "price": 280.56,
+      "dollar_vol_m": 514.8
+    },
+    {
+      "ticker": "TGT",
+      "rs": 10.08,
+      "price": 153.64,
+      "dollar_vol_m": 593.2
+    }
+  ]
+}
