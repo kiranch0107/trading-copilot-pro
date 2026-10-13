@@ -1437,7 +1437,11 @@ peek flag. One pooled bar at 95 %: mean ≥ +0.15 R, clustered CI above zero,
 mean sits within ±0.10 R of the random null. `check_daytrade_paper_isolated()`
 pins the constants and the one-writer rule. **Owed by the owner: the calls,
 committed the same day, and a weekly `grade` inside the provider's 60-day
-window.** Four to twelve months to a reading.
+window.** Four to twelve months to a reading. First call logged 2026-10-13
+(a test of the command) and graded mid-session 28 seconds later: VOID by a
+grader defect (the frame ended at the bar then trading). Fixed the same day:
+a session is graded only after it has closed. Rows 1–2 stay in the chain as
+a VOID that does not count; the document carries the note.
 
 ---
 

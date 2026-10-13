@@ -170,6 +170,13 @@ def resolve_call(call: dict, bars, today: datetime | None = None) -> dict | None
     def void(reason):
         return dict(base, outcome="void", r=None, reason=reason)
 
+    # A SESSION IS GRADED ONLY AFTER IT HAS CLOSED. "Flat at the session's
+    # last bar" needs the last bar; a frame fetched mid-session ends at the
+    # current bar, and the first real call (2026-10-13, graded 28 seconds
+    # after it was logged) was voided as "no bar after the call" for exactly
+    # that reason. Same-day sessions are not gradable yet, whatever the frame.
+    if session >= today.astimezone(ET).strftime("%Y-%m-%d"):
+        return None
     if bars is None or len(bars) == 0:
         return void("no_bars") if (today - t_call).days > NO_BARS_DAYS else None
     assert ir.TIMEFRAME == "5m", "the grader is the Phase 1 engine on the 5-minute profile"
@@ -327,6 +334,8 @@ def selftest() -> int:
     path = tmp / "paper.jsonl"
     always_open = lambda now_et: True      # noqa: E731
     utc = timezone.utc
+    # Grading happens the NEXT morning (12:00 UTC = 08:00 ET on the 14th): a
+    # session is gradable only after its ET date has passed.
     t_call = datetime(2026, 10, 13, 14, 7, tzinfo=utc)          # 10:07 ET, inside the 10:05 bar
 
     # Refusals, each with its reason.
@@ -366,8 +375,8 @@ def selftest() -> int:
     prev_day = ir._session_frame([240.0] * 78, "2026-10-12", spread=0.15)
     frame = pd.concat([prev_day, bars], ignore_index=True)
     counts = grade_open_calls(fetch=lambda tk: frame, path=path,
-                              today=datetime(2026, 10, 14, tzinfo=utc),
-                              now=datetime(2026, 10, 14, tzinfo=utc))
+                              today=datetime(2026, 10, 14, 12, 0, tzinfo=utc),
+                              now=datetime(2026, 10, 14, 12, 0, tzinfo=utc))
     assert counts == {"graded": 2, "void": 0, "open": 0, "fetch_failed": 0}, counts
     rows = read_all(path)
     o1, o2 = [r for r in rows if r.get("kind") == "outcome"]
@@ -384,7 +393,7 @@ def selftest() -> int:
           f"{NULL_DRAWS}-draw null, bars hash")
 
     # One outcome per call: a second grading pass writes nothing.
-    again = grade_open_calls(fetch=lambda tk: frame, path=path, today=datetime(2026, 10, 14, tzinfo=utc))
+    again = grade_open_calls(fetch=lambda tk: frame, path=path, today=datetime(2026, 10, 14, 12, 0, tzinfo=utc))
     assert again["graded"] == 0 and len(read_all(path)) == 4, again
     # VOIDs: a price outside its bar; a stale call with no bars; a young one stays open.
     c3 = log_call("TSLA", "long", "other", 250.00, 248.00, 254.00, path=path, now=t_call,
@@ -394,20 +403,31 @@ def selftest() -> int:
     c5 = log_call("AMD", "long", "orb", 100.0, 99.0, 102.0, path=path,
                   now=datetime(2026, 10, 9, 14, 0, tzinfo=utc), open_check=always_open)
     counts = grade_open_calls(fetch=lambda tk: frame if tk == "TSLA" else None, path=path,
-                              today=datetime(2026, 10, 14, tzinfo=utc))
+                              today=datetime(2026, 10, 14, 12, 0, tzinfo=utc))
     assert counts == {"graded": 0, "void": 2, "open": 1, "fetch_failed": 0}, counts
     outs = {r["ref_seq"]: r for r in read_all(path) if r.get("kind") == "outcome"}
     assert outs[c3["seq"]]["reason"] == "price_outside_bar" and outs[c3["seq"]]["r"] is None
     assert outs[c4["seq"]]["reason"] == "no_bars", "older than 50 days with no bars is VOID"
     young = dict(c4, ts="2026-08-26T14:00:00+00:00")                               # 49 days old
-    assert resolve_call(young, None, datetime(2026, 10, 14, tzinfo=utc)) is None, "49 days: still open"
+    assert resolve_call(young, None, datetime(2026, 10, 14, 12, 0, tzinfo=utc)) is None, "49 days: still open"
     assert c5["seq"] not in outs, "a young call with no bars yet stays OPEN"
     # A call inside the session's last bar has nothing to fill into.
     c6 = {"seq": 99, "ts": "2026-10-13T19:56:00+00:00", "ticker": "TSLA", "side": "Bullish",
           "setup": "orb", "price": 245.0, "stop": 244.0, "target": 247.0}
-    assert resolve_call(c6, frame, datetime(2026, 10, 14, tzinfo=utc))["reason"] == "no_bar_after_call"
+    assert resolve_call(c6, frame, datetime(2026, 10, 14, 12, 0, tzinfo=utc))["reason"] == "no_bar_after_call"
+    # The session must have CLOSED: graded the same day, a call stays open even
+    # when the frame ends right after it (the mid-session fetch that voided the
+    # first real call), and even when the frame holds the whole session.
+    partial = frame.iloc[:78 + 9]                      # 2026-10-12 and 10-13 up to 10:10
+    c7 = dict(c1, seq=98)
+    assert resolve_call(c7, partial, datetime(2026, 10, 13, 18, 0, tzinfo=utc)) is None, \
+        "a frame ending at the current bar must not void a same-day call"
+    assert resolve_call(c7, frame, datetime(2026, 10, 13, 23, 0, tzinfo=utc)) is None, \
+        "same ET date: not gradable until the next day"
+    assert resolve_call(c7, frame, datetime(2026, 10, 14, 4, 0, tzinfo=utc)) is not None, \
+        "00:00 ET the next day: gradable"
     print("void             : price outside its bar, stale with no bars, call inside the last bar; "
-          "a young call stays open; one outcome per call")
+          "a young call stays open; one outcome per call; same-day sessions wait for the close")
 
     # Tamper: edit a logged stop and the chain says so.
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -421,12 +441,12 @@ def selftest() -> int:
           "and the chain is cut after it")
 
     # The gate: counts only below 349; the verdict at 349.
-    s = summary(path, today=datetime(2026, 10, 14, tzinfo=utc))
+    s = summary(path, today=datetime(2026, 10, 14, 12, 0, tzinfo=utc))
     assert s["settled"] == 2 and not s["gate_open"] and "stats" not in s and "clears" not in s
     import io, contextlib
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        report(path, today=datetime(2026, 10, 14, tzinfo=utc))
+        report(path, today=datetime(2026, 10, 14, 12, 0, tzinfo=utc))
     txt = buf.getvalue()
     assert "WITHHELD" in txt and "mean R" not in txt and "VERDICT" not in txt, txt
     gate = tmp / "gate.jsonl"
