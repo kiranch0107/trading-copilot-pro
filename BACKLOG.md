@@ -15,6 +15,25 @@ Ordered by forcing function, not by interest.
 
 ---
 
+## Owner hand-off — READ FIRST, every session
+
+Dated notes the owner asked to be read on the next pull. Append; never
+rewrite an earlier note. Remove a note only when the thing it waits on has
+landed in the repo and the removal says so in the commit.
+
+- **2026-10-13, owner:** AAPL has been closed. NVDA and PFE will be logged
+  (closed in the app) on **2026-10-16**. Until then, all three may still
+  read `EXIT_SIGNALLED` in `open_positions.json`; that is not a defect and
+  not a reason to touch the state. *Session note, same day:* at the time of
+  writing, `open_positions.json` on `main` still carries AAPL as
+  `EXIT_SIGNALLED` and `trade_journal.json` has no AAPL close after
+  2026-09-23, so the AAPL close has not yet reached the repo from the app
+  (or was done at the broker only). Check both files on the next pull; if
+  AAPL is still open there after the 16th, ask the owner which it was
+  before anything else is read from the journal.
+
+---
+
 ## 1. ~~Market calendar runs out — CI fails 2026-11-10~~ — DONE 2026-09-11
 
 **Closed with 60 days to spare.** 2027 added to all five copies; the calendar

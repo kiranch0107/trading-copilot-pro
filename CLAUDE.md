@@ -6,6 +6,10 @@ files, single-sourced costs, relative backtest windows, data fingerprints). Do
 not restate those here; a second copy is the drift this project has paid for
 repeatedly. This file covers only how a session should *operate*.
 
+**First thing, every session:** read the "Owner hand-off" section at the top
+of `BACKLOG.md`. It holds dated notes the owner asked to be read on the next
+pull (positions closed outside the repo, things due on a date).
+
 ## Shipping: merge without asking
 
 **Standing instruction from the owner, 2026-09-16.** Work goes to a branch, a
