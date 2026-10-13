@@ -2523,6 +2523,49 @@ def check_intraday_rules_match_preregistration() -> None:
           "selftest in CI")
 
 
+def check_daytrade_paper_isolated() -> None:
+    """
+    Phase 2 of the day-trading screen is a SEPARATE record with ONE writer.
+
+    daytrade_paper.jsonl is the owner's discretionary paper record (BACKLOG
+    29 Phase 2). It must never blend into the swing record — the paper/live
+    lesson one level down — so the journal, the app, the scanner and the
+    forward log never read it, and only daytrade_paper.py writes it. The
+    module's constants are its pre-registration's numbers, and its grader
+    is the Phase 1 engine (same costs, same null, same dust), so Phase 2 is
+    read on the same scale as Phase 1.
+    """
+    import daytrade_paper as dp
+    import intraday_rules as ir
+    import forward_log as fl
+    doc = Path("results/daytrade_paper_preregistration.md").read_text(encoding="utf-8")
+    assert "**349 settled episodes**" in doc and dp.EPISODES_REQUIRED == 349, "the reading gate"
+    assert "withholds the mean" in doc and "no peek flag" in doc, "the gate is documented"
+    assert "plus 5 bps" in doc and dp.SLIPPAGE_BPS == ir.SLIPPAGE_BPS == 5.0, "Phase 1 costs"
+    assert "±0.05 R is a scratch" in doc and dp.DUST_R == fl.GRADE_DUST_R == 0.05, "dust"
+    assert "twenty fixed-seed random bars" in doc and dp.NULL_DRAWS == ir.NULL_DRAWS == 20
+    assert "**95 %**" in doc and dp.CI_Z == 1.96, "one pooled test at 95%"
+    assert "by more than 0.1 %" in doc and dp.PRICE_TOL == 0.001, "price-in-bar tolerance"
+    assert "**50 days**" in doc and dp.NO_BARS_DAYS == 50, "stale-call void"
+    assert "before 15:55 ET" in doc and dp.LAST_CALL_MINUTE == 15 * 60 + 55
+    assert set(dp.SETUPS) == set(ir.RULES) | {"pattern", "other"}, "setup names are Phase 1's list"
+    assert Path("daytrade_paper.jsonl").exists(), "the record is committed (seeded empty)"
+    # One writer, never blended.
+    for p in sorted(Path(".").glob("*.py")):
+        if p.name in ("daytrade_paper.py", "consistency_check.py"):
+            continue
+        txt = p.read_text(encoding="utf-8", errors="replace")
+        assert "daytrade_paper" not in txt, \
+            f"{p.name} references the Phase 2 paper record; only daytrade_paper.py may"
+    src = Path("daytrade_paper.py").read_text(encoding="utf-8")
+    assert "forward_log.append" not in src and "import streamlit" not in src and \
+        "import journal_store" not in src and "import gh_sync" not in src, \
+        "daytrade_paper.py must not write the forward log or pull Streamlit"
+    assert "python daytrade_paper.py --selftest" in Path(".github/workflows/tests.yml").read_text()
+    print("  Phase 2 paper record: one writer, never read by journal/app/scanner, "
+          "constants equal the pre-registration, Phase 1 engine")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -2544,6 +2587,7 @@ CHECKS = [
     ("option IV multiplier has one home",          check_option_iv_single_source),
     ("IV snapshot: one writer, committed, post-close", check_iv_snapshot_single_writer_and_committed),
     ("intraday rules match their pre-registration", check_intraday_rules_match_preregistration),
+    ("Phase 2 paper record isolated, one writer",   check_daytrade_paper_isolated),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),
