@@ -177,7 +177,13 @@ def selftest() -> int:
     t2: dict = {}
     assert evaluate_pullback(raw2, cdf2, params, None, t2) is None and t2 == {"below_sma200": 1}, t2
     # A bullish base setup is not a pullback.
-    raw3 = _frame([100.0 * 1.003 ** i for i in range(284)])
+    # Three up days then one down, with a gentle acceleration: RSI inside
+    # the band and MACD above its signal -- a bullish base setup, not a pullback.
+    px, up3 = 100.0, []
+    for i in range(284):
+        px *= (1 + 0.004 + 1e-05 * i) if i % 4 != 3 else (1 - 0.008)
+        up3.append(px)
+    raw3 = _frame(up3)
     cdf3 = compute(raw3)
     assert sc.base_trend(cdf3.iloc[-1], params) == "Bullish"
     assert evaluate_pullback(raw3, cdf3, params) is None

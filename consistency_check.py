@@ -2640,7 +2640,9 @@ def check_pullback_bucket_wired() -> None:
     assert "trend = base_trend(latest, params)" in ev and "= long_levels(df, price, atr, params)" in ev, \
         "evaluate() must use the shared functions, or the pullback rule reads a copy"
     src = Path("pullback_signal.py").read_text(encoding="utf-8")
-    assert "sc.base_trend(" in src and "sc.long_levels(" in src
+    fn = src[src.find("def evaluate_pullback("):src.find("\n# ── self-test")]
+    assert "sc.base_trend(" in fn and "sc.long_levels(" in fn, \
+        "evaluate_pullback() must call the shared functions, not the selftest only"
     assert "forward_log" not in src.replace("the forward log", "") and "send_alert" not in src \
         and "yfinance" not in src, "pullback_signal.py must not write, alert or fetch"
     assert "pullback" in fl.BUCKETS
