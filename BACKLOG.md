@@ -30,7 +30,18 @@ landed in the repo and the removal says so in the commit.
   2026-09-23, so the AAPL close has not yet reached the repo from the app
   (or was done at the broker only). Check both files on the next pull; if
   AAPL is still open there after the 16th, ask the owner which it was
-  before anything else is read from the journal.
+  before anything else is read from the journal. *Root cause, found the
+  same day:* the app's sidebar, once rerun, read "GitHub sync FAILING —
+  GitHub GET 401: Bad credentials". The app's fine-grained PAT (Streamlit
+  secret `GITHUB_TOKEN`) is dead, so since 2026-09-30 every app write has
+  failed and every read has fallen back to the container's disk; the
+  scanner and the exit monitor use the Actions token and are unaffected.
+  The owner is replacing the token (Contents: read and write on this repo
+  only) and will close AAPL again. Until an "update trade_journal.json from
+  app" commit appears on `main`, the journal in the repo is MISSING the
+  AAPL 2026-10-09 355C close (expired worthless, −1.0 R, 2026-10-13 13:03
+  ET) and `open_positions.json` still carries AAPL. The new token's expiry
+  date goes here when the owner reports it: ____.
 
 ---
 
