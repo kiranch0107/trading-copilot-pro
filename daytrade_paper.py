@@ -71,27 +71,18 @@ NULL_DRAWS = ir.NULL_DRAWS         # twenty fixed-seed draws
 CI_Z = 1.96                        # one pooled test, 95%
 PRICE_TOL = 0.001                  # the logged price must sit inside its bar, ±0.1%
 NO_BARS_DAYS = 50                  # Yahoo serves 60 days of 5m bars; VOID after this
+STALE_WARN_DAYS = NO_BARS_DAYS - 10  # the report nags this many days before the void
 LAST_CALL_MINUTE = 15 * 60 + 55    # the last 5m bar opens 15:55; nothing opens after it
 
 
 # ── the chain (forward_log's format, a separate file, a separate writer) ──
 
 def _append(kind: str, body: dict, path: Path, now: datetime | None = None) -> dict:
-    """The forward log's append(), on THIS file. Written here rather than
-    called there because consistency_check names every caller of that
-    function a forward-log writer, and this module must never be one."""
-    rows = read_all(path)
-    prev = rows[-1]["hash"] if rows else GENESIS
-    body = dict(body)
-    body["seq"] = len(rows) + 1
-    body["kind"] = kind
-    body["ts"] = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(timespec="seconds")
-    body["prev"] = prev
-    rec = dict(body)
-    rec["hash"] = _digest(prev, body)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, default=str) + "\n")
-    return rec
+    """The forward log's own append(), on THIS file (explicit path): one
+    chain format, maintained in one place. consistency_check counts a
+    forward_log.append() call as a forward-log write only when it has no
+    explicit path, so this module is not a writer of that record."""
+    return forward_log.append(kind, body, path=path, now=now)
 
 
 def verify(path: Path | None = None) -> list[str]:
@@ -131,6 +122,12 @@ def log_call(ticker: str, side: str, setup: str, price: float, stop: float, targ
                          f"regular hours cannot be graded")
     if now_et.hour * 60 + now_et.minute >= LAST_CALL_MINUTE:
         raise ValueError("no 5-minute bar opens after a call at 15:55 ET or later")
+    # Never append to a cut chain: a call logged behind a break could not be
+    # re-created with its timestamp, and `grade` would refuse the file anyway.
+    if path.exists():
+        probs = forward_log.verify(path)
+        if probs:
+            raise ValueError(f"the chain does not verify; nothing logged: {probs[0]}")
     body = {"ticker": ticker, "side": SIDES[side], "setup": setup,
             "price": float(price), "stop": float(stop), "target": float(target),
             "rr": round(abs(target - price) / abs(price - stop), 3),
@@ -226,10 +223,16 @@ def grade_open_calls(fetch=None, path: Path | None = None, today: datetime | Non
     done = {r["ref_seq"] for r in rows if r.get("kind") == "outcome"}
     counts = {"graded": 0, "void": 0, "open": 0, "fetch_failed": 0}
     frames: dict = {}
+    today_et = (today or datetime.now(timezone.utc)).astimezone(ET).strftime("%Y-%m-%d")
     for c in calls:
         if c["seq"] in done:
             continue
         tk = c["ticker"]
+        # A same-day session is not gradable yet; decide that from the call's
+        # timestamp BEFORE fetching anything (resolve_call() checks it again).
+        if datetime.fromisoformat(c["ts"]).astimezone(ET).strftime("%Y-%m-%d") >= today_et:
+            counts["open"] += 1
+            continue
         if tk not in frames:
             try:
                 frames[tk] = fetch(tk)
@@ -269,7 +272,7 @@ def summary(path: Path | None = None, today: datetime | None = None) -> dict:
          "by_setup": by_setup, "sessions": len(sessions), "days": days,
          "required": EPISODES_REQUIRED, "gate_open": len(settled) >= EPISODES_REQUIRED,
          "stale_open": sum(1 for c in open_calls
-                           if (today - datetime.fromisoformat(c["ts"]).astimezone(timezone.utc)).days > 40)}
+                           if (today - datetime.fromisoformat(c["ts"]).astimezone(timezone.utc)).days > STALE_WARN_DAYS)}
     if not s["gate_open"]:
         return s
     trades = [{"r": float(o["r"]), "session": o["session"]} for o in settled]
@@ -298,8 +301,8 @@ def report(path: Path | None = None, today: datetime | None = None) -> int:
           f"   sessions {s['sessions']}   days since first call {s['days']}")
     print("  by setup: " + (", ".join(f"{k} {v}" for k, v in sorted(s["by_setup"].items())) or "none"))
     if s["stale_open"]:
-        print(f"  ! {s['stale_open']} open call(s) older than 40 days: grade them before the "
-              f"provider's 60-day window closes")
+        print(f"  ! {s['stale_open']} open call(s) older than {STALE_WARN_DAYS} days: grade them "
+              f"before the provider's 60-day window closes (void at {NO_BARS_DAYS})")
     if not s["gate_open"]:
         print(f"\n  READING GATE: {s['settled']} of {s['required']} settled episodes. The mean, the "
               f"interval, the null and the verdict are WITHHELD by the pre-registration.")
@@ -328,8 +331,9 @@ def selftest() -> int:
     print("=" * 72)
     assert ir.TIMEFRAME == "5m"
     # The pre-registration's literals, pinned here as well as in consistency_check.
-    assert (EPISODES_REQUIRED, NULL_DRAWS, NO_BARS_DAYS, SLIPPAGE_BPS, DUST_R, CI_Z, PRICE_TOL) == \
-        (349, 20, 50, 5.0, 0.05, 1.96, 0.001), "constants drifted from the pre-registration"
+    assert (EPISODES_REQUIRED, NULL_DRAWS, NO_BARS_DAYS, SLIPPAGE_BPS, DUST_R, CI_Z, PRICE_TOL,
+            STALE_WARN_DAYS) == (349, 20, 50, 5.0, 0.05, 1.96, 0.001, 40), \
+        "constants drifted from the pre-registration"
     tmp = Path(tempfile.mkdtemp())
     path = tmp / "paper.jsonl"
     always_open = lambda now_et: True      # noqa: E731
@@ -405,6 +409,13 @@ def selftest() -> int:
     counts = grade_open_calls(fetch=lambda tk: frame if tk == "TSLA" else None, path=path,
                               today=datetime(2026, 10, 14, 12, 0, tzinfo=utc))
     assert counts == {"graded": 0, "void": 2, "open": 1, "fetch_failed": 0}, counts
+    # A same-day call costs no fetch: the decision comes from its timestamp.
+    log_call("NFLX", "long", "orb", 100.0, 99.0, 102.0, path=path,
+             now=datetime(2026, 10, 14, 14, 0, tzinfo=utc), open_check=always_open)
+    _fetched: list = []
+    _c = grade_open_calls(fetch=lambda tk: (_fetched.append(tk), None)[1], path=path,
+                          today=datetime(2026, 10, 14, 18, 0, tzinfo=utc))
+    assert "NFLX" not in _fetched and _c["open"] >= 1, (_fetched, _c)
     outs = {r["ref_seq"]: r for r in read_all(path) if r.get("kind") == "outcome"}
     assert outs[c3["seq"]]["reason"] == "price_outside_bar" and outs[c3["seq"]]["r"] is None
     assert outs[c4["seq"]]["reason"] == "no_bars", "older than 50 days with no bars is VOID"
@@ -437,6 +448,13 @@ def selftest() -> int:
     probs = verify(tampered)
     assert len(probs) >= 2 and "edited" in probs[0] and "cut" in probs[1], probs
     assert verify(path) == [], "the original is untouched"
+    try:
+        log_call("TSLA", "long", "orb", 241.30, 239.80, 244.30, path=tampered, now=t_call,
+                 open_check=always_open)
+        raise AssertionError("a call must not be appended to a cut chain")
+    except ValueError as e:
+        assert "does not verify" in str(e), e
+    assert len(tampered.read_text(encoding="utf-8").splitlines()) == len(lines), "nothing appended"
     print("chain            : forward_log.verify() reads this file; an edited stop is reported "
           "and the chain is cut after it")
 

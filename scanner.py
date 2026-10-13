@@ -128,18 +128,33 @@ def pool_tickers(watchlist: list[str]) -> list[str]:
     return sorted(set(_u.CANDIDATE_POOL) - set(watchlist))
 
 
-def relative_strength(df, bench, lookback: int | None = None) -> float | None:
+def relative_strength(df, bench, lookback: int | None = None,
+                      now: datetime | None = None) -> float | None:
     """universe.score_ticker()'s RS — the return spread against SPY over
     RS_LOOKBACK sessions, in percentage points — on the scan's own frames,
-    so pool alerts rank on the number the universe already ranks on."""
+    so pool alerts rank on the number the universe already ranks on.
+
+    SETTLED AND DATE-ALIGNED (review 2026-10-13): today's partial bar is
+    dropped from both frames, and the two returns are taken over the same
+    calendar dates, so a halt or a provider gap in one frame cannot shift
+    its window against the benchmark's."""
     try:
         import universe as _u
         lb = lookback or _u.RS_LOOKBACK
-        if df is None or bench is None or len(df) < lb + 1 or len(bench) < lb + 1:
+        if df is None or bench is None:
             return None
-        t = float(df["Close"].iloc[-1]) / float(df["Close"].iloc[-lb - 1]) - 1
-        b = float(bench["Close"].iloc[-1]) / float(bench["Close"].iloc[-lb - 1]) - 1
-        return round((t - b) * 100, 2)
+        _now = now or datetime.now(ET)
+        a, _ = sc.drop_partial_bar(df, now=_now)
+        b, _ = sc.drop_partial_bar(bench, now=_now)
+        sa = pd.Series(a["Close"].to_numpy(dtype=float), index=sc._bar_dates(a, None))
+        sb = pd.Series(b["Close"].to_numpy(dtype=float), index=sc._bar_dates(b, None))
+        common = sa.index.intersection(sb.index)
+        if len(common) < lb + 1:
+            return None
+        common = common[-(lb + 1):]
+        t = float(sa[common].iloc[-1]) / float(sa[common].iloc[0]) - 1
+        bb = float(sb[common].iloc[-1]) / float(sb[common].iloc[0]) - 1
+        return round((t - bb) * 100, 2)
     except Exception:                                  # noqa: BLE001
         return None
 
@@ -752,6 +767,17 @@ def analyze(df: pd.DataFrame, ticker: str,
                     ticker, len(df))
         return None
 
+    # THE BASE CONDITION FIRST (review 2026-10-13). evaluate() needs the
+    # earnings calendar, one network call a name, and the pool loop runs this
+    # for ~80 names a session; most fail the base condition, which is pure
+    # arithmetic on the last bar. Same verdict as evaluate()'s "blocked:
+    # base", from the function evaluate() itself calls, so nothing is fetched
+    # for a bar that could not signal.
+    if all(c in df.columns for c in ("EMA20", "EMA50", "MACD", "Signal", "RSI")) \
+            and sc.base_trend(df.iloc[-1], PARAMS) is None:
+        logger.debug("%s — no signal (base)", ticker)
+        return None
+
     r = sc.evaluate(
         df, ticker, PARAMS,
         weekly_trend=get_weekly_trend(ticker) if PARAMS.weekly_confirm else None,
@@ -944,7 +970,7 @@ def _scan_cfg() -> dict:
 
 
 def _record_pullback(tk: str, raw_df, cdf, spy_regime, bucket_src: str,
-                     tally: dict | None = None) -> bool:
+                     tally: dict | None = None) -> bool:   # tally: the run's pullback counts
     """
     THE PULLBACK BUCKET (BACKLOG 31, results/pullback_preregistration.md).
     Evaluated on the frame the base signal just read, for every name the
@@ -1041,6 +1067,11 @@ def run(args) -> int:
     # RAW FRAMES, kept for the grader below so a watchlist ticker with an open
     # signal is not fetched twice in one run.
     frames: dict = {}
+    # THE PULLBACK BUCKET'S COUNTS for this run (signals, below_sma200,
+    # insufficient_history, rr_below_min): the pre-registration says they
+    # are counted, and a bucket that records nothing for weeks must be
+    # tellable apart from "no pullbacks happened".
+    pullback_tally: dict = {}
 
     for tk in WATCHLIST:
         try:
@@ -1071,7 +1102,7 @@ def run(args) -> int:
             # the alert-worthy ones under a name that said otherwise.
             r = analyze(cdf, tk, spy_regime=spy_regime,
                         tally=bars_scanned.get(_bar) if _bar else None)
-            _record_pullback(tk, df, cdf, spy_regime, "live")
+            _record_pullback(tk, df, cdf, spy_regime, "live", pullback_tally)
             if not r:
                 continue
             if record_only:
@@ -1131,6 +1162,7 @@ def run(args) -> int:
     # record-only pass (the pool's open rows are graded there instead), and
     # evaluates the last settled bar exactly as the watchlist loop does.
     pool_scanned, pool_alerted, pool_hq_n = 0, 0, 0
+    pool_send_failed = False
     pool_bars: dict = {}
     if not record_only and (getattr(args, "force_pool", False) or pool_due(state)):
         pool = pool_tickers(WATCHLIST)
@@ -1165,7 +1197,7 @@ def run(args) -> int:
                 r = analyze(cdf, tk, spy_regime=spy_regime,
                             tally=pool_bars.get(_bar) if _bar else None,
                             bucket="pool")
-                _record_pullback(tk, df, cdf, spy_regime, "pool")
+                _record_pullback(tk, df, cdf, spy_regime, "pool", pullback_tally)
                 if r:
                     r["rs"] = relative_strength(df, bench)
                     pool_hq.append(r)
@@ -1196,7 +1228,13 @@ def run(args) -> int:
                 pool_alerted += 1
                 if not args.dry_run:
                     state[f"{tk}:{r['trend']}"] = time.time()
-        if pool_scanned and not args.dry_run:
+            else:
+                pool_send_failed = True
+        # THE ONCE-A-DAY STAMP IS WRITTEN ONLY WHEN THE DAY'S POOL ALERTS WERE
+        # DELIVERED (review 2026-10-13): a Telegram failure leaves the pool
+        # due, so the next alerting run rescans and resends, exactly as the
+        # watchlist's cooldown stamp is written only on a delivered alert.
+        if pool_scanned and not args.dry_run and not pool_send_failed:
             state[POOL_STATE_KEY] = datetime.now(ET).strftime("%Y-%m-%d")
         if pool and not pool_scanned:
             logger.warning("pool: all %d name(s) failed — the pool was NOT scanned; "
@@ -1317,6 +1355,8 @@ def run(args) -> int:
         except Exception as _exc:                          # noqa: BLE001
             logger.warning("forward log: pool scan row for %s failed: %s", _bar, _exc)
 
+    if pullback_tally:
+        logger.info("pullback bucket: %s", pullback_tally)
     if not args.dry_run:
         save_state(state)
 
@@ -2043,6 +2083,22 @@ def _selftest_body() -> int:
             _fetched.clear(); _sent4.clear()
             run(_ns(dry_run=True))
             assert sum(1 for t in _fetched if t in _pool7) == 7 and POOL_STATE_KEY not in _state4
+            # A TELEGRAM FAILURE leaves the pool due: no stamp, no cooldown, and
+            # the next alerting run scans and sends again.
+            for k in list(_state4):
+                if k.endswith(":Bullish"):
+                    _state4.pop(k)
+            globals()["send_alert"] = lambda m, dry_run=False: False
+            _fetched.clear()
+            run(_ns())
+            assert sum(1 for t in _fetched if t in _pool7) == 7 and POOL_STATE_KEY not in _state4, \
+                "undelivered pool alerts must not stamp the day"
+            assert not any(k.endswith(":Bullish") for k in _state4), "no cooldown on a failed send"
+            globals()["send_alert"] = lambda m, dry_run=False: (_sent4.append(m) or True)
+            _fetched.clear(); _sent4.clear()
+            run(_ns())
+            assert sum(1 for t in _fetched if t in _pool7) == 7 and POOL_STATE_KEY in _state4 \
+                and len([m for m in _sent4 if m.startswith("🚨 POOL ALERT")]) == 5, "delivered: stamped"
         finally:
             _g.update(_saved)
             pullback_signal.evaluate_pullback = _real_pb
@@ -2054,6 +2110,57 @@ def _selftest_body() -> int:
     finally:
         forward_log.LOG = _real_log4
         globals()["send_alert"] = _real_send4
+
+    # ── analyze() FETCHES NOTHING FOR A BAR THAT CANNOT SIGNAL (review 2026-10-13) ──
+    _earn_calls: list = []
+    _real_earn = globals()["check_earnings_blackout"]
+    _real_wk = globals()["get_weekly_trend"]
+    try:
+        globals()["check_earnings_blackout"] = lambda t: (_earn_calls.append(t), (True, "n/a"))[1]
+        globals()["get_weekly_trend"] = lambda t: "Bullish"
+        import pandas as _pd5
+        _flat = compute(_pd5.DataFrame(
+            {"Open": 100.0, "High": 100.5, "Low": 99.5, "Close": 100.0, "Volume": 1e6},
+            index=_pd5.bdate_range(end="2026-06-30", periods=300)))
+        assert analyze(_flat, "FLT") is None and _earn_calls == [], (
+            _earn_calls, "a flat tape fails the base condition; the earnings calendar is not fetched")
+        _px, _up = 100.0, []
+        for _i in range(300):
+            _px *= (1.004 + 0.00001 * _i) if _i % 4 != 3 else 0.992
+            _up.append(_px)
+        _bull = compute(_pd5.DataFrame(
+            {"Open": _up, "High": [x * 1.004 for x in _up], "Low": [x * 0.996 for x in _up],
+             "Close": _up, "Volume": 1e6}, index=_pd5.bdate_range(end="2026-06-30", periods=300)))
+        assert sc.base_trend(_bull.iloc[-1], PARAMS) == "Bullish"
+        _real_log5 = forward_log.LOG
+        try:
+            forward_log.LOG = _pl2.Path(_tf2.mkdtemp()) / "an.jsonl"
+            analyze(_bull, "BUL")
+        finally:
+            forward_log.LOG = _real_log5
+        assert _earn_calls == ["BUL"], (_earn_calls, "the calendar is fetched once a bar that passes")
+        print("analyze() fetch order   : base condition first; earnings calendar only for a bar that passes it")
+    finally:
+        globals()["check_earnings_blackout"] = _real_earn
+        globals()["get_weekly_trend"] = _real_wk
+
+    # ── RELATIVE STRENGTH: settled closes, aligned by date ──
+    import pandas as _pd6
+    _days = _pd6.bdate_range(end="2026-06-30", periods=70)
+    _stk = _pd6.DataFrame({"Close": [100.0] * 69 + [110.0]}, index=_days)
+    _bch = _pd6.DataFrame({"Close": [50.0] * 70}, index=_days)
+    _settled = _dt2(2026, 7, 1, 10, 0, tzinfo=ET)
+    assert abs(relative_strength(_stk, _bch, now=_settled) - 10.0) < 1e-9
+    _gap = _stk.drop(_days[30])                               # a missing session in the stock
+    assert abs(relative_strength(_gap, _bch, now=_settled) - 10.0) < 1e-9, "aligned on common dates"
+    _today = _days[-1] + _pd6.Timedelta(days=1)
+    _partial = _pd6.concat([_stk, _pd6.DataFrame({"Close": [200.0]}, index=[_today])])
+    _bch_partial = _pd6.concat([_bch, _pd6.DataFrame({"Close": [50.0]}, index=[_today])])
+    _in_session = _today.to_pydatetime().replace(hour=10, tzinfo=ET)
+    assert abs(relative_strength(_partial, _bch_partial, now=_in_session) - 10.0) < 1e-9, \
+        "today's partial bar (in BOTH frames) is dropped before ranking"
+    assert relative_strength(_stk.iloc[-20:], _bch, now=_settled) is None, "fewer than 64 common dates: no number"
+    print("relative strength       : settled closes, common dates only, partial bar dropped")
 
     # ── THE GRADER IS WIRED INTO run(), AND REUSES THE SCAN'S FRAMES ──
     # results/forward_grading_preregistration.md. A taken signal on a

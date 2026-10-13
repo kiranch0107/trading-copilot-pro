@@ -430,8 +430,8 @@ def simulate(d: pd.DataFrame, setup: dict, tally: dict | None = None) -> dict | 
     bar, or (hold_bars set) marked at the close of the hold_bars-th bar held,
     the entry bar included, wherever that falls."""
     i = setup["signal_i"]
-    _first, last = _session_bounds(d, i)
     if HOLD_BARS is None:
+        _first, last = _session_bounds(d, i)
         if i + 1 > last:
             return None
         max_hold = last - i

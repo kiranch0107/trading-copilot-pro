@@ -7,6 +7,16 @@ committed. Parents: `intraday_rules_preregistration.md` (5-minute, run
 2026-10-10, no rule cleared) and `intraday_rules_hourly_preregistration.md`
 (hourly, run 2026-10-10, no rule cleared). Neither verdict is reopened here.
 
+## Wording note, 2026-10-13 (no number changes)
+
+The random null's last entry bar is the last bar on which a detector can
+fire, which is two bars before the week's last bar (the code's
+`random_null` upper bound, the same bound the detectors loop to). The
+sentence below that says "second-from-last" describes that bar
+imprecisely; the run was produced with the code's bound, so the null and
+the real setups share the same window, as intended. Found by the review of
+2026-10-13; recorded rather than edited, because the run is committed.
+
 ## What a 4-hour bar does to the question, stated before the data
 
 A US regular session is six and a half hours, so it holds **two** 4-hour

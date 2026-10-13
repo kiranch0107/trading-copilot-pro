@@ -117,7 +117,8 @@ def read_all(path: Path | None = None) -> list[dict]:
     return out
 
 
-def append(kind: str, body: dict, path: Path | None = None) -> dict:
+def append(kind: str, body: dict, path: Path | None = None,
+           now: datetime | None = None) -> dict:
     """Add one record, chained to the last.
 
     The hash covers the PREVIOUS hash as well as this body, so changing any
@@ -130,7 +131,8 @@ def append(kind: str, body: dict, path: Path | None = None) -> dict:
     body = dict(body)
     body["seq"] = len(rows) + 1
     body["kind"] = kind
-    body["ts"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    body["ts"] = (now or datetime.now(timezone.utc)).astimezone(timezone.utc) \
+        .isoformat(timespec="seconds")
     body["prev"] = prev
     rec = dict(body)
     rec["hash"] = _digest(prev, body)
@@ -872,22 +874,30 @@ def summary(path: Path | None = None) -> dict:
     scans = [r for r in rows if r.get("kind") == "scan"]
     taken = [s for s in sigs if counts_as_taken(s)]
     skipped = [s for s in sigs if not counts_as_taken(s)]
-    taken_hq = [s for s in taken if _is_hq(s)]
+    # THE HEADLINE READING IS THE LIVE BUCKET'S. The pre-registered HQ-versus-
+    # base question (BACKLOG 24) was asked of the watchlist; the pool and
+    # pullback buckets are other populations and are read in by_bucket below.
+    # Folding them in here would let a pullback row (no hq field) sit in the
+    # live base tier and move the 349-episode gate (review 2026-10-13).
+    live_taken = [s for s in taken if bucket_of(s) == "live"]
+    live_seqs = {s.get("seq") for s in live_taken}
+    taken_hq = [s for s in live_taken if _is_hq(s)]
     configs = sorted({s.get("config") for s in sigs if s.get("config")})
     # BY BASIS, AND ONLY BY BASIS. A premium R and a stop-distance R are
     # different denominators; there is no pooled mean here on purpose.
     by_basis = {}
     for basis in ("premium", "stop_distance"):
-        outs_b = [o for o in outs if o.get("basis") == basis]
+        outs_b = [o for o in outs if o.get("basis") == basis
+                  and o.get("ref_seq") in live_seqs]
         settled_b = [o for o in outs_b if o.get("r") is not None]
         by_basis[basis] = {
             "settled": len(settled_b),
             "void": sum(1 for o in outs_b if o.get("outcome") == "void"),
-            "open": len(taken) - len(outs_b),
+            "open": len(live_taken) - len(outs_b),
             "mean_r": (sum(o["r"] for o in settled_b) / len(settled_b)
                        if settled_b else float("nan")),
-            "mean_r_hq": _mean_r(settled_b, sigs, True),
-            "mean_r_base": _mean_r(settled_b, sigs, False),
+            "mean_r_hq": _mean_r(settled_b, live_taken, True),
+            "mean_r_base": _mean_r(settled_b, live_taken, False),
         }
     # BY BUCKET (BACKLOG 30): the live watchlist and the wider pool are two
     # populations and the HQ-versus-base question is asked of each. Stop-
@@ -908,7 +918,8 @@ def summary(path: Path | None = None) -> dict:
         "rows": len(rows), "scans": len(scans),
         "bars_scanned": len({x.get("bar_date") for x in scans}),
         "signals": len(sigs), "taken": len(taken),
-        "taken_hq": len(taken_hq), "taken_base": len(taken) - len(taken_hq),
+        "taken_hq": len(taken_hq), "taken_base": len(live_taken) - len(taken_hq),
+        "taken_live": len(live_taken),
         "skipped": len(skipped), "outcomes": len(outs),
         "by_basis": by_basis, "by_bucket": by_bucket,
         "configs": configs,
@@ -930,12 +941,13 @@ def report(path: Path | None = None) -> int:
         return 0
     print(f"  {s['rows']} rows: {s['signals']} signals, {s['outcomes']} outcomes, "
           f"{s['scans']} scans")
-    print(f"  taken {s['taken']} (hq {s['taken_hq']}, base {s['taken_base']})   "
-          f"skipped {s['skipped']}")
+    print(f"  taken {s['taken']} (live bucket {s['taken_live']}: hq {s['taken_hq']}, "
+          f"base {s['taken_base']})   skipped {s['skipped']}")
     for b, bb in s["by_bucket"].items():
         print(f"  bucket {b:<5}: taken {bb['taken']} (hq {bb['taken_hq']})   "
               f"settled {bb['settled']} on stop distance   "
               f"mean R hq {bb['mean_r_hq']:+.3f} / base {bb['mean_r_base']:+.3f}")
+    print("  by basis — the LIVE bucket only, the pre-registered reading; other buckets above")
     for basis, b in s["by_basis"].items():
         if not (b["settled"] or b["void"]):
             continue
@@ -1277,6 +1289,13 @@ def selftest() -> int:
     assert (_bs["pool"]["taken"], _bs["pool"]["taken_hq"], _bs["pool"]["settled"]) == (1, 1, 1)
     assert abs(_bs["live"]["mean_r_base"] + 1.0) < 1e-9 and abs(_bs["pool"]["mean_r_hq"] - 2.0) < 1e-9
     assert _bs["live"]["mean_r_hq"] != _bs["live"]["mean_r_hq"], "no hq rows in live -> nan"
+    _sb = summary(bk)
+    assert (_sb["taken"], _sb["taken_live"], _sb["taken_hq"], _sb["taken_base"]) == (2, 1, 0, 1), _sb
+    assert _sb["by_basis"]["stop_distance"]["settled"] == 1 and \
+        abs(_sb["by_basis"]["stop_distance"]["mean_r"] + 1.0) < 1e-9, \
+        "the headline by-basis reading is the live bucket's alone (the pool's +2.0 R stays out)"
+    _r0 = append("note", {"x": 1}, path=bk, now=datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc))
+    assert _r0["ts"] == "2026-01-02T03:04:05+00:00", "append() stamps the given instant, in UTC"
     print("buckets          : rows name live/pool (legacy = live); pool scans are not "
           "the heartbeat; summary splits hq/base per bucket")
 

@@ -1979,9 +1979,14 @@ def check_forward_log_single_writer() -> None:
         # attach_outcomes() is a WRITE too — it is how the scanner appends
         # outcome rows (BACKLOG 17). Leaving it out would let a second module
         # start writing through the one entry point this check did not name.
-        if any(f"forward_log.{fn}" in txt for fn in
-               ("record_signal", "record_outcome", "append", "attach_outcomes",
-                "record_scan", "grade_open_signals")):
+        # A forward_log.append() call WITH an explicit path writes some other
+        # chain in the same format (daytrade_paper.jsonl); without one it
+        # writes the forward log, and that is a writer.
+        import re as _re
+        bare_append = _re.search(r"forward_log\.append\((?=\s*[^)\s])(?![^)]*path=)", txt)
+        if bare_append or any(f"forward_log.{fn}" in txt for fn in
+                              ("record_signal", "record_outcome", "attach_outcomes",
+                               "record_scan", "grade_open_signals")):
             writers.append(p.name)
     if writers != ["scanner.py"]:
         raise AssertionError(
@@ -2558,9 +2563,12 @@ def check_daytrade_paper_isolated() -> None:
         assert "daytrade_paper" not in txt, \
             f"{p.name} references the Phase 2 paper record; only daytrade_paper.py may"
     src = Path("daytrade_paper.py").read_text(encoding="utf-8")
-    assert "forward_log.append" not in src and "import streamlit" not in src and \
-        "import journal_store" not in src and "import gh_sync" not in src, \
-        "daytrade_paper.py must not write the forward log or pull Streamlit"
+    import re as _re
+    _calls = [a for a in _re.findall(r"forward_log\.append\(([^)]*)\)", src) if a.strip()]
+    assert _calls and all("path=" in a for a in _calls), \
+        "daytrade_paper.py writes its own chain through forward_log.append(path=...), never the forward log"
+    assert "import streamlit" not in src and "import journal_store" not in src \
+        and "import gh_sync" not in src, "daytrade_paper.py must not pull Streamlit"
     assert "python daytrade_paper.py --selftest" in Path(".github/workflows/tests.yml").read_text()
     print("  Phase 2 paper record: one writer, never read by journal/app/scanner, "
           "constants equal the pre-registration, Phase 1 engine")
