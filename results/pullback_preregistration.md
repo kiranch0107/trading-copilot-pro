@@ -7,6 +7,16 @@ only until the first row is committed. Parent: `logic_review_2026-10-13.md`
 §3(b) and §5(2); the lead is `inverted_arm_run2.txt` (the bearish base
 setup taken long, Bull regime, +0.398 R on 423 trades, inside its null).
 
+## Arrival note, 2026-10-13 (no rule changes)
+
+Measured the same day on the last 252 sessions across the 83-name pool
+(`pullback_arrival.py`, counts only, `data_checks_run1.md`): 823 signal
+bars, 203 episodes, **0.81 episodes a session**, so 349 episodes take about
+**433 sessions, 20.6 months**, not the twelve to eighteen estimated below.
+The estimate assumed half of bearish base setups sit above their 200-day
+average; three quarters do not. The rule, the bar and the reading are
+unchanged.
+
 ## Why forward, and why this rule
 
 Every reserved tranche is spent (A, B, C: `data_reservation.lock.json`), so

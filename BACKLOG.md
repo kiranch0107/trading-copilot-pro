@@ -1683,6 +1683,14 @@ geometries on every daily frame frozen in `.bar_cache` through both
 disagreement in outcome or R (synthetic version: 596 paths, zero). **Owed on
 the laptop:** `python pullback_arrival.py | tee results/pullback_arrival_run1.txt`
 and `python engine_differential.py | tee results/engine_differential_run1.txt`.
+**Run 2026-10-13 by the owner (`results/data_checks_run1.md`):** the engines
+AGREE on 10,569 random setups over 271 real frames, zero disagreements at
+the grader's precision, 212 gapped fills void in both; the pullback rule
+fires 0.81 episodes a session across the 83 names (823 bars, 203 episodes,
+193 in a Bull regime), so the 349-episode reading is **about 20.6 months**
+away, not twelve to eighteen (75 % of bearish base setups sit below their
+200-day average); the pre-registration carries a dated arrival note, no
+rule changes.
 
 ---
 
