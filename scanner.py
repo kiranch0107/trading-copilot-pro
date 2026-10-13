@@ -2106,10 +2106,15 @@ def _selftest_body() -> int:
             run(_ns(force=False, record_only=True))
             assert not any(t in _pool7 for t in _fetched) and not _sent4, _fetched
             assert POOL_STATE_KEY not in _state4, "record-only must not stamp the pool"
-            # A DRY RUN scans and prints but leaves no stamp.
+            # A DRY RUN scans and prints but leaves no stamp and records no alert:
+            # cooldowns cleared first so the five are actually "sent" (printed).
+            for k in list(_state4):
+                if k.endswith(":Bullish"):
+                    _state4.pop(k)
             _fetched.clear(); _sent4.clear()
             _n_alerts_before = len([r for r in forward_log.read_all(_tmpl4) if r["kind"] == "alert"])
             run(_ns(dry_run=True))
+            assert len([m for m in _sent4 if m.startswith("🚨 POOL ALERT")]) == 5, "the dry run printed five"
             assert sum(1 for t in _fetched if t in _pool7) == 7 and POOL_STATE_KEY not in _state4
             assert len([r for r in forward_log.read_all(_tmpl4) if r["kind"] == "alert"]) == _n_alerts_before, \
                 "a dry run sends nothing, so it records no alert"
