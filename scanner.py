@@ -153,6 +153,7 @@ def pool_due(state: dict, today: str | None = None) -> bool:
 
 import signal_core as sc
 import forward_log
+import pullback_signal
 import risk_params
 import notify
 
@@ -942,6 +943,35 @@ def _scan_cfg() -> dict:
             "longs_only": risk_params.LONGS_ONLY}
 
 
+def _record_pullback(tk: str, raw_df, cdf, spy_regime, bucket_src: str,
+                     tally: dict | None = None) -> bool:
+    """
+    THE PULLBACK BUCKET (BACKLOG 31, results/pullback_preregistration.md).
+    Evaluated on the frame the base signal just read, for every name the
+    scanner evaluates (watchlist and pool), recorded under bucket=pullback
+    through the record's one writer, and NEVER alerted: the bucket is a
+    measurement. The SPY regime is tagged on the row and gates nothing.
+    Non-fatal, like every record write.
+    """
+    try:
+        pb = pullback_signal.evaluate_pullback(raw_df, cdf, PARAMS, spy_regime, tally)
+        if not pb:
+            return False
+        _bar = sc._bar_dates(cdf, None).max().date()
+        setup = {k: pb.get(k) for k in pullback_signal.SETUP_KEYS}
+        setup["source_bucket"] = bucket_src
+        if forward_log.record_signal(tk, "Bullish", setup, "taken", "", _scan_cfg(),
+                                     bar_date=_bar, bucket="pullback") is None:
+            logger.debug("%s — pullback bar %s already in the forward log", tk, _bar)
+        else:
+            logger.info("%s — PULLBACK signal recorded (bar %s, regime %s, rr %s); "
+                        "never alerted", tk, _bar, pb["regime"], pb["rr"])
+        return True
+    except Exception as exc:                           # noqa: BLE001
+        logger.warning("%s — pullback record failed: %s", tk, exc)
+        return False
+
+
 def run(args) -> int:
     # RECORD-ONLY is the post-close pass. During the session every scan
     # evaluates YESTERDAY's bar (drop_partial_bar), so a signal that forms at
@@ -1041,6 +1071,7 @@ def run(args) -> int:
             # the alert-worthy ones under a name that said otherwise.
             r = analyze(cdf, tk, spy_regime=spy_regime,
                         tally=bars_scanned.get(_bar) if _bar else None)
+            _record_pullback(tk, df, cdf, spy_regime, "live")
             if not r:
                 continue
             if record_only:
@@ -1134,6 +1165,7 @@ def run(args) -> int:
                 r = analyze(cdf, tk, spy_regime=spy_regime,
                             tally=pool_bars.get(_bar) if _bar else None,
                             bucket="pool")
+                _record_pullback(tk, df, cdf, spy_regime, "pool")
                 if r:
                     r["rs"] = relative_strength(df, bench)
                     pool_hq.append(r)
@@ -1913,6 +1945,18 @@ def _selftest_body() -> int:
                                      "pool_tickers", "relative_strength",
                                      "is_post_close_window")}
         _state4: dict = {}
+        # THE PULLBACK BUCKET rides on both loops: AAA (watchlist) and P7 (pool,
+        # not HQ) carry a canned pullback signal; nothing else does.
+        _real_pb = pullback_signal.evaluate_pullback
+        def _fake_pb(raw_df, cdf, params, spy_regime=None, tally=None):
+            tk = raw_df.attrs.get("tk")
+            if tk in ("AAA", "P7"):
+                return {"trend": "Bullish", "price": 100.0, "entry": 100.0, "stop": 98.0,
+                        "target": 106.0, "rr": 3.0, "atr": 1.6, "rsi": 40.0, "adx": 20.0,
+                        "sma200": 95.0, "strength": "Normal", "regime": "Bull",
+                        "ema20": 101.0, "ema50": 102.0}
+            return None
+        pullback_signal.evaluate_pullback = _fake_pb
         try:
             _g["get_data"] = _fake_get
             _g["compute"] = lambda df: df
@@ -1949,12 +1993,23 @@ def _selftest_body() -> int:
                 and _scans4[1]["n_signals"] == 6, _scans4[1]
             assert forward_log.last_scan(_tmpl4)["tickers"] == ["AAA"], \
                 "the coverage heartbeat is the LIVE scan row, not the pool's"
+            _pbr = [r for r in _rows4 if r["kind"] == "signal" and r.get("bucket") == "pullback"]
+            assert sorted(r["ticker"] for r in _pbr) == ["AAA", "P7"], _pbr
+            assert all(r["trend"] == "Bullish" and r["decision"] == "taken" and "hq" not in r
+                       and r["setup"]["regime"] == "Bull" for r in _pbr), _pbr
+            assert {r["setup"]["source_bucket"] for r in _pbr} == {"live", "pool"}, _pbr
+            assert not any(m.splitlines()[1].startswith(("AAA", "P7")) for m in _sent4), \
+                "a pullback signal is never alerted"
+            assert "AAA:Bullish" not in _state4 and "P7:Bullish" not in _state4, \
+                "a pullback signal leaves no cooldown stamp"
             # SECOND RUN THE SAME DAY: no pool fetch, no pool scan row, no alert.
             _fetched.clear(); _sent4.clear()
             run(_ns())
             assert not any(t in _pool7 for t in _fetched) and "SPY" not in _fetched, _fetched
             assert not _sent4 and len([r for r in forward_log.read_all(_tmpl4)
                                        if r["kind"] == "scan"]) == 3, "live heartbeat only"
+            assert len([r for r in forward_log.read_all(_tmpl4) if r.get("bucket") == "pullback"]) == 2, \
+                "the same bar is not recorded twice (record_signal dedupes on the key)"
             # GRADING FETCH RULE: a pool-only name waits for the pool run or the
             # post-close pass; a live-bucket name that left the watchlist is
             # fetched in session, once, as before.
@@ -1990,6 +2045,9 @@ def _selftest_body() -> int:
             assert sum(1 for t in _fetched if t in _pool7) == 7 and POOL_STATE_KEY not in _state4
         finally:
             _g.update(_saved)
+            pullback_signal.evaluate_pullback = _real_pb
+        print("pullback bucket         : rows under bucket=pullback for a watchlist and a pool "
+              "name, never alerted, no cooldown stamp, deduped on the bar")
         print(f"pool bucket             : once a session, {POOL_ALERT_CAP} of 6 HQ sent in RS "
               f"order, rows+scan under bucket=pool, live heartbeat untouched; "
               f"second run skips, --force-pool re-runs, record-only never scans it")

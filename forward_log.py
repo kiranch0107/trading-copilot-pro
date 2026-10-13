@@ -188,7 +188,8 @@ def already_recorded(ticker: str, trend: str, bar_date,
                for r in read_all(path))
 
 
-BUCKETS = ("live", "pool")      # the watchlist, and the wider pool (BACKLOG 30)
+BUCKETS = ("live", "pool", "pullback")   # the watchlist; the wider pool (BACKLOG 30);
+                                         # the pullback signal (BACKLOG 31, pre-registered)
 
 
 def bucket_of(row: dict) -> str:
