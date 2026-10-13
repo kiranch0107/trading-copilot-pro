@@ -1,0 +1,178 @@
+  · SPY: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  · AAPL: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  AAPL: 20 signal bars
+  · ABBV: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  ABBV: 9 signal bars
+  · ABNB: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  ABNB: 6 signal bars
+  · ABT: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  ABT: 0 signal bars
+  · ACN: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  ACN: 0 signal bars
+  · ADBE: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  ADBE: 0 signal bars
+  · ADI: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  ADI: 35 signal bars
+  · AMD: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  AMD: 20 signal bars
+  · AMGN: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  AMGN: 13 signal bars
+  · AMZN: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  AMZN: 23 signal bars
+  · ANET: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  ANET: 17 signal bars
+  · AVGO: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  AVGO: 20 signal bars
+  · AXP: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  AXP: 12 signal bars
+  · BA: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  BA: 5 signal bars
+  · BAC: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  BAC: 16 signal bars
+  · BLK: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  BLK: 12 signal bars
+  · BMY: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  BMY: 26 signal bars
+  · C: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  C: 22 signal bars
+  · CAT: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  CAT: 10 signal bars
+  · CMCSA: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  CMCSA: 0 signal bars
+  · CME: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  CME: 10 signal bars
+  · CMG: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  CMG: 0 signal bars
+  · COP: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  COP: 13 signal bars
+  · CRM: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  CRM: 0 signal bars
+  · CRWD: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  CRWD: 7 signal bars
+  · CSX: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  CSX: 14 signal bars
+  · CVS: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  CVS: 22 signal bars
+  · CVX: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  CVX: 23 signal bars
+  · DE: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  DE: 9 signal bars
+  · FDX: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  FDX: 7 signal bars
+  · FTNT: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  FTNT: 0 signal bars
+  · GE: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  GE: 12 signal bars
+  · GOOGL: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  GOOGL: 27 signal bars
+  · GS: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  GS: 12 signal bars
+  · HON: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  HON: 14 signal bars
+  · JNJ: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  JNJ: 15 signal bars
+  · JPM: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  JPM: 18 signal bars
+  · KO: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  KO: 0 signal bars
+  · LLY: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  LLY: 22 signal bars
+  · LMT: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  LMT: 4 signal bars
+  · LRCX: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  LRCX: 16 signal bars
+  · MA: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  MA: 6 signal bars
+  · MDLZ: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  MDLZ: 5 signal bars
+  · META: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  META: 3 signal bars
+  · MO: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  MO: 9 signal bars
+  · MPC: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  MPC: 2 signal bars
+  · MRK: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  MRK: 7 signal bars
+  · MS: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  MS: 18 signal bars
+  · MSFT: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  MSFT: 14 signal bars
+  · MU: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  MU: 0 signal bars
+  · NFLX: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  NFLX: 1 signal bars
+  · NOW: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  NOW: 0 signal bars
+  · NVDA: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  NVDA: 27 signal bars
+  · ON: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  ON: 15 signal bars
+  · ORCL: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  ORCL: 11 signal bars
+  · OXY: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  OXY: 9 signal bars
+  · PANW: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  PANW: 1 signal bars
+  · PEP: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  PEP: 6 signal bars
+  · PFE: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  PFE: 9 signal bars
+  · PG: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  PG: 0 signal bars
+  · PM: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  PM: 0 signal bars
+  · PSX: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  PSX: 2 signal bars
+  · QCOM: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  QCOM: 4 signal bars
+  · ROST: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  ROST: 13 signal bars
+  · RTX: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  RTX: 7 signal bars
+  · SCHW: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  SCHW: 14 signal bars
+  · SLB: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  SLB: 7 signal bars
+  · SPGI: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  SPGI: 0 signal bars
+  · SYK: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  SYK: 0 signal bars
+  · T: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  T: 0 signal bars
+  · TGT: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  TGT: 0 signal bars
+  · TJX: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  TJX: 8 signal bars
+  · TMO: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  TMO: 4 signal bars
+  · TMUS: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  TMUS: 0 signal bars
+  · TSLA: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  TSLA: 16 signal bars
+  · UNH: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  UNH: 18 signal bars
+  · UNP: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  UNP: 14 signal bars
+  · UPS: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  UPS: 17 signal bars
+  · V: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  V: 0 signal bars
+  · VZ: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  VZ: 12 signal bars
+  · WFC: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  WFC: 6 signal bars
+  · WMT: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  WMT: 7 signal bars
+  · XOM: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
+  XOM: 20 signal bars
+==============================================================================
+PULLBACK ARRIVAL — counts only; no result, no R, nothing read after a signal bar
+==============================================================================
+  names 83   sessions in window 252   fingerprint v2-e2805739bd13777d
+  refusals: {'signals': 823, 'below_sma200': 2456, 'zero_risk': 8}
+  signal bars 823   episodes 203   = 3.27 bars/day, 0.81 episodes/day
+  episodes by SPY regime: Bear 10, Bull 193
+  episodes by month: 2025-10 11, 2025-11 13, 2025-12 12, 2026-01 15, 2026-02 19, 2026-03 21, 2026-04 9, 2026-05 15, 2026-06 18, 2026-07 25, 2026-08 13, 2026-09 28, 2026-10 4
+  most frequent names: AVGO 8, CVX 8, ADI 6, AMZN 6, BLK 6, NVDA 6, ON 6, ANET 5, CVS 5, GOOGL 5
+  at this rate 349 episodes take about 433 sessions (20.6 months)
+==============================================================================
