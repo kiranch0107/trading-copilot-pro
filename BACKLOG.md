@@ -1421,6 +1421,56 @@ decision.
 
 ---
 
+## 30. A second bucket: scan a wider universe for HIGH-QUALITY signals, price the chain for at most five — LOGGED 2026-10-13, NOT STARTED
+
+**Owner's idea, 2026-10-13, logged before anything else was started.** In
+the owner's words: can we expand the universe to identify high-quality
+stocks and, if found, check the option chain only for five high-quality
+names? This would be another bucket of tickers beside the live one.
+
+**What exists today.** The live universe is `universe.select_universe()`:
+the `CANDIDATE_POOL` (about 80 names, reserved tranche A excluded) ranked
+by relative strength against SPY, top 8, at most two per sector, refreshed
+every 14 days. The scanner runs the signal on those 8 and tags each signal
+`hq` with `setup.hq_fail` (BACKLOG 24: the base signal is recorded, the
+HQ tier only gates the alert). `fetch_atm_chain()` prices the ATM chain
+per name in the post-close record-only pass (BACKLOG 25 Part B). So the
+pieces are there: a pool, an HQ tag, a chain fetch. What is new is the
+ORDER: scan the pool, select by HQ, and spend the chain calls only on what
+cleared.
+
+**What it would take, and what must be decided before any of it.**
+
+1. *The premise is unmeasured.* "High-quality" is the alert tier whose
+   features were refuted on daily data (24); the forward record now tags
+   HQ precisely so that `summary()` can compare `mean_r_hq` with
+   `mean_r_base` once there are enough settled outcomes. Until that reads,
+   a bucket selected on HQ is a bucket selected on a label with no measured
+   edge over the base signal. The record is the test; this item should not
+   front-run it.
+2. *Which five.* On a day with more than five HQ signals across 80 names
+   the bucket needs a ranking (RS score, R:R, dollar volume, spread) and
+   that is a design choice, the owner's, with the usual risk of choosing
+   the ranking that looked best last month.
+3. *Cost in calls.* The scanner fetches 8 histories; the pool is 10x that,
+   and Yahoo from Actions is already the fragile leg (26, 27). Reuse the
+   universe refresh's history fetch rather than a second one, or the scan
+   doubles the provider's exposure.
+4. *Reservation.* The pool already excludes tranche A; the bucket must read
+   `data_reservation` the same way, or this becomes the way tranche B was
+   lost (universe.py's own note).
+5. *Record, not alert, first.* Same rule as 24: record every HQ signal the
+   wide scan finds in the forward log under its own `bucket` field, grade
+   it with the same resolver, and only then decide whether five of them
+   deserve chains. A bucket that alerts before it is graded is a second
+   unmeasured strategy running live.
+
+**Not started.** Owner to decide the ranking in (2) and whether to wait for
+the HQ-versus-base reading in (1) first. Nothing in the scanner, universe
+or log is changed by this entry.
+
+---
+
 ## Working conventions
 
 - `signal_core.py` is canonical. `consistency_check.py` enforces 42 cross-module
