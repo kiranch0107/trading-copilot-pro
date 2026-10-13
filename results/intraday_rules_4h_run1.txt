@@ -1,0 +1,86 @@
+intraday_rules: timeframe 4h (2y of 1h bars), 20 names
+  AAPL: 990 bars, 105 weeks, 88 trades
+  ADBE: 990 bars, 105 weeks, 92 trades
+  AMD: 997 bars, 105 weeks, 90 trades
+  AMZN: 997 bars, 105 weeks, 86 trades
+  AVGO: 997 bars, 105 weeks, 79 trades
+  CRM: 997 bars, 105 weeks, 95 trades
+  GOOGL: 997 bars, 105 weeks, 92 trades
+  LRCX: 991 bars, 105 weeks, 86 trades
+  META: 997 bars, 105 weeks, 86 trades
+  MSFT: 991 bars, 105 weeks, 83 trades
+  MU: 997 bars, 105 weeks, 85 trades
+  NFLX: 997 bars, 105 weeks, 80 trades
+  NOW: 990 bars, 105 weeks, 94 trades
+  NVDA: 990 bars, 105 weeks, 90 trades
+  ORCL: 997 bars, 105 weeks, 88 trades
+  PANW: 991 bars, 105 weeks, 87 trades
+  QCOM: 997 bars, 105 weeks, 85 trades
+  QQQ: 997 bars, 105 weeks, 88 trades
+  SPY: 997 bars, 105 weeks, 82 trades
+  TSLA: 997 bars, 105 weeks, 87 trades
+  engine tally: {'gapped past stop before fill': 50, 'skipped: position open': 1743, 'gapped past target before fill': 81, 'target filled at the open (gapped through)': 100, 'stop filled at the open (gapped through)': 155, 'unfinished at sample end (marked to last close)': 11}
+==============================================================================
+SIX INTRADAY RULES ON 4H BARS — results/intraday_rules_4h_preregistration.md
+==============================================================================
+  timeframe 4h (2y of 1h, resampled)   names 20   weeks 104   costs 5 bps/side   held <= 10 bars across sessions   CI z=2.576   fingerprint v2-eb11301b7b4c55e4
+
+  orb
+    setups   234   mean R -0.126   99% CI [-0.385, +0.132]   wins 33   timeouts 106
+    random null +0.031 over 20 draws; real at percentile 0
+    RVOL T1 [1.50..1.75]        n   78  mean R -0.178
+    RVOL T2 [1.76..2.32]        n   78  mean R -0.137
+    RVOL T3 [2.32..28.54]       n   78  mean R -0.063
+      - mean R -0.126 < +0.15
+      - clustered CI lower -0.385 <= 0 (81 session clusters, z=2.576)
+      - over random null -0.158 < +0.15
+    VERDICT: does not clear
+
+  vwap_reclaim
+    setups    78   mean R -0.138   99% CI [-0.394, +0.118]   wins 50   timeouts 1
+    random null -0.091 over 20 draws; real at percentile 20
+      - mean R -0.138 < +0.15
+      - clustered CI lower -0.394 <= 0 (46 session clusters, z=2.576)
+      - over random null -0.047 < +0.15
+    VERDICT: does not clear
+
+  ema_pullback
+    setups   279   mean R -0.056   99% CI [-0.338, +0.225]   wins 89   timeouts 39
+    random null -0.098 over 20 draws; real at percentile 80
+      - mean R -0.056 < +0.15
+      - clustered CI lower -0.338 <= 0 (92 session clusters, z=2.576)
+      - over random null +0.042 < +0.15
+    VERDICT: does not clear
+
+  rsi_divergence
+    setups   200   mean R -0.562   99% CI [-1.348, +0.225]   wins 53   timeouts 35
+    random null -0.130 over 20 draws; real at percentile 0
+      - mean R -0.562 < +0.15
+      - clustered CI lower -1.348 <= 0 (84 session clusters, z=2.576)
+      - over random null -0.431 < +0.15
+    VERDICT: does not clear
+
+  fib_pullback
+    setups   303   mean R -0.272   99% CI [-0.441, -0.102]   wins 152   timeouts 13
+    random null -0.142 over 20 draws; real at percentile 0
+    zone named         n   79  mean R -0.278
+    zone control_low   n  175  mean R -0.148
+    zone control_high  n   49  mean R -0.704
+      - mean R -0.272 < +0.15
+      - clustered CI lower -0.441 <= 0 (98 session clusters, z=2.576)
+      - over random null -0.130 < +0.15
+      - rule-specific clause failed
+    VERDICT: does not clear
+
+  trendline_break
+    setups   649   mean R -0.167   99% CI [-0.344, +0.011]   wins 114   timeouts 214
+    random null +0.003 over 20 draws; real at percentile 0
+      - mean R -0.167 < +0.15
+      - clustered CI lower -0.344 <= 0 (103 session clusters, z=2.576)
+      - over random null -0.170 < +0.15
+    VERDICT: does not clear
+
+==============================================================================
+  No rule clears. On these names, over this window, net of costs, none of the
+  six objective versions of the proposed tools beat random entry by the bar.
+==============================================================================
