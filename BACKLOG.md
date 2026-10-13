@@ -1602,6 +1602,35 @@ record shows within weeks.
 
 ---
 
+## 31. "Most trades fail, others make money": the logic review — ASSESSED 2026-10-13, DECISIONS OPEN
+
+**Owner's question 2026-10-13.** Answered in
+`results/logic_review_2026-10-13.md` from the committed record first and
+the literature second; no new result. The record already explains both
+halves: trades fail because the signal has no edge (`drift_null`: random
+entries with the same exits match it) and the live geometry (1.25 ATR stop,
+4 ATR target, 20 bars) is hit by noise about seven times in ten under a
+driftless walk, so the forward record's 3 wins in 16 is what noise gives;
+setups never pass because the HQ gate's ADX ≥ 35 leg almost never occurs on
+large caps in a grinding bull (0 of 46 signals, 0 of 19 pool signals) and
+the ADX bucket that looked best was 25–28. "Others making money" is beta
+with leverage inside a Bull regime plus survivorship of who posts; the base
+rates and Bryzgalova et al. (2023, retail options lose on average at 12.6 %
+spreads) are the benchmark, and `longs_only_run1` already says the index
+beats every version of the signal. **The gap is a category error, not a
+bug:** a timing system in a market that pays for holding, with entries on
+the wrong side of the one real short-horizon effect (reversal). The one
+lead in our own data, the inverted long in Bull (+0.40 R, inside its null),
+can only be tested forward: every tranche is spent.
+
+**Owner's decisions:** (a) pre-register a pullback-in-uptrend signal as a
+second forward bucket (no alerts, same resolver), (b) measure the RS
+top-eight as a holding basket against SPY over ten years (can show it loses
+to the index, cannot prove alpha), (c) neither, and read the running
+records when they are due. Nothing is built until one is chosen.
+
+---
+
 ## Working conventions
 
 - `signal_core.py` is canonical. `consistency_check.py` enforces 44 cross-module
