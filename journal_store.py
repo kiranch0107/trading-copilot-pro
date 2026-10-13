@@ -289,8 +289,14 @@ def close_position(position_id: str, exit_premium: float, outcome: str,
         journal = [j for j in journal if j["id"] != position_id]
         journal.append({
             "id":         position_id,
-            "date":       pos["opened"],
-            "closed":     datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d %H:%M ET"),
+            # THE TRADE'S OWN TIMES (journal review 2026-10-13): `date` is when
+            # the position was traded, `closed` when it was closed, both as the
+            # owner entered them; `logged_at` keeps when the row was written.
+            # Rows before this carried the log time in `date`, which is why
+            # holding time could not be read from the record.
+            "date":       pos.get("traded_at") or pos["opened"],
+            "logged_at":  pos["opened"],
+            "closed":     closed_at or datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d %H:%M ET"),
             "mode":       pos.get("mode", "live"),
             "source":     pos.get("source", "discretionary"),
             "signal_key": pos.get("signal_key"),
@@ -782,14 +788,20 @@ def selftest() -> int:
                   "max_hold_bars": 20, "invalidate_ema": False}
         _pk = open_option_position("NVDA", "CALL", 250.0, "2026-11-20", 1, 3.0,
                                    _rules, source="signal",
-                                   signal_key="NVDA|Bullish|2026-10-07")
+                                   signal_key="NVDA|Bullish|2026-10-07",
+                                   traded_at="2026-10-07 10:15 ET")
         _pn = open_option_position("PFE", "CALL", 29.0, "2026-10-16", 1, 0.5,
                                    _rules, source="signal")
         assert _pk["signal_key"] == "NVDA|Bullish|2026-10-07"
         assert _pn["signal_key"] is None, "no key given -> None, never inferred"
-        close_position(_pk["id"], 4.5, "WIN")
+        close_position(_pk["id"], 4.5, "WIN", closed_at="2026-10-09 15:40 ET")
         close_position(_pn["id"], 0.2, "LOSS")
         _rows = {j["id"]: j for j in _mem["jrn"]}
+        assert _rows[_pk["id"]]["date"] == "2026-10-07 10:15 ET" and \
+            _rows[_pk["id"]]["closed"] == "2026-10-09 15:40 ET" and \
+            _rows[_pk["id"]]["logged_at"] == _pk["opened"], \
+            "the journal row carries the TRADE's times; the log time sits in logged_at"
+        assert _rows[_pn["id"]]["date"] == _pn["opened"], "no trade time given -> the log time, as before"
         assert _rows[_pk["id"]]["signal_key"] == "NVDA|Bullish|2026-10-07", \
             "close_position dropped the signal key; attach_outcomes needs it on the journal row"
         assert _rows[_pn["id"]]["signal_key"] is None

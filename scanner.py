@@ -969,6 +969,22 @@ def _scan_cfg() -> dict:
             "longs_only": risk_params.LONGS_ONLY}
 
 
+def _record_alert(tk: str, r: dict, bucket: str, delivered: bool, header: str,
+                  dry_run: bool) -> None:
+    """
+    One forward-log row per alert attempt (journal review 2026-10-13,
+    BACKLOG 32): the record then says what was SENT and whether it arrived,
+    and the app's alert history reads it. Not on a dry run (nothing was
+    sent). Non-fatal, like every record write.
+    """
+    if dry_run:
+        return
+    try:
+        forward_log.record_alert(tk, r["trend"], r.get("bar_date"), bucket, delivered, header)
+    except Exception as exc:                           # noqa: BLE001
+        logger.warning("%s — alert row failed: %s", tk, exc)
+
+
 def _record_pullback(tk: str, raw_df, cdf, spy_regime, bucket_src: str,
                      tally: dict | None = None) -> bool:   # tally: the run's pullback counts
     """
@@ -1118,7 +1134,9 @@ def run(args) -> int:
 
             msg = compose_alert(r, tk)
             logger.info("ALERT %s %s rr=%s", tk, r["trend"], r["rr"])
-            if send_alert(msg, dry_run=args.dry_run):
+            _ok = send_alert(msg, dry_run=args.dry_run)
+            _record_alert(tk, r, "live", _ok, "TRADE ALERT", args.dry_run)
+            if _ok:
                 hits += 1
                 if not args.dry_run:
                     state[f"{tk}:{r['trend']}"] = time.time()
@@ -1208,9 +1226,10 @@ def run(args) -> int:
         # are already recorded by analyze(); they are named here, not sent.
         pool_hq.sort(key=lambda x: (x["rs"] is None, -(x["rs"] or 0.0), x["ticker"]))
         pool_hq_n = len(pool_hq)
-        for r in pool_hq:
+        pool_attempted = 0          # THE CAP BOUNDS ATTEMPTS, not deliveries: on a
+        for r in pool_hq:           # failed day the five by RS are tried, not all six
             tk = r["ticker"]
-            if pool_alerted >= POOL_ALERT_CAP:
+            if pool_attempted >= POOL_ALERT_CAP:
                 logger.info("pool: %s %s is HQ but beyond the cap of %d — "
                             "recorded, not alerted", tk, r["trend"], POOL_ALERT_CAP)
                 continue
@@ -1223,7 +1242,10 @@ def run(args) -> int:
                     if r["rs"] is not None else "🚨 POOL ALERT (wide universe, HQ tier)")
             msg = compose_alert(r, tk, header=_hdr)
             logger.info("POOL ALERT %s %s rr=%s rs=%s", tk, r["trend"], r["rr"], r["rs"])
-            if send_alert(msg, dry_run=args.dry_run):
+            pool_attempted += 1
+            _ok = send_alert(msg, dry_run=args.dry_run)
+            _record_alert(tk, r, "pool", _ok, "POOL ALERT", args.dry_run)
+            if _ok:
                 hits += 1
                 pool_alerted += 1
                 if not args.dry_run:
@@ -2033,6 +2055,11 @@ def _selftest_body() -> int:
                 and _scans4[1]["n_signals"] == 6, _scans4[1]
             assert forward_log.last_scan(_tmpl4)["tickers"] == ["AAA"], \
                 "the coverage heartbeat is the LIVE scan row, not the pool's"
+            _alr = [r for r in _rows4 if r["kind"] == "alert"]
+            assert [a["ticker"] for a in _alr] == ["P4", "P2", "P6", "P1", "P5"] and \
+                all(a["delivered"] and a["bucket"] == "pool" and a["header"] == "POOL ALERT"
+                    and a["key"] is None for a in _alr), (
+                _alr, "one alert row per delivered pool alert, in send order (no bar date on the fake)")
             _pbr = [r for r in _rows4 if r["kind"] == "signal" and r.get("bucket") == "pullback"]
             assert sorted(r["ticker"] for r in _pbr) == ["AAA", "P7"], _pbr
             assert all(r["trend"] == "Bullish" and r["decision"] == "taken" and "hq" not in r
@@ -2081,8 +2108,11 @@ def _selftest_body() -> int:
             assert POOL_STATE_KEY not in _state4, "record-only must not stamp the pool"
             # A DRY RUN scans and prints but leaves no stamp.
             _fetched.clear(); _sent4.clear()
+            _n_alerts_before = len([r for r in forward_log.read_all(_tmpl4) if r["kind"] == "alert"])
             run(_ns(dry_run=True))
             assert sum(1 for t in _fetched if t in _pool7) == 7 and POOL_STATE_KEY not in _state4
+            assert len([r for r in forward_log.read_all(_tmpl4) if r["kind"] == "alert"]) == _n_alerts_before, \
+                "a dry run sends nothing, so it records no alert"
             # A TELEGRAM FAILURE leaves the pool due: no stamp, no cooldown, and
             # the next alerting run scans and sends again.
             for k in list(_state4):
@@ -2094,6 +2124,8 @@ def _selftest_body() -> int:
             assert sum(1 for t in _fetched if t in _pool7) == 7 and POOL_STATE_KEY not in _state4, \
                 "undelivered pool alerts must not stamp the day"
             assert not any(k.endswith(":Bullish") for k in _state4), "no cooldown on a failed send"
+            _failed_rows = [r for r in forward_log.read_all(_tmpl4) if r["kind"] == "alert" and not r["delivered"]]
+            assert len(_failed_rows) == 5, (len(_failed_rows), "a failed delivery is recorded as such")
             globals()["send_alert"] = lambda m, dry_run=False: (_sent4.append(m) or True)
             _fetched.clear(); _sent4.clear()
             run(_ns())

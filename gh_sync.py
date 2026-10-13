@@ -221,6 +221,36 @@ def _gh_put(path: str, data: list, message: str) -> str | None:
             f"{path} — another writer is holding it. Last: {last}")
 
 
+def load_jsonl(path: Path) -> tuple[list, str]:
+    """
+    Read-only: the current contents of a JSON-LINES file in the repo (the
+    forward log), fresh from GitHub when a token is configured, else the
+    local checkout. Returns (rows, source). The app never writes this file.
+    """
+    rows: list = []
+    if gh_enabled():
+        try:
+            r = requests.get(f"{_GH_API}/repos/{gh_repo()}/contents/{path.name}",
+                             headers=_gh_headers(), params={"ref": GITHUB_BRANCH}, timeout=10)
+            if r.status_code == 200:
+                raw = base64.b64decode(r.json().get("content", "")).decode("utf-8")
+                for line in raw.splitlines():
+                    line = line.strip()
+                    if line:
+                        rows.append(json.loads(line))
+                return rows, "github"
+        except Exception as e:                           # noqa: BLE001
+            logger.warning("load_jsonl(%s): %s — falling back to local disk", path, e)
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+        return rows, "local (deploy-time copy)"
+    except Exception:                                    # noqa: BLE001
+        return [], "unavailable"
+
+
 def merge_positions(local: list | None, remote: list,
                     *, local_complete: bool = True) -> list:
     """
