@@ -186,6 +186,8 @@ jobs:
         run: python intraday_rules.py --selftest
       - name: daytrade_paper.py — the owner's chart reading on paper, graded by the Phase 1 engine (BACKLOG 29 Phase 2)
         run: python daytrade_paper.py --selftest
+      - name: pullback_signal.py — the pullback bucket, the live signal's own pieces (BACKLOG 31)
+        run: python pullback_signal.py --selftest
 
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py

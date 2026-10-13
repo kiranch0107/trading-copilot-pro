@@ -1627,14 +1627,30 @@ can only be tested forward: every tranche is spent.
 second forward bucket (no alerts, same resolver), (b) measure the RS
 top-eight as a holding basket against SPY over ten years (can show it loses
 to the index, cannot prove alpha), (c) neither, and read the running
-records when they are due. Nothing is built until one is chosen.
+records when they are due.
+
+**Owner chose (a) 2026-10-13 ("go with option 1, pre-register the pullback
+bucket").** Pre-registered in `results/pullback_preregistration.md` before
+the first row, then built: `signal_core.base_trend()` and
+`signal_core.long_levels()` are extracted from `evaluate()` (which now calls
+them, bit for bit the same) so the new rule reads the live signal's own
+pieces; `pullback_signal.evaluate_pullback()` fires on the base BEARISH setup
+when the close is above its 200-session SMA on the raw frame, taken LONG with
+the live levels and gates, SPY regime tagged, never gating; the scanner
+records it under `bucket: pullback` for every name it evaluates (watchlist
+and pool) and never alerts. Read once at 349 settled episodes against the
+base buckets over the same span (+0.15 R), zero, and a random-entry null.
+Prediction on file: beats random by a margin inside costs, beats base by
+less than +0.15, does not beat SPY. `check_pullback_bucket_wired()` pins the
+shared functions, the SMA, the bucket and the no-alert path (45 checks).
+Twelve to eighteen months to a reading.
 
 ---
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 44 cross-module
-  invariants (44 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 45 cross-module
+  invariants (45 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip

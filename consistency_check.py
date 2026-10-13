@@ -2615,6 +2615,49 @@ def check_pool_bucket_wired() -> None:
           f"bucket=pool, heartbeat reads live; workflow input wired")
 
 
+def check_pullback_bucket_wired() -> None:
+    """
+    The pullback bucket (BACKLOG 31) is the pre-registered rule, built from
+    the live signal's own pieces, recorded under its own bucket, never alerted.
+
+    results/pullback_preregistration.md fixes the rule: the base BEARISH
+    setup (signal_core.base_trend, the function evaluate() itself calls),
+    the close above its 200-session SMA, and the live LONG-side levels
+    (signal_core.long_levels, also evaluate()'s own). A copy of either
+    function would be the duplicated-logic failure this repo already paid
+    for; a row written under the live bucket would poison the base record;
+    an alert would make a measurement into a strategy.
+    """
+    import forward_log as fl
+    import pullback_signal as pbs
+    doc = Path("results/pullback_preregistration.md").read_text(encoding="utf-8")
+    assert "`pullback_signal.SMA_SESSIONS = 200`" in doc and pbs.SMA_SESSIONS == 200
+    assert "`signal_core.base_trend()`" in doc and "`signal_core.long_levels()`" in doc
+    assert "**none, ever**" in doc and "349" in doc and "bucket | `pullback`" in doc
+    core = Path("signal_core.py").read_text(encoding="utf-8")
+    assert "def base_trend(" in core and "def long_levels(" in core
+    ev = core[core.find("\ndef evaluate("):]
+    assert "trend = base_trend(latest, params)" in ev and "= long_levels(df, price, atr, params)" in ev, \
+        "evaluate() must use the shared functions, or the pullback rule reads a copy"
+    src = Path("pullback_signal.py").read_text(encoding="utf-8")
+    fn = src[src.find("def evaluate_pullback("):src.find("\n# ── self-test")]
+    assert "sc.base_trend(" in fn and "sc.long_levels(" in fn, \
+        "evaluate_pullback() must call the shared functions, not the selftest only"
+    assert "forward_log" not in src.replace("the forward log", "") and "send_alert" not in src \
+        and "yfinance" not in src, "pullback_signal.py must not write, alert or fetch"
+    assert "pullback" in fl.BUCKETS
+    sc_src = Path("scanner.py").read_text(encoding="utf-8")
+    assert sc_src.count("_record_pullback(tk, df, cdf, spy_regime, ") == 2, \
+        "the pullback is evaluated in BOTH loops (watchlist and pool)"
+    i = sc_src.find("def _record_pullback(")
+    body = sc_src[i:sc_src.find("\ndef run(", i)]
+    assert 'bucket="pullback"' in body and "send_alert" not in body and "state[" not in body, \
+        "the pullback record path must not alert or stamp a cooldown"
+    assert "python pullback_signal.py --selftest" in Path(".github/workflows/tests.yml").read_text()
+    print("  pullback bucket: shared base_trend/long_levels, SMA 200 pinned, bucket=pullback, "
+          "both loops, never alerted")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -2638,6 +2681,7 @@ CHECKS = [
     ("intraday rules match their pre-registration", check_intraday_rules_match_preregistration),
     ("Phase 2 paper record isolated, one writer",   check_daytrade_paper_isolated),
     ("pool bucket wired, capped, kept apart",       check_pool_bucket_wired),
+    ("pullback bucket: shared rule, never alerted", check_pullback_bucket_wired),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),

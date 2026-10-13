@@ -352,6 +352,59 @@ def _check_regime(trend: str, spy_regime: dict) -> tuple[bool, str]:
     return True, f"Regime aligned: {trend} in {raw} market"
 
 
+
+def base_trend(latest, params) -> str | None:
+    """
+    The BASE condition, and nothing else: "Bullish", "Bearish" or None for
+    one computed bar. Extracted from evaluate() so a second signal (the
+    pullback bucket, results/pullback_preregistration.md) reads the very
+    same test rather than a copy of it. evaluate() calls this.
+    """
+    price = float(latest["Close"])
+    ema20 = float(latest["EMA20"])
+    ema50 = float(latest["EMA50"])
+    rsi = float(latest["RSI"])
+    macd = float(latest["MACD"])
+    sig = float(latest["Signal"])
+    volume = float(latest.get("Volume", 0) or 0)
+    vol_avg = float(latest.get("VOL_AVG20", 0) or 0)
+    vol_soft_ok = vol_avg > 0 and volume >= vol_avg * params.volume_soft_mult
+    if price > ema20 > ema50 and macd > sig and 30 < rsi < 75 and vol_soft_ok:
+        return "Bullish"
+    if price < ema20 < ema50 and macd < sig and 25 < rsi < 70 and vol_soft_ok:
+        return "Bearish"
+    return None
+
+
+def long_levels(df, price: float, atr: float, params) -> tuple[float, float, float]:
+    """
+    The live LONG-side entry, stop and target for the last bar of `df`.
+    Extracted from evaluate() (which calls it) so the pullback bucket builds
+    its levels with the base signal's own arithmetic: only the choice of bar
+    differs between the two buckets.
+    """
+    swing_low_10 = float(df["Low"].tail(10).min())
+    entry = round(price, 2)
+    atr_stop = price - (atr * params.atr_stop_mult)
+    structural_stop = swing_low_10 - (atr * 0.10)
+    # A 10-bar low ABOVE price (gap down) is meaningless as a stop; using it
+    # jams risk to a cent and produces phantom R:R in the hundreds.
+    stop = max(structural_stop, atr_stop) if structural_stop < price else atr_stop
+    stop = round(min(stop, entry - 0.01), 2)
+
+    raw_target = price + (atr * params.atr_tgt_mult)
+    resistance = float(df["High"].tail(20).max())
+    # Cap only at MEANINGFUL resistance — at least 1 ATR away. In a steady
+    # uptrend the 20-bar high is the latest bar's high, and capping against
+    # it crushes the target to just above entry.
+    if resistance >= entry + atr:
+        target = round(min(raw_target, resistance * 0.995), 2)
+    else:
+        target = round(raw_target, 2)
+    target = round(max(target, entry + 0.02), 2)
+    return entry, stop, target
+
+
 def evaluate(df: pd.DataFrame,
              ticker: str,
              params: SignalParams = DEFAULTS,
@@ -402,14 +455,10 @@ def evaluate(df: pd.DataFrame,
     vol_avg = float(latest.get("VOL_AVG20", 0) or 0)
 
     vol_ok = vol_avg > 0 and volume >= vol_avg * params.volume_mult
-    vol_soft_ok = vol_avg > 0 and volume >= vol_avg * params.volume_soft_mult
 
-    # ── Base conditions ──
-    if price > ema20 > ema50 and macd > sig and 30 < rsi < 75 and vol_soft_ok:
-        trend = "Bullish"
-    elif price < ema20 < ema50 and macd < sig and 25 < rsi < 70 and vol_soft_ok:
-        trend = "Bearish"
-    else:
+    # ── Base conditions ── (base_trend() holds the soft volume floor too)
+    trend = base_trend(latest, params)
+    if trend is None:
         return {
             "blocked": True, "block_reason": "base",
             "reason": _base_reason(price, ema20, ema50, macd, sig, rsi,
@@ -468,28 +517,10 @@ def evaluate(df: pd.DataFrame,
     # All three anchor to the SAME reference (current price) so they are
     # internally coherent. Structure informs the stop; the resistance/support
     # cap applies only when the level is genuinely beyond entry.
-    swing_low_10 = float(df["Low"].tail(10).min())
     swing_high_10 = float(df["High"].tail(10).max())
 
     if trend == "Bullish":
-        entry = round(price, 2)
-        atr_stop = price - (atr * params.atr_stop_mult)
-        structural_stop = swing_low_10 - (atr * 0.10)
-        # A 10-bar low ABOVE price (gap down) is meaningless as a stop; using it
-        # jams risk to a cent and produces phantom R:R in the hundreds.
-        stop = max(structural_stop, atr_stop) if structural_stop < price else atr_stop
-        stop = round(min(stop, entry - 0.01), 2)
-
-        raw_target = price + (atr * params.atr_tgt_mult)
-        resistance = float(df["High"].tail(20).max())
-        # Cap only at MEANINGFUL resistance — at least 1 ATR away. In a steady
-        # uptrend the 20-bar high is the latest bar's high, and capping against
-        # it crushes the target to just above entry.
-        if resistance >= entry + atr:
-            target = round(min(raw_target, resistance * 0.995), 2)
-        else:
-            target = round(raw_target, 2)
-        target = round(max(target, entry + 0.02), 2)
+        entry, stop, target = long_levels(df, price, atr, params)   # the 10-bar low lives there
     else:
         entry = round(price, 2)
         atr_stop = price + (atr * params.atr_stop_mult)
