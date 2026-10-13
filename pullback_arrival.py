@@ -209,9 +209,17 @@ def selftest() -> int:
     raw2 = pbs._frame(down + pb2).reset_index().rename(columns={"index": "Date"})
     rows2, tally2 = arrivals("DWN", raw2, compute, params, regimes, window=60)
     assert not rows2 and tally2.get("below_sma200", 0) >= 1, tally2
-    # Two separated runs are two episodes.
-    two = [dict(r, ticker="T") for r in rows[:3]] + [dict(r, ticker="T", date=str((pd.Timestamp(r["date"]) + pd.Timedelta(days=30)).date())) for r in rows[:2]]
-    assert len(episodes(two)) == 2
+    # Consecutive sessions collapse to one episode; a gap starts another;
+    # a weekend is not a gap; two tickers never merge. Explicit rows, so the
+    # collapse itself is what is tested, whatever the shaped fixture fires.
+    def _row(tk, day):
+        return {"ticker": tk, "date": day, "regime": "Bull", "rr": 3.0}
+    run1 = [_row("T", d) for d in ("2026-09-03", "2026-09-04", "2026-09-07", "2026-09-08")]   # Fri -> Mon
+    run2 = [_row("T", d) for d in ("2026-09-21", "2026-09-22")]
+    other = [_row("U", "2026-09-04")]
+    eps2 = episodes(run1 + run2 + other)
+    assert [(e["ticker"], e["date"]) for e in sorted(eps2, key=lambda e: (e["ticker"], e["date"]))] == \
+        [("T", "2026-09-03"), ("T", "2026-09-21"), ("U", "2026-09-04")], eps2
     print(f"arrivals         : {len(rows)} signal bars -> 1 episode on the shaped pullback; refused and "
           f"counted below the SMA; separated runs are separate episodes")
     import io, contextlib
