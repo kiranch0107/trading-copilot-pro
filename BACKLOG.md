@@ -1536,9 +1536,51 @@ cleared.
    deserve chains. A bucket that alerts before it is graded is a second
    unmeasured strategy running live.
 
-**Not started.** Owner to decide the ranking in (2) and whether to wait for
-the HQ-versus-base reading in (1) first. Nothing in the scanner, universe
-or log is changed by this entry.
+**Explored 2026-10-13, owner's request ("lets explore on backlog 30").**
+Facts from the repo, not opinion:
+
+- *The HQ tier almost never fires on the live eight.* The forward record
+  holds 27 signal rows and **0** are HQ. Of the 8 rows since 2026-10-08
+  that carry `hq_fail`, ADX ≥ 35 failed on all 8, "Strong" on 6, rr < 1 on
+  1. Across all 27, strength was Strong on 5. By the rule of three, 0 of 27
+  bounds the HQ share of base signals below ~11 % at 95 %.
+- *Base signals run about one per ten name-days* (8 in 112 since 10-08).
+  On the 83-name pool that is ~6 base signals a day and, from the bound
+  above, **fewer than ~0.65 HQ signals a day**, probably far fewer. "At
+  most five a day" will never bind; the realistic bucket is 0–3 a week.
+- *The expectancy premise has no support yet.* ADX measured d = −0.01 and
+  −0.11 (`setup_population_run2.txt`, NOT ESTABLISHED, not informative);
+  volume likewise (24). The forward record's HQ-versus-base test (24,
+  pre-registered) has 0 HQ rows to read and, at 8 names, will starve.
+- *Cost is small if done the universe's way.* `universe.fetch_history()`
+  already pulls the whole pool in ONE batched download for the RS ranker;
+  the scanner's per-ticker path at 1.2 s a name would take ~2 minutes for
+  83, also fine inside the post-close pass. `fetch_atm_chain()` is two
+  calls a name; five names is nothing.
+- *The ranking decision dissolves.* The RS score the universe snapshot
+  already computes for every pool name is a ranking that exists, is
+  pre-registered for selection, and was not chosen for this purpose. Use
+  it; invent nothing.
+- *It does not touch 23.* A wide scan runs the live config, as the forward
+  record does. A historical backtest of the HQ tier over the pool would
+  need the 23 decision first; the forward version does not.
+
+**What the facts recommend: a record-only pool bucket, no alerts.** Scan the
+full candidate pool in the post-close record-only pass; write every signal
+to the forward log with a `bucket` field (`live` for the eight, `pool` for
+the rest), HQ tagged exactly as today; grade both with the same resolver;
+take the ATM chain snapshot (BACKLOG 25's writer) for at most five pool HQ
+signals a day, ranked by the snapshot's RS score; alert on nothing new.
+This is the only way the pre-registered HQ-versus-base reading (24) gets
+rows at all, and it answers the owner's question as a measurement rather
+than a live bucket. **Power, honestly:** 349 HQ episodes for +0.15 R at the
+bound above is two years or more; a smaller sample reads only a large
+effect. If HQ fires more often across the pool than it has on the eight,
+the record will show that within weeks, which is itself the first thing to
+learn.
+
+**Owner's decision:** (a) build the record-only pool bucket as above, or
+(b) leave 30 logged until 24 reads. Nothing is built until one is chosen.
 
 ---
 
