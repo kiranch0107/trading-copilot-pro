@@ -316,6 +316,30 @@ def record_scan(bar_date, tickers: list, n_signals: int, cfg: dict,
     }, path=path)
 
 
+def record_alert(ticker: str, trend: str, bar_date, bucket: str, delivered: bool,
+                 header: str = "", path: Path | None = None) -> dict:
+    """
+    One row per alert the scanner SENT (or tried to): what reached the owner,
+    and whether it did. Never deduped: a resend after a failed delivery is a
+    second fact. Written by the scanner only (the record's one writer); the
+    app READS these rows for its alert history, so "which alerts did I act on"
+    is answerable from the same chain that holds the signals and outcomes
+    (journal review 2026-10-13, BACKLOG 32).
+    """
+    if bucket not in BUCKETS:
+        raise ValueError(f"bucket must be one of {BUCKETS}, not {bucket!r}")
+    return append("alert", {
+        "ticker": ticker, "trend": trend, "bar_date": str(bar_date)[:10] if bar_date else None,
+        "key": signal_key(ticker, trend, str(bar_date)[:10]) if bar_date else None,
+        "bucket": bucket, "delivered": bool(delivered), "header": header,
+    }, path=path)
+
+
+def alerts_sent(path: Path | None = None) -> list[dict]:
+    """Every alert row, oldest first."""
+    return [r for r in read_all(path) if r.get("kind") == "alert"]
+
+
 def last_scan(path: Path | None = None, bucket: str = "live") -> dict | None:
     """The most recent scan row OF THIS BUCKET, or None if the log has never
     recorded one. The coverage alarm reads the live bucket: a pool scan is
@@ -872,6 +896,7 @@ def summary(path: Path | None = None) -> dict:
     sigs = [r for r in rows if r.get("kind") == "signal"]
     outs = [r for r in rows if r.get("kind") == "outcome"]
     scans = [r for r in rows if r.get("kind") == "scan"]
+    alerts = [r for r in rows if r.get("kind") == "alert"]
     taken = [s for s in sigs if counts_as_taken(s)]
     skipped = [s for s in sigs if not counts_as_taken(s)]
     # THE HEADLINE READING IS THE LIVE BUCKET'S. The pre-registered HQ-versus-
@@ -922,6 +947,7 @@ def summary(path: Path | None = None) -> dict:
         "taken_live": len(live_taken),
         "skipped": len(skipped), "outcomes": len(outs),
         "by_basis": by_basis, "by_bucket": by_bucket,
+        "alerts": len(alerts), "alerts_delivered": sum(1 for a in alerts if a.get("delivered")),
         "configs": configs,
         "skip_reasons": {r: sum(1 for s in skipped if s.get("reason") == r)
                          for r in sorted({s.get("reason") for s in skipped})},
@@ -940,7 +966,7 @@ def report(path: Path | None = None) -> int:
         print("  Every day without recording is clean data not accumulating.")
         return 0
     print(f"  {s['rows']} rows: {s['signals']} signals, {s['outcomes']} outcomes, "
-          f"{s['scans']} scans")
+          f"{s['scans']} scans, {s['alerts']} alerts ({s['alerts_delivered']} delivered)")
     print(f"  taken {s['taken']} (live bucket {s['taken_live']}: hq {s['taken_hq']}, "
           f"base {s['taken_base']})   skipped {s['skipped']}")
     for b, bb in s["by_bucket"].items():
@@ -1298,6 +1324,25 @@ def selftest() -> int:
     assert _r0["ts"] == "2026-01-02T03:04:05+00:00", "append() stamps the given instant, in UTC"
     print("buckets          : rows name live/pool (legacy = live); pool scans are not "
           "the heartbeat; summary splits hq/base per bucket")
+
+    # ── ALERT ROWS: what was sent, whether it arrived; never a signal, scan or outcome ──
+    al = Path(tempfile.mkdtemp()) / "al.jsonl"
+    a1 = record_alert("NVDA", "Bullish", "2026-10-13", "pool", True, "POOL", path=al)
+    a2 = record_alert("NVDA", "Bullish", "2026-10-13", "pool", False, "POOL", path=al)
+    assert a1["kind"] == "alert" and a1["key"] == "NVDA|Bullish|2026-10-13" and a1["delivered"] is True
+    assert a2["seq"] == 2 and a2["delivered"] is False, "a resend after a failed delivery is a second row"
+    assert counts_as_taken(a1) is False and last_scan(al) is None and last_scan(al, "pool") is None
+    assert [a["seq"] for a in alerts_sent(al)] == [1, 2] and verify(al) == []
+    _sa = summary(al)
+    assert (_sa["alerts"], _sa["alerts_delivered"], _sa["signals"], _sa["taken"]) == (2, 1, 0, 0), _sa
+    assert grade_open_signals(lambda tk: None, path=al)["graded"] == 0, "alert rows are never graded"
+    try:
+        record_alert("X", "Bullish", "2026-10-13", "other", True, path=al)
+        raise AssertionError("an unknown bucket must be refused")
+    except ValueError:
+        pass
+    print("alert rows       : sent/delivered recorded per attempt, keyed to the signal bar; "
+          "never counted as signal, scan or outcome")
 
     # ── THE 19 PRE-TAG ROWS COUNT AS TAKEN, hq=False — dated and literal ──
     legacy = {"kind": "signal", "decision": "skipped", "reason": "not high-quality",

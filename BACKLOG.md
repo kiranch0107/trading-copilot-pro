@@ -1717,8 +1717,23 @@ exit-signalled positions are being held to expiry.
 where affordable, or not at all; (2) take the two stops or note the choice;
 (3) stop discretionary option entries or route them to Phase 2's paper
 record; (4) going forward log trade time and the signal date, delete the
-test row; (5) have the app record the alerts it shows (small app change,
-not started).
+test row; (5) have the app record the alerts it shows.
+
+**(4) and (5) built 2026-10-13 (owner: "build the journal fields and the
+app's alert history").** Journal: the open form takes "Traded at" (date and
+time, ET, default now) and both close forms take "Closed at"; the journal row's
+`date` is now the trade's time, `closed` the close's, and `logged_at` keeps
+the log time; Trade History shows traded, closed, logged and the signal key,
+or says in words that an unkeyed row cannot attach to the record. Alerts:
+the scanner records every alert ATTEMPT as a forward-log `alert` row
+(`forward_log.record_alert`, ticker, trend, bar date, key, bucket,
+delivered, header; never on a dry run; the pool cap now bounds attempts, so
+a failed day tries the five by RS, not all six) and the app's Alert History
+tab reads those rows fresh from the repo (`gh_sync.load_jsonl`, read-only)
+and marks the ones whose key appears on a journal row as acted on. The app's
+own scan alerts list is unchanged below it. The single-writer check names
+`record_alert`. Still the owner's: delete the ZZZ row, take or note the two
+stops, and enter the signal bar date when logging.
 
 ---
 

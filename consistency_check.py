@@ -1986,7 +1986,7 @@ def check_forward_log_single_writer() -> None:
         bare_append = _re.search(r"forward_log\.append\((?=\s*[^)\s])(?![^)]*path=)", txt)
         if bare_append or any(f"forward_log.{fn}" in txt for fn in
                               ("record_signal", "record_outcome", "attach_outcomes",
-                               "record_scan", "grade_open_signals")):
+                               "record_scan", "grade_open_signals", "record_alert")):
             writers.append(p.name)
     if writers != ["scanner.py"]:
         raise AssertionError(

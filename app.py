@@ -18,7 +18,8 @@ import market_context
 import risk_params
 import notify
 import gh_sync
-import forward_log          # read-only here: signal_key() only; the app never appends
+import forward_log          # read-only here: signal_key() and the alert rows; the app never appends
+from pathlib import Path
 from journal_store import (
     load_alerts, save_alerts, load_journal, save_journal,
     load_positions, save_positions, load_skipped, save_skipped,
@@ -158,6 +159,23 @@ def signal_bar_input(key: str, ticker: str, right: str) -> str | None:
         return None
     _trend = "Bullish" if str(right).upper().startswith("C") else "Bearish"
     return forward_log.signal_key(_tkr, _trend, _d)
+
+
+def trade_time_input(key: str, label: str) -> str:
+    """
+    WHEN the trade happened, as the owner enters it: a date and a time in
+    ET, defaulting to now. Returned in the journal's own timestamp format
+    ("YYYY-MM-DD HH:MM ET"). The journal used to carry the LOG time as the
+    trade's date, so a row logged on the 19th could say "sold on 8/4" in its
+    note and show zero days held (journal review 2026-10-13, BACKLOG 32).
+    """
+    _now = datetime.now(pytz.timezone("America/New_York"))
+    _c1, _c2 = st.columns(2)
+    _d = _c1.date_input(f"{label} — date", value=_now.date(), key=f"tt_d_{key}",
+                        help="The day the order filled, not today's date if you are logging late.")
+    _t = _c2.time_input(f"{label} — time (ET)", value=_now.time().replace(second=0, microsecond=0),
+                        key=f"tt_t_{key}", step=300)
+    return f"{_d:%Y-%m-%d} {_t:%H:%M} ET"
 
 
 def fallback_configured() -> bool:
@@ -2224,9 +2242,10 @@ with TAB_POSITIONS:
                 oc = st.radio("Outcome", ["WIN","LOSS","BREAKEVEN"], horizontal=True,
                               index=default_oc, key=f"oc_{p['id']}")
                 nt = st.text_input("Notes", key=f"nt_{p['id']}")
+                _ct = trade_time_input(f"cl_{p['id']}", "Closed at")
                 if st.button("📓 Close & log to journal", type="primary",
                              key=f"close_{p['id']}"):
-                    close_position(p["id"], fill, oc, nt)
+                    close_position(p["id"], fill, oc, nt, closed_at=_ct)
                     st.success(f"{p['ticker']} closed and logged.")
                     st.rerun()
         st.divider()
@@ -2277,8 +2296,9 @@ with TAB_POSITIONS:
                     mo = st.radio("Outcome", ["WIN","LOSS","BREAKEVEN"],
                                   horizontal=True, key=f"mo_{p['id']}")
                     mn = st.text_input("Notes", key=f"mn_{p['id']}")
+                    _mt = trade_time_input(f"mc_{p['id']}", "Closed at")
                     if st.button("Confirm close", type="primary", key=f"cf_{p['id']}"):
-                        close_position(p["id"], mf, mo, mn)
+                        close_position(p["id"], mf, mo, mn, closed_at=_mt)
                         st.session_state.pop(f"closing_{p['id']}", None)
                         st.success(f"{p['ticker']} closed and logged.")
                         st.rerun()
@@ -2481,11 +2501,12 @@ with TAB_POSITIONS:
         _o_mode = mode_selector("op")
         _o_src = source_selector("op")
         _o_key = signal_bar_input("op", o_tkr, o_right) if _o_src == "signal" else None
+        _o_traded = trade_time_input("op", "Traded at")
         _o_ok = size_gate(o_prem, o_qty, "op")
         if _o_ok and st.button("📍 Start monitoring this contract",
                                type="primary", key="op_save"):
             open_option_position(
-                mode=_o_mode, source=_o_src, signal_key=_o_key,
+                mode=_o_mode, source=_o_src, signal_key=_o_key, traded_at=_o_traded,
                 ticker=o_tkr, right=o_right, strike=o_strike,
                 expiry=o_expiry.strftime("%Y-%m-%d"), contracts=o_qty,
                 entry_premium=o_prem,
@@ -2552,10 +2573,42 @@ with TAB_POSITIONS:
 # ═══════════════════════════════════════════════
 with TAB_ALERTS:
     st.subheader("🔔 Alert History")
+
+    # ── WHAT THE SCANNER SENT — read from the forward record, never written here ──
+    #
+    # The Telegram alerts come from scanner.py on GitHub Actions, which records
+    # every attempt as an `alert` row in forward_log.jsonl (BACKLOG 32). This
+    # view reads those rows fresh from the repo and marks the ones whose signal
+    # key appears on a journal row, so "which alerts did I act on" is a column,
+    # not a memory. The list below it is the app's OWN scan alerts, as before.
+    st.markdown("### 📡 Sent by the scanner")
+    _fl_rows, _fl_src = gh_sync.load_jsonl(Path("forward_log.jsonl"))
+    _sent = [r for r in _fl_rows if r.get("kind") == "alert"]
+    if not _sent:
+        st.info("The scanner has not recorded a sent alert yet (rows start 2026-10-13).")
+    else:
+        _jkeys = {j.get("signal_key") for j in load_journal() if j.get("signal_key")}
+        _delivered = sum(1 for a in _sent if a.get("delivered"))
+        _acted = sum(1 for a in _sent if a.get("key") and a["key"] in _jkeys)
+        sa1, sa2, sa3 = st.columns(3)
+        sa1.metric("Alerts sent", len(_sent))
+        sa2.metric("Delivered", _delivered)
+        sa3.metric("Acted on (journaled)", _acted)
+        st.caption(f"Source: forward_log.jsonl via {_fl_src}. An alert is 'acted on' when a "
+                   f"journal row carries its signal key — enter the signal bar date when you log.")
+        for a in reversed(_sent[-60:]):
+            _tb = "🟢" if a.get("trend") == "Bullish" else "🔴"
+            _dv = "📨" if a.get("delivered") else "❌ not delivered"
+            _ac = "✅ journaled" if (a.get("key") and a["key"] in _jkeys) else "⏳"
+            st.markdown(f"`{str(a.get('ts', ''))[:16]}` **{a.get('ticker')}** {_tb} {a.get('trend')} · "
+                        f"{a.get('bucket', 'live')} · bar {a.get('bar_date') or '?'} · {_dv} · {_ac}")
+    st.divider()
+
+    st.markdown("### 🖥️ Raised by this app's own scan")
     alerts = load_alerts()
 
     if not alerts:
-        st.info("No alerts fired yet. Run the watchlist scan to generate alerts.")
+        st.info("No alerts from the app's scan yet. Run the watchlist scan to generate alerts.")
     else:
         total_alerts  = len(alerts)
         journaled_cnt = sum(1 for a in alerts if a.get("journaled"))
@@ -2869,7 +2922,11 @@ with TAB_JOURNAL:
                 d2.metric("Exit",        f"${j['exit_price']}")
                 d3.metric("Planned R:R", j["planned_rr"])
                 d4.metric("Actual R",    j["actual_rr"])
-                st.caption(f"Stop: \\${j['stop']} · Target: \\${j['target']} · Alerted: {short_ts(j['date'])}")
+                st.caption(f"Stop: \\${j['stop']} · Target: \\${j['target']} · "
+                           f"Traded: {short_ts(j['date'])} · Closed: {short_ts(j['closed'])}"
+                           + (f" · Logged: {short_ts(j['logged_at'])}" if j.get("logged_at") else "")
+                           + (f" · Signal: `{j['signal_key']}`" if j.get("signal_key")
+                              else " · no signal key — the outcome cannot attach to the record"))
                 if j.get("notes"):
                     st.markdown(f"📝 *{j['notes']}*")
                 if st.button("🗑️ Delete", key=f"del_{j['id']}", type="secondary"):
