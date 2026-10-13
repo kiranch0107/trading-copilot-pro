@@ -2566,6 +2566,55 @@ def check_daytrade_paper_isolated() -> None:
           "constants equal the pre-registration, Phase 1 engine")
 
 
+def check_pool_bucket_wired() -> None:
+    """
+    The pool bucket (BACKLOG 30) is wired end to end and stays its own bucket.
+
+    Owner's decision 2026-10-13, amended into
+    results/forward_record_preregistration.md: once a session the scanner
+    evaluates the candidate pool beyond the watchlist, alerts on at most
+    POOL_ALERT_CAP HQ signals by relative strength, and records every pool
+    signal under bucket=pool. Half-wired is the failure: a flag with no
+    workflow input is a feature nobody can trigger; a pool scan whose rows
+    say `live` poisons the watchlist's record; a pool scan row the coverage
+    alarm counts as a heartbeat hides a silent watchlist.
+    """
+    import tempfile
+    import scanner
+    import universe as uni
+    import forward_log as fl
+    src = Path("scanner.py").read_text(encoding="utf-8")
+    assert '"--force-pool"' in src and "def pool_tickers" in src and "def pool_due" in src
+    assert "POOL_ALERT_CAP   = 5" in src and scanner.POOL_ALERT_CAP == 5, "the cap is five"
+    assert 'bucket="pool"' in src and "def compose_alert" in src
+    doc = Path("results/forward_record_preregistration.md").read_text(encoding="utf-8")
+    assert "## Amendment 2026-10-13" in doc and "**at most five a session**" in doc \
+        and "**relative strength**" in doc and "`universe.RS_LOOKBACK`" in doc, \
+        "the amendment must state the cap and the ranking"
+    wf = Path(".github/workflows/scanner.yml").read_text()
+    assert "      pool:\n" in wf and "--force-pool" in wf, "scanner.yml has no `pool` input"
+    j = wf.find("name: Run scanner")
+    assert "inputs.pool && '--force-pool'" in wf[j:j + 1800], \
+        "the alerting step must pass --force-pool on the `pool` input"
+    # The pool is the universe's pool minus the watchlist: reserved-safe by
+    # check_universe_not_spending_reserved, and never the watchlist twice.
+    pt = scanner.pool_tickers(["NVDA", "ZZZZ"])
+    assert pt == sorted(set(uni.CANDIDATE_POOL) - {"NVDA"}) and "NVDA" not in pt, pt[:5]
+    # The record keeps the buckets apart and the heartbeat reads live only.
+    tmp = Path(tempfile.mkdtemp()) / "pool_check.jsonl"
+    cfg = {"adx_min": 25}
+    fl.record_scan("2026-10-13", ["P1"], 0, cfg, path=tmp, bucket="pool")
+    assert fl.last_scan(tmp) is None, "a pool scan row must not be the coverage heartbeat"
+    row = fl.record_signal("P1", "Bullish", {"price": 1.0}, "taken", "", cfg,
+                           bar_date="2026-10-13", path=tmp, hq=False, bucket="pool")
+    assert row["bucket"] == "pool" and fl.summary(tmp)["by_bucket"].get("pool", {}).get("taken") == 1
+    assert fl.bucket_of({"kind": "signal"}) == "live", "legacy rows are the live bucket's"
+    # A forced record-only pass never scans the pool: the code path is gated.
+    assert "if not record_only and (getattr(args, \"force_pool\", False) or pool_due(state))" in src
+    print(f"  pool bucket: once a session, cap {scanner.POOL_ALERT_CAP} by RS, rows under "
+          f"bucket=pool, heartbeat reads live; workflow input wired")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -2588,6 +2637,7 @@ CHECKS = [
     ("IV snapshot: one writer, committed, post-close", check_iv_snapshot_single_writer_and_committed),
     ("intraday rules match their pre-registration", check_intraday_rules_match_preregistration),
     ("Phase 2 paper record isolated, one writer",   check_daytrade_paper_isolated),
+    ("pool bucket wired, capped, kept apart",       check_pool_bucket_wired),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),

@@ -1579,15 +1579,33 @@ effect. If HQ fires more often across the pool than it has on the eight,
 the record will show that within weeks, which is itself the first thing to
 learn.
 
-**Owner's decision:** (a) build the record-only pool bucket as above, or
-(b) leave 30 logged until 24 reads. Nothing is built until one is chosen.
+**Owner decided 2026-10-13, the same hour: "lets run HQ scan once a day
+during market hours."** Built the same day, with alerts (the owner's choice
+over the record-only version above), pre-registered as a dated additive
+amendment to `results/forward_record_preregistration.md`: the scanner's
+first alerting run of each ET date also evaluates the whole candidate pool
+beyond the watchlist (`scanner.pool_tickers`, `pool_due`, state key
+`POOL:DATE`), alerts on the HQ tier only, **at most five a session ranked by
+the universe's relative-strength number** (`scanner.relative_strength`,
+63 sessions against SPY), with the suggested contract on each alert, and
+records every pool signal and the pool's `scan` row under `bucket: pool`.
+`forward_log` rows carry `bucket` (legacy rows read as `live`),
+`last_scan()` reads the live bucket so a pool scan is never the coverage
+heartbeat, `summary()` reports `by_bucket`. Pool rows are graded on the
+pool-scan run and in the post-close pass only. Workflow input `pool`
+(`--force-pool`) repeats the scan. `check_pool_bucket_wired()` pins the cap,
+the ranking, the bucket split and the workflow input. Prediction on file: HQ
+fires rarely on the pool (bound < 0.65 a day) and does not beat base by
++0.15 R. **Still owed:** the 349-episode reading per bucket, years away at
+the bound; the first thing to learn is the pool's actual HQ rate, which the
+record shows within weeks.
 
 ---
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 43 cross-module
-  invariants (43 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 44 cross-module
+  invariants (44 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip

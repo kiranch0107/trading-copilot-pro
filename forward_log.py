@@ -188,9 +188,19 @@ def already_recorded(ticker: str, trend: str, bar_date,
                for r in read_all(path))
 
 
+BUCKETS = ("live", "pool")      # the watchlist, and the wider pool (BACKLOG 30)
+
+
+def bucket_of(row: dict) -> str:
+    """Which population a row belongs to. Rows written before the field
+    existed are the live watchlist's."""
+    return str(row.get("bucket") or "live")
+
+
 def record_signal(ticker: str, trend: str, setup: dict, decision: str,
                   reason: str, cfg: dict, bar_date=None,
-                  path: Path | None = None, hq: bool | None = None) -> dict | None:
+                  path: Path | None = None, hq: bool | None = None,
+                  bucket: str = "live") -> dict | None:
     """
     One signal, as the rules produced it, before any outcome exists.
 
@@ -208,6 +218,12 @@ def record_signal(ticker: str, trend: str, setup: dict, decision: str,
 
     `bar_date` is the date of the SIGNAL BAR, and it is what makes a row mean
     anything. Returns None when that bar is already logged.
+
+    `bucket` names the population (BACKLOG 30, amendment of 2026-10-13 to
+    results/forward_record_preregistration.md): "live" for the watchlist the
+    scanner alerts on every run, "pool" for the wider candidate pool scanned
+    once a session. The two are read separately; a row without the field is
+    "live".
 
     WHY THIS IS NOT OPTIONAL, AND WHY DEDUPE LIVES HERE
     ---------------------------------------------------
@@ -250,12 +266,14 @@ def record_signal(ticker: str, trend: str, setup: dict, decision: str,
             "log would count scans, not signals, in a chain that cannot be "
             "corrected afterwards.")
     bar_date = str(bar_date)[:10]
+    if bucket not in BUCKETS:
+        raise ValueError(f"bucket must be one of {BUCKETS}, not {bucket!r}")
     if already_recorded(ticker, trend, bar_date, path=path):
         return None
     row = {
         "ticker": ticker, "trend": trend, "decision": decision,
         "reason": reason, "setup": setup, "bar_date": bar_date,
-        "key": signal_key(ticker, trend, bar_date),
+        "key": signal_key(ticker, trend, bar_date), "bucket": bucket,
     }
     if hq is not None:
         row["hq"] = bool(hq)
@@ -266,7 +284,7 @@ def record_signal(ticker: str, trend: str, setup: dict, decision: str,
 
 
 def record_scan(bar_date, tickers: list, n_signals: int, cfg: dict,
-                path: Path | None = None) -> dict:
+                path: Path | None = None, bucket: str = "live") -> dict:
     """
     One row per EXECUTED scan: "this bar was evaluated, on these names, and
     this many signals fired." Never deduped — every real scan is a fact.
@@ -284,17 +302,23 @@ def record_scan(bar_date, tickers: list, n_signals: int, cfg: dict,
     silent — the failure this repo names as its worst, and the one it was in
     for three weeks.
     """
+    if bucket not in BUCKETS:
+        raise ValueError(f"bucket must be one of {BUCKETS}, not {bucket!r}")
     return append("scan", {
         "bar_date": str(bar_date)[:10],
         "tickers": sorted(str(t) for t in tickers),
         "n_signals": int(n_signals),
         "config": config_fingerprint(cfg),
+        "bucket": bucket,
     }, path=path)
 
 
-def last_scan(path: Path | None = None) -> dict | None:
-    """The most recent scan row, or None if the log has never recorded one."""
-    rows = [r for r in read_all(path) if r.get("kind") == "scan"]
+def last_scan(path: Path | None = None, bucket: str = "live") -> dict | None:
+    """The most recent scan row OF THIS BUCKET, or None if the log has never
+    recorded one. The coverage alarm reads the live bucket: a pool scan is
+    not evidence that the watchlist was scanned."""
+    rows = [r for r in read_all(path)
+            if r.get("kind") == "scan" and bucket_of(r) == bucket]
     return rows[-1] if rows else None
 
 
@@ -864,13 +888,28 @@ def summary(path: Path | None = None) -> dict:
             "mean_r_hq": _mean_r(settled_b, sigs, True),
             "mean_r_base": _mean_r(settled_b, sigs, False),
         }
+    # BY BUCKET (BACKLOG 30): the live watchlist and the wider pool are two
+    # populations and the HQ-versus-base question is asked of each. Stop-
+    # distance basis only, the grader's; never pooled with premium.
+    by_bucket = {}
+    for b in sorted({bucket_of(s) for s in taken}):
+        tb = [s for s in taken if bucket_of(s) == b]
+        seqs = {s.get("seq") for s in tb}
+        sb = [o for o in outs if o.get("basis") == "stop_distance"
+              and o.get("r") is not None and o.get("ref_seq") in seqs]
+        by_bucket[b] = {
+            "taken": len(tb), "taken_hq": sum(1 for s in tb if _is_hq(s)),
+            "settled": len(sb),
+            "mean_r": sum(o["r"] for o in sb) / len(sb) if sb else float("nan"),
+            "mean_r_hq": _mean_r(sb, tb, True), "mean_r_base": _mean_r(sb, tb, False),
+        }
     return {
         "rows": len(rows), "scans": len(scans),
         "bars_scanned": len({x.get("bar_date") for x in scans}),
         "signals": len(sigs), "taken": len(taken),
         "taken_hq": len(taken_hq), "taken_base": len(taken) - len(taken_hq),
         "skipped": len(skipped), "outcomes": len(outs),
-        "by_basis": by_basis,
+        "by_basis": by_basis, "by_bucket": by_bucket,
         "configs": configs,
         "skip_reasons": {r: sum(1 for s in skipped if s.get("reason") == r)
                          for r in sorted({s.get("reason") for s in skipped})},
@@ -892,6 +931,10 @@ def report(path: Path | None = None) -> int:
           f"{s['scans']} scans")
     print(f"  taken {s['taken']} (hq {s['taken_hq']}, base {s['taken_base']})   "
           f"skipped {s['skipped']}")
+    for b, bb in s["by_bucket"].items():
+        print(f"  bucket {b:<5}: taken {bb['taken']} (hq {bb['taken_hq']})   "
+              f"settled {bb['settled']} on stop distance   "
+              f"mean R hq {bb['mean_r_hq']:+.3f} / base {bb['mean_r_base']:+.3f}")
     for basis, b in s["by_basis"].items():
         if not (b["settled"] or b["void"]):
             continue
@@ -1201,6 +1244,40 @@ def selftest() -> int:
     assert (_hs["taken"], _hs["taken_hq"], _hs["taken_base"]) == (3, 2, 1), _hs
     print("hq tag           : on the row when given; summary splits taken "
           "2 hq / 1 base, legacy rows read from setup")
+
+    # ── BUCKETS (BACKLOG 30): the live watchlist and the wider pool are two
+    # populations. A row names its bucket (default live; legacy rows read as
+    # live), the coverage heartbeat reads live scans only, and the summary
+    # splits the HQ-versus-base reading per bucket.
+    bk = Path(tempfile.mkdtemp()) / "bk.jsonl"
+    r_live = record_signal("LV1", "Bullish", setup, "taken", "", cfg,
+                           bar_date="2026-10-13", path=bk, hq=False)
+    r_pool = record_signal("PL1", "Bullish", setup, "taken", "", cfg,
+                           bar_date="2026-10-13", path=bk, hq=True, bucket="pool")
+    assert r_live["bucket"] == "live" and r_pool["bucket"] == "pool"
+    assert bucket_of(r_pool) == "pool" and bucket_of({"kind": "signal"}) == "live", \
+        "a row without the field is the live watchlist's"
+    try:
+        record_signal("XX", "Bullish", setup, "taken", "", cfg, bar_date="2026-10-13",
+                      path=bk, bucket="other")
+        raise AssertionError("an unknown bucket must be refused")
+    except ValueError:
+        pass
+    record_scan("2026-10-13", ["PL1", "PL2"], 1, cfg, path=bk, bucket="pool")
+    assert last_scan(bk) is None, "a POOL scan is not the live heartbeat"
+    assert last_scan(bk, bucket="pool")["tickers"] == ["PL1", "PL2"]
+    record_scan("2026-10-12", ["LV1"], 1, cfg, path=bk)
+    assert last_scan(bk)["bar_date"] == "2026-10-12" and bucket_of(last_scan(bk)) == "live"
+    record_outcome(r_live["seq"], "loss", -1.0, "stop_distance", path=bk)
+    record_outcome(r_pool["seq"], "win", 2.0, "stop_distance", path=bk)
+    _bs = summary(bk)["by_bucket"]
+    assert set(_bs) == {"live", "pool"}, _bs
+    assert (_bs["live"]["taken"], _bs["live"]["taken_hq"], _bs["live"]["settled"]) == (1, 0, 1)
+    assert (_bs["pool"]["taken"], _bs["pool"]["taken_hq"], _bs["pool"]["settled"]) == (1, 1, 1)
+    assert abs(_bs["live"]["mean_r_base"] + 1.0) < 1e-9 and abs(_bs["pool"]["mean_r_hq"] - 2.0) < 1e-9
+    assert _bs["live"]["mean_r_hq"] != _bs["live"]["mean_r_hq"], "no hq rows in live -> nan"
+    print("buckets          : rows name live/pool (legacy = live); pool scans are not "
+          "the heartbeat; summary splits hq/base per bucket")
 
     # ── THE 19 PRE-TAG ROWS COUNT AS TAKEN, hq=False — dated and literal ──
     legacy = {"kind": "signal", "decision": "skipped", "reason": "not high-quality",
