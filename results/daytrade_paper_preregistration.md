@@ -8,6 +8,18 @@ paragraph this document makes exact. Phase 1 (five-minute, hourly and
 4-hour) measured no edge in any objective version of the tools; this test
 is of the one thing Phase 1 could not codify, the owner's reading.
 
+## Defect note, 2026-10-13 (not an amendment: no rule changes)
+
+The first call (#1, TSLA, a test of the command) was graded 28 seconds
+after it was logged, mid-session. The frame Yahoo returned ended at the
+bar then trading, so the grader found no bar after the call and wrote
+VOID `no_bar_after_call`. "Flat at the session's last bar" always
+implied that a session is graded only after it has closed; the code now
+says so (a same-day session is not gradable, whatever the frame holds)
+and the selftest proves it. The chain is append-only, so rows 1 and 2
+stay as written: a VOID that does not count, with this note as its
+reason. `grade` is run the next day or later; weekly, as below.
+
 ## The question, and the framing it is run under
 
 Does the owner's discretionary intraday chart reading, logged before
