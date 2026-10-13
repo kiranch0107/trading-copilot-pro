@@ -188,6 +188,10 @@ jobs:
         run: python daytrade_paper.py --selftest
       - name: pullback_signal.py — the pullback bucket, the live signal's own pieces (BACKLOG 31)
         run: python pullback_signal.py --selftest
+      - name: pullback_arrival.py — arrival counts on history, outcome-free (BACKLOG 31)
+        run: python pullback_arrival.py --selftest
+      - name: engine_differential.py — the two trade engines agree on data
+        run: python engine_differential.py --selftest
 
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py

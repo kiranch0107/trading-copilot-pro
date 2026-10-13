@@ -1671,12 +1671,25 @@ less than +0.15, does not beat SPY. `check_pullback_bucket_wired()` pins the
 shared functions, the SMA, the bucket and the no-alert path (45 checks).
 Twelve to eighteen months to a reading.
 
+**Two laptop checks on real data, built 2026-10-13 (owner: "build both").**
+`pullback_arrival.py` counts how often the rule fires over the last trading
+year across the pool and the watchlist (signal bars, episodes, by SPY
+regime, by month, by name, and the implied time to 349 episodes) and is
+built to be unable to do anything else: no engine call, no outcome, no R,
+nothing read after a signal bar; `check_pullback_arrival_outcome_free()`
+greps its code for exactly that. `engine_differential.py` runs random
+geometries on every daily frame frozen in `.bar_cache` through both
+`backtest.simulate_trade` and `forward_log.resolve_signal` and reports any
+disagreement in outcome or R (synthetic version: 596 paths, zero). **Owed on
+the laptop:** `python pullback_arrival.py | tee results/pullback_arrival_run1.txt`
+and `python engine_differential.py | tee results/engine_differential_run1.txt`.
+
 ---
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 45 cross-module
-  invariants (45 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 46 cross-module
+  invariants (46 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip
