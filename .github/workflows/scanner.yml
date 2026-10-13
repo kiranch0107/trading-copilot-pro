@@ -127,6 +127,10 @@ on:
         description: 'Run the post-close record pass now (forward-log rows, grading, IV snapshot), whatever the clock says. No alerts.'
         type: boolean
         default: false
+      pool:
+        description: 'Scan the candidate pool (BACKLOG 30) on this run even if it already ran today. Alerting runs only.'
+        type: boolean
+        default: false
 
 concurrency:
   # A delayed run must never overlap the next scheduled one.
@@ -249,7 +253,12 @@ jobs:
           # Cloud secrets.
           USE_DYNAMIC_UNIVERSE: '1'
           LOG_LEVEL: ${{ inputs.log_level || 'INFO' }}
-        run: python scanner.py
+        # THE POOL BUCKET (BACKLOG 30) rides on this step: the first alerting
+        # run of each session day also scans the whole candidate pool, alerts
+        # on its HQ tier (at most five, by relative strength) and records
+        # every pool signal under bucket=pool. scanner.pool_due() keeps it to
+        # once a day; the `pool` input forces a repeat.
+        run: python scanner.py ${{ inputs.pool && '--force-pool' || '' }}
 
       # ── THE POST-CLOSE PASS — today's bar, into the record, the day it closed ──
       #

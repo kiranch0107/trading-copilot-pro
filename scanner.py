@@ -115,6 +115,42 @@ def resolve_watchlist() -> list[str]:
 
 WATCHLIST = resolve_watchlist()
 
+
+def pool_tickers(watchlist: list[str]) -> list[str]:
+    """The candidate pool beyond the watchlist: what the pool bucket scans.
+    universe.CANDIDATE_POOL already excludes every reserved tranche
+    (check_universe_not_spending_reserved), so nothing here spends one."""
+    try:
+        import universe as _u
+    except Exception as e:                             # noqa: BLE001
+        logger.warning("universe.py unavailable (%s) — no pool scan", e)
+        return []
+    return sorted(set(_u.CANDIDATE_POOL) - set(watchlist))
+
+
+def relative_strength(df, bench, lookback: int | None = None) -> float | None:
+    """universe.score_ticker()'s RS — the return spread against SPY over
+    RS_LOOKBACK sessions, in percentage points — on the scan's own frames,
+    so pool alerts rank on the number the universe already ranks on."""
+    try:
+        import universe as _u
+        lb = lookback or _u.RS_LOOKBACK
+        if df is None or bench is None or len(df) < lb + 1 or len(bench) < lb + 1:
+            return None
+        t = float(df["Close"].iloc[-1]) / float(df["Close"].iloc[-lb - 1]) - 1
+        b = float(bench["Close"].iloc[-1]) / float(bench["Close"].iloc[-lb - 1]) - 1
+        return round((t - b) * 100, 2)
+    except Exception:                                  # noqa: BLE001
+        return None
+
+
+def pool_due(state: dict, today: str | None = None) -> bool:
+    """Once a session: the pool scan runs on the first alerting scan of each
+    ET date, so the 11:07 dispatch carries it and a backup slot catches a
+    missed one."""
+    today = today or datetime.now(ET).strftime("%Y-%m-%d")
+    return state.get(POOL_STATE_KEY) != today
+
 import signal_core as sc
 import forward_log
 import risk_params
@@ -149,6 +185,15 @@ POST_CLOSE_WINDOW_HRS = 2   # --record-only runs this long after the close
 # recommending something never tested. 21-45 keeps live trades comparable to
 # the backtest they are supposed to be validating.
 SUGGEST_OPTIONS  = True
+
+# THE POOL BUCKET (BACKLOG 30, owner's decision 2026-10-13). Once a session
+# the scanner also evaluates the whole candidate pool beyond the watchlist,
+# alerts on the HIGH-QUALITY tier only, at most POOL_ALERT_CAP a session
+# ranked by relative strength, and records every pool signal under its own
+# bucket in the forward log. Pre-registered as a dated amendment to
+# results/forward_record_preregistration.md.
+POOL_ALERT_CAP   = 5
+POOL_STATE_KEY   = "POOL:DATE"   # the ET date the pool was last scanned
 OPT_MIN_DTE      = 21
 OPT_MAX_DTE      = 45
 OPT_MAX_EXPIRIES = 3        # each expiry is one chain fetch — keep it lean
@@ -681,7 +726,7 @@ def get_spy_regime() -> dict | None:
 
 def analyze(df: pd.DataFrame, ticker: str,
             spy_regime: dict | None = None,
-            tally: dict | None = None) -> dict | None:
+            tally: dict | None = None, bucket: str = "live") -> dict | None:
     """
     Thin adapter over signal_core.evaluate().
 
@@ -781,7 +826,7 @@ def analyze(df: pd.DataFrame, ticker: str,
             _bar = sc._bar_dates(df, None).max().date()
             if forward_log.record_signal(ticker, r["trend"], _setup, decision,
                                          reason, _cfg, bar_date=_bar,
-                                         hq=_hq) is None:
+                                         hq=_hq, bucket=bucket) is None:
                 logger.debug("%s — %s bar %s already in the forward log",
                              ticker, r["trend"], _bar)
         except Exception as exc:                       # noqa: BLE001
@@ -843,6 +888,58 @@ def selftest() -> int:
         return _selftest_body()
     finally:
         forward_log.LOG = real
+
+
+def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
+    """The Telegram text for one HQ signal: the underlying's levels, the
+    signal bar, and the suggested contract. One body for the watchlist and
+    the pool bucket; only the header differs."""
+    lines = [
+        header,
+        f"{r['ticker']} → {r['trend']} ({r['strength']})",
+        f"Price: {r['price']} | RR: {r['rr']} | ADX: {r['adx']} | RSI: {r['rsi']}",
+        f"Underlying: entry {r['entry']} | stop {r['stop']} | target {r['target']}",
+        f"Signal bar: {r.get('bar_date') or '?'} — enter this date when "
+        f"you log the trade as a system signal, so its outcome attaches "
+        f"to exactly this signal.",
+    ]
+
+    # Chain fetch happens here — AFTER the cooldown check — so
+    # suppressed alerts cost no API calls.
+    opt = suggest_option(tk, r["price"], r["trend"], r["atr"]) \
+        if SUGGEST_OPTIONS else None
+
+    if opt:
+        lines += [
+            "",
+            f"📄 CONTRACT: {tk} {opt['expiry']} ${opt['strike']:g} {opt['right']}",
+            f"Mid ${opt['mid']:.2f}  (bid {opt['bid']:.2f} / ask {opt['ask']:.2f}, "
+            f"spread {opt['spread_pct']:.0f}%)",
+            f"Cost ${opt['cost']:,.0f} per contract = {opt['pct_account']:.1f}% of account",
+            f"{opt['dte']} DTE · vol {opt['volume']:,} · OI {opt['oi']:,}",
+        ]
+        if not opt["within_budget"]:
+            lines.append(f"⚠️ Above your ${opt['budget']:,.0f} risk budget "
+                         f"({OPTION_BUDGET_PCT:g}% of ${ACCOUNT_SIZE:,}) — on a long "
+                         f"option the premium IS the max loss.")
+        if opt["spread_pct"] > OPT_MAX_SPREAD * 0.75:
+            lines.append(f"⚠️ Spread {opt['spread_pct']:.0f}% of mid — a wide "
+                         f"round trip can erase the edge on its own.")
+        lines += ["", "Test rules: TP +200% · SL −50% · exit at 7 DTE · thesis OFF"]
+    elif SUGGEST_OPTIONS:
+        lines += ["", "📄 No liquid contract found in the 21-45 DTE window "
+                      "(spread/volume/OI gates). Check the chain yourself."]
+    return "\n".join(lines)
+
+
+def _scan_cfg() -> dict:
+    """The rules in force, as the scan heartbeat fingerprints them."""
+    return {"adx_min": PARAMS.adx_min,
+            "min_rr": PARAMS.min_rr,
+            "atr_stop_mult": PARAMS.atr_stop_mult,
+            "atr_tgt_mult": PARAMS.atr_tgt_mult,
+            "weekly_confirm": PARAMS.weekly_confirm,
+            "longs_only": risk_params.LONGS_ONLY}
 
 
 def run(args) -> int:
@@ -957,43 +1054,7 @@ def run(args) -> int:
                 skipped += 1
                 continue
 
-            lines = [
-                "🚨 TRADE ALERT",
-                f"{r['ticker']} → {r['trend']} ({r['strength']})",
-                f"Price: {r['price']} | RR: {r['rr']} | ADX: {r['adx']} | RSI: {r['rsi']}",
-                f"Underlying: entry {r['entry']} | stop {r['stop']} | target {r['target']}",
-                f"Signal bar: {r.get('bar_date') or '?'} — enter this date when "
-                f"you log the trade as a system signal, so its outcome attaches "
-                f"to exactly this signal.",
-            ]
-
-            # Chain fetch happens here — AFTER the cooldown check — so
-            # suppressed alerts cost no API calls.
-            opt = suggest_option(tk, r["price"], r["trend"], r["atr"]) \
-                if SUGGEST_OPTIONS else None
-
-            if opt:
-                lines += [
-                    "",
-                    f"📄 CONTRACT: {tk} {opt['expiry']} ${opt['strike']:g} {opt['right']}",
-                    f"Mid ${opt['mid']:.2f}  (bid {opt['bid']:.2f} / ask {opt['ask']:.2f}, "
-                    f"spread {opt['spread_pct']:.0f}%)",
-                    f"Cost ${opt['cost']:,.0f} per contract = {opt['pct_account']:.1f}% of account",
-                    f"{opt['dte']} DTE · vol {opt['volume']:,} · OI {opt['oi']:,}",
-                ]
-                if not opt["within_budget"]:
-                    lines.append(f"⚠️ Above your ${opt['budget']:,.0f} risk budget "
-                                 f"({OPTION_BUDGET_PCT:g}% of ${ACCOUNT_SIZE:,}) — on a long "
-                                 f"option the premium IS the max loss.")
-                if opt["spread_pct"] > OPT_MAX_SPREAD * 0.75:
-                    lines.append(f"⚠️ Spread {opt['spread_pct']:.0f}% of mid — a wide "
-                                 f"round trip can erase the edge on its own.")
-                lines += ["", "Test rules: TP +200% · SL −50% · exit at 7 DTE · thesis OFF"]
-            elif SUGGEST_OPTIONS:
-                lines += ["", "📄 No liquid contract found in the 21-45 DTE window "
-                              "(spread/volume/OI gates). Check the chain yourself."]
-
-            msg = "\n".join(lines)
+            msg = compose_alert(r, tk)
             logger.info("ALERT %s %s rr=%s", tk, r["trend"], r["rr"])
             if send_alert(msg, dry_run=args.dry_run):
                 hits += 1
@@ -1029,6 +1090,90 @@ def run(args) -> int:
             logger.warning("Total scan outage, but an outage alert was sent "
                            "within %dh — suppressed.", ALERT_COOLDOWN_HRS)
 
+    # ── THE POOL BUCKET — the whole candidate pool, once a session (BACKLOG 30) ──
+    #
+    # Owner's decision 2026-10-13: scan the wider universe once a day in
+    # session, alert on the HIGH-QUALITY tier only, at most POOL_ALERT_CAP a
+    # session ranked by relative strength, and record every pool signal under
+    # its own bucket so it never blends with the watchlist's record. Runs on
+    # the first alerting scan of each ET date (pool_due), never in the
+    # record-only pass (the pool's open rows are graded there instead), and
+    # evaluates the last settled bar exactly as the watchlist loop does.
+    pool_scanned, pool_alerted, pool_hq_n = 0, 0, 0
+    pool_bars: dict = {}
+    if not record_only and (getattr(args, "force_pool", False) or pool_due(state)):
+        pool = pool_tickers(WATCHLIST)
+        pool_hq, pool_failed = [], []
+        bench = frames.get("SPY")
+        if bench is None and pool:
+            try:
+                time.sleep(FETCH_GAP_SEC)
+                bench = get_data("SPY")
+            except Exception as _exc:                  # noqa: BLE001
+                logger.warning("pool: SPY benchmark fetch failed: %s", _exc)
+                bench = None
+        if pool:
+            logger.info("pool: scanning %d name(s) beyond the watchlist", len(pool))
+        for tk in pool:
+            try:
+                time.sleep(FETCH_GAP_SEC)
+                df = get_data(tk)
+                if df is None:
+                    pool_failed.append(f"{tk} (no data)")
+                    continue
+                frames[tk] = df
+                cdf = compute(df)
+                cdf, _dropped = sc.drop_partial_bar(cdf, now=datetime.now(ET))
+                try:
+                    _bar = str(sc._bar_dates(cdf, None).max().date())
+                    pool_bars.setdefault(_bar, {"tickers": [], "signals": 0})
+                    pool_bars[_bar]["tickers"].append(tk)
+                except Exception:                      # noqa: BLE001
+                    _bar = None
+                pool_scanned += 1
+                r = analyze(cdf, tk, spy_regime=spy_regime,
+                            tally=pool_bars.get(_bar) if _bar else None,
+                            bucket="pool")
+                if r:
+                    r["rs"] = relative_strength(df, bench)
+                    pool_hq.append(r)
+            except Exception as e:                     # noqa: BLE001
+                logger.exception("pool %s failed: %s", tk, e)
+                pool_failed.append(f"{tk} ({type(e).__name__})")
+        # RANK BY RELATIVE STRENGTH, alert the top POOL_ALERT_CAP. The rest
+        # are already recorded by analyze(); they are named here, not sent.
+        pool_hq.sort(key=lambda x: (x["rs"] is None, -(x["rs"] or 0.0), x["ticker"]))
+        pool_hq_n = len(pool_hq)
+        for r in pool_hq:
+            tk = r["ticker"]
+            if pool_alerted >= POOL_ALERT_CAP:
+                logger.info("pool: %s %s is HQ but beyond the cap of %d — "
+                            "recorded, not alerted", tk, r["trend"], POOL_ALERT_CAP)
+                continue
+            if recently_alerted(state, tk, r["trend"]):
+                logger.info("pool: %s %s qualifies but alerted within %dh — "
+                            "suppressed.", tk, r["trend"], ALERT_COOLDOWN_HRS)
+                skipped += 1
+                continue
+            _hdr = (f"🚨 POOL ALERT (wide universe, HQ tier, RS {r['rs']:+.1f})"
+                    if r["rs"] is not None else "🚨 POOL ALERT (wide universe, HQ tier)")
+            msg = compose_alert(r, tk, header=_hdr)
+            logger.info("POOL ALERT %s %s rr=%s rs=%s", tk, r["trend"], r["rr"], r["rs"])
+            if send_alert(msg, dry_run=args.dry_run):
+                hits += 1
+                pool_alerted += 1
+                if not args.dry_run:
+                    state[f"{tk}:{r['trend']}"] = time.time()
+        if pool_scanned and not args.dry_run:
+            state[POOL_STATE_KEY] = datetime.now(ET).strftime("%Y-%m-%d")
+        if pool and not pool_scanned:
+            logger.warning("pool: all %d name(s) failed — the pool was NOT scanned; "
+                           "the next alerting run retries", len(pool))
+        if pool:
+            logger.info("pool: %d scanned, %d HQ, %d alerted (cap %d), %d failed",
+                        pool_scanned, pool_hq_n, pool_alerted, POOL_ALERT_CAP,
+                        len(pool_failed))
+
     # ── GRADE EVERY TAKEN SIGNAL WHOSE WINDOW HAS CLOSED ──
     #
     # results/forward_grading_preregistration.md. The forward record had intake
@@ -1042,9 +1187,21 @@ def run(args) -> int:
     # frame already fetched; a ticker that has left the watchlist is fetched
     # here, once.
     try:
+        # POOL-ONLY NAMES (BACKLOG 30): a ticker whose open rows are all in
+        # the pool bucket is fetched on the pool-scan run, where it is already
+        # in `frames`, and in the post-close pass. On the other in-session
+        # runs its rows wait, so grading does not turn ~6 pool signals a day
+        # into eighty extra fetches on every run. A live-bucket signal whose
+        # name has left the watchlist is still fetched here, once, as before.
+        _live_open = {r.get("ticker") for r in forward_log.read_all()
+                      if forward_log.counts_as_taken(r)
+                      and forward_log.bucket_of(r) == "live"}
+
         def _bars_for(tk: str):
             _df = frames.get(tk)
             if _df is None:
+                if tk not in _live_open and not record_only:
+                    return None
                 time.sleep(FETCH_GAP_SEC)
                 _df = get_data(tk)
             return bars_for_grading(_df) if _df is not None else None
@@ -1116,14 +1273,17 @@ def run(args) -> int:
     for _bar, _info in sorted(bars_scanned.items()):
         try:
             forward_log.record_scan(_bar, _info["tickers"], _info["signals"],
-                                    {"adx_min": PARAMS.adx_min,
-                                     "min_rr": PARAMS.min_rr,
-                                     "atr_stop_mult": PARAMS.atr_stop_mult,
-                                     "atr_tgt_mult": PARAMS.atr_tgt_mult,
-                                     "weekly_confirm": PARAMS.weekly_confirm,
-                                     "longs_only": risk_params.LONGS_ONLY})
+                                    _scan_cfg())
         except Exception as _exc:                          # noqa: BLE001
             logger.warning("forward log: scan row for %s failed: %s", _bar, _exc)
+    # The pool's heartbeat, under its own bucket, AFTER the live one: it is
+    # evidence that the pool was evaluated, never that the watchlist was.
+    for _bar, _info in sorted(pool_bars.items()):
+        try:
+            forward_log.record_scan(_bar, _info["tickers"], _info["signals"],
+                                    _scan_cfg(), bucket="pool")
+        except Exception as _exc:                          # noqa: BLE001
+            logger.warning("forward log: pool scan row for %s failed: %s", _bar, _exc)
 
     if not args.dry_run:
         save_state(state)
@@ -1565,8 +1725,9 @@ def _selftest_body() -> int:
         _g = globals()
         _saved = {k: _g[k] for k in ("get_data", "compute", "analyze",
                                      "get_spy_regime", "save_state", "load_state",
-                                     "WATCHLIST", "FETCH_GAP_SEC")}
+                                     "WATCHLIST", "FETCH_GAP_SEC", "pool_tickers")}
         try:
+            _g["pool_tickers"] = lambda wl: []        # the pool has its own harness
             _g["get_data"] = lambda tk: _fr
             _g["compute"] = lambda df: df
             _g["analyze"] = lambda df, tk, spy_regime=None, tally=None: None
@@ -1716,6 +1877,126 @@ def _selftest_body() -> int:
         forward_log.LOG = _real_log3
         globals()["send_alert"] = _real_send3
 
+    # ── THE POOL BUCKET (BACKLOG 30): once a session, HQ only, capped, ranked ──
+    _tmpl4 = _pl2.Path(_tf2.mkdtemp()) / "pool.jsonl"
+    _real_log4 = forward_log.LOG
+    _real_send4 = globals()["send_alert"]
+    _sent4: list = []
+    try:
+        forward_log.LOG = _tmpl4
+        globals()["send_alert"] = lambda m, dry_run=False: (_sent4.append(m) or True)
+        import pandas as _pd4
+        _bars4 = _pd4.bdate_range(end="2026-06-30", periods=MIN_BARS_AFTER_WARMUP + 20)
+        _fetched: list = []
+        def _fake_get(tk):
+            _fetched.append(tk)
+            fr = _pd4.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0,
+                                 "Close": 100.0, "Volume": 1e6}, index=_bars4)
+            fr.attrs["tk"] = tk
+            return fr
+        _rs = {"P1": 3.0, "P2": 9.0, "P3": -2.0, "P4": 12.0, "P5": 0.5, "P6": 7.0}
+        _buckets: dict = {}
+        def _fake_analyze4(df, tk, spy_regime=None, tally=None, bucket="live"):
+            _buckets[tk] = bucket
+            if tk in _rs:                       # six HQ signals in the pool
+                if tally is not None:
+                    tally["signals"] = tally.get("signals", 0) + 1
+                return {"ticker": tk, "trend": "Bullish", "strength": "Strong",
+                        "price": 100.0, "entry": 100.0, "stop": 98.0,
+                        "target": 106.0, "rr": 3.0, "rsi": 55.0, "adx": 40.0,
+                        "atr": 1.6, "filters_pass": 4, "filters_total": 4}
+            return None
+        _g = globals()
+        _saved = {k: _g[k] for k in ("get_data", "compute", "analyze",
+                                     "get_spy_regime", "save_state", "load_state",
+                                     "WATCHLIST", "FETCH_GAP_SEC", "suggest_option",
+                                     "pool_tickers", "relative_strength",
+                                     "is_post_close_window")}
+        _state4: dict = {}
+        try:
+            _g["get_data"] = _fake_get
+            _g["compute"] = lambda df: df
+            _g["analyze"] = _fake_analyze4
+            _g["get_spy_regime"] = lambda: None
+            _g["save_state"] = lambda st: _state4.update(st)
+            _g["load_state"] = lambda: dict(_state4)
+            _g["WATCHLIST"] = ["AAA"]
+            _g["FETCH_GAP_SEC"] = 0
+            _g["suggest_option"] = lambda *a, **k: None
+            _pool7 = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]
+            _g["pool_tickers"] = lambda wl: list(_pool7)
+            _g["relative_strength"] = lambda df, bench, lookback=None: _rs.get(df.attrs.get("tk"))
+            import argparse as _ap5
+            _ns = lambda **kw: _ap5.Namespace(**{"force": True, "dry_run": False,
+                                                 "record_only": False, "force_pool": False, **kw})
+            # FIRST ALERTING RUN OF THE DAY: the pool is scanned, six HQ, five sent, by RS.
+            run(_ns())
+            assert _buckets.get("AAA") == "live" and all(_buckets[t] == "pool" for t in _rs), _buckets
+            assert "SPY" in _fetched, "the benchmark is fetched once for the ranking"
+            _pool_msgs = [m for m in _sent4 if m.startswith("🚨 POOL ALERT")]
+            assert len(_pool_msgs) == POOL_ALERT_CAP == 5, (len(_pool_msgs), _sent4)
+            _order = [m.splitlines()[1].split()[0] for m in _pool_msgs]
+            assert _order == ["P4", "P2", "P6", "P1", "P5"], (
+                f"{_order}: alerts go out in RS order and P3 (lowest) is beyond the cap")
+            assert "RS +12.0" in _pool_msgs[0], _pool_msgs[0].splitlines()[0]
+            assert _state4.get(POOL_STATE_KEY) == datetime.now(ET).strftime("%Y-%m-%d")
+            assert "P3:Bullish" not in _state4 and "P4:Bullish" in _state4, \
+                "only the alerted names get a cooldown stamp"
+            _rows4 = forward_log.read_all(_tmpl4)
+            _scans4 = [r for r in _rows4 if r["kind"] == "scan"]
+            assert [forward_log.bucket_of(r) for r in _scans4] == ["live", "pool"], _scans4
+            assert _scans4[1]["tickers"] == ["P1", "P2", "P3", "P4", "P5", "P6", "P7"] \
+                and _scans4[1]["n_signals"] == 6, _scans4[1]
+            assert forward_log.last_scan(_tmpl4)["tickers"] == ["AAA"], \
+                "the coverage heartbeat is the LIVE scan row, not the pool's"
+            # SECOND RUN THE SAME DAY: no pool fetch, no pool scan row, no alert.
+            _fetched.clear(); _sent4.clear()
+            run(_ns())
+            assert not any(t in _pool7 for t in _fetched) and "SPY" not in _fetched, _fetched
+            assert not _sent4 and len([r for r in forward_log.read_all(_tmpl4)
+                                       if r["kind"] == "scan"]) == 3, "live heartbeat only"
+            # GRADING FETCH RULE: a pool-only name waits for the pool run or the
+            # post-close pass; a live-bucket name that left the watchlist is
+            # fetched in session, once, as before.
+            _setup9 = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0}
+            forward_log.record_signal("LV9", "Bullish", _setup9, "taken", "", {"adx_min": 35},
+                                      bar_date=str(_bars4[-5].date()), hq=False)
+            forward_log.record_signal("P9", "Bullish", _setup9, "taken", "", {"adx_min": 35},
+                                      bar_date=str(_bars4[-5].date()), hq=False, bucket="pool")
+            _fetched.clear(); _sent4.clear()
+            run(_ns())
+            assert "LV9" in _fetched and "P9" not in _fetched, (
+                _fetched, "in session a pool-only name waits; a departed live name is fetched")
+            _fetched.clear()
+            _g["is_post_close_window"] = lambda now=None: True
+            run(_ns(force=False, record_only=True))
+            assert "P9" in _fetched and "LV9" in _fetched, (_fetched, "post-close grades both buckets")
+            # --force-pool RE-RUNS IT: the five already sent sit inside the cooldown,
+            # so the sixth (P3, beyond the cap the first time) is the only alert.
+            _fetched.clear(); _sent4.clear()
+            run(_ns(force_pool=True))
+            assert sum(1 for t in _fetched if t in _pool7) == 7, _fetched
+            assert [m.splitlines()[1].split()[0] for m in _sent4] == ["P3"], (
+                _sent4, "forced pool scan: cooldown holds the five, the sixth goes out")
+            # RECORD-ONLY NEVER SCANS THE POOL (its rows are graded there instead).
+            _state4.pop(POOL_STATE_KEY, None); _fetched.clear(); _sent4.clear()
+            _g["is_post_close_window"] = lambda now=None: True
+            run(_ns(force=False, record_only=True))
+            assert not any(t in _pool7 for t in _fetched) and not _sent4, _fetched
+            assert POOL_STATE_KEY not in _state4, "record-only must not stamp the pool"
+            # A DRY RUN scans and prints but leaves no stamp.
+            _fetched.clear(); _sent4.clear()
+            run(_ns(dry_run=True))
+            assert sum(1 for t in _fetched if t in _pool7) == 7 and POOL_STATE_KEY not in _state4
+        finally:
+            _g.update(_saved)
+        print(f"pool bucket             : once a session, {POOL_ALERT_CAP} of 6 HQ sent in RS "
+              f"order, rows+scan under bucket=pool, live heartbeat untouched; "
+              f"second run skips, --force-pool re-runs, record-only never scans it")
+    finally:
+        forward_log.LOG = _real_log4
+        globals()["send_alert"] = _real_send4
+
     # ── THE GRADER IS WIRED INTO run(), AND REUSES THE SCAN'S FRAMES ──
     # results/forward_grading_preregistration.md. A taken signal on a
     # watchlist ticker is graded from the frame the scan already fetched; one
@@ -1740,7 +2021,7 @@ def _selftest_body() -> int:
         _g = globals()
         _saved = {k: _g[k] for k in ("get_data", "compute", "analyze",
                                      "get_spy_regime", "save_state", "load_state",
-                                     "WATCHLIST", "FETCH_GAP_SEC", "fetch_atm_chain")}
+                                     "WATCHLIST", "FETCH_GAP_SEC", "pool_tickers", "fetch_atm_chain")}
         _iv_tmp4 = _pl2.Path(_tf2.mkdtemp()) / "iv4.jsonl"
         _real_iv_log4 = iv_snapshot.LOG
         # RECORDS the call rather than raising: the snapshot block is wrapped
@@ -1748,6 +2029,7 @@ def _selftest_body() -> int:
         # there and proves nothing. Counting calls does.
         _chain_calls4: list = []
         try:
+            _g["pool_tickers"] = lambda wl: []        # the pool has its own harness
             iv_snapshot.LOG = _iv_tmp4
             _g["fetch_atm_chain"] = lambda tk, today=None: (_chain_calls4.append(tk) or None)
             _g["get_data"] = lambda tk: (_fetched.append(tk) or _fr4)
@@ -1800,6 +2082,9 @@ def parse_args():
                         "write its forward-log rows and scan heartbeat. Sends "
                         "no trade alert and fetches no chain. Runs only inside "
                         "the 2h after the close unless --force.")
+    p.add_argument("--force-pool", action="store_true",
+                   help="Scan the candidate pool (BACKLOG 30) on this run even "
+                        "if it already ran today. Alerting runs only.")
     p.add_argument("--coverage", action="store_true",
                    help="Check whether the unattended system has been running "
                         "(last scan row, unchecked positions) and alert if not. "

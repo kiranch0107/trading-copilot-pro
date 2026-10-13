@@ -5,6 +5,52 @@ and tagging HQ"). Written and committed BEFORE the first row under the new rule
 is recorded.** Everything below is fixed. Nothing here may be changed after a
 result is seen; the timestamp on this file in git is the point of it.
 
+## Amendment 2026-10-13 — the pool bucket (BACKLOG 30). ADDITIVE: nothing below about the live watchlist changes
+
+**Owner's decision 2026-10-13 ("lets run HQ scan once a day during market
+hours"), written before the first pool row is recorded.** The scanner
+also evaluates the whole candidate pool (`universe.CANDIDATE_POOL`, about
+80 names, every reserved tranche already excluded) beyond the eight-name
+watchlist, once a session, as a SECOND POPULATION of the same record.
+
+- **Bucket.** Every signal row and every `scan` row carries `bucket`:
+  `live` for the watchlist, `pool` for the rest. A row without the field
+  (every row before this date) is `live`. The two buckets are read
+  separately; `forward_log.summary()` reports `by_bucket`.
+- **When.** The pool scan runs on the first alerting scan of each ET date
+  (`scanner.pool_due`, state key `POOL:DATE`), so the 11:07 dispatch
+  carries it and a backup slot catches a missed one. It evaluates the last
+  settled bar exactly as the watchlist loop does. It never runs in the
+  record-only pass. `--force-pool` (workflow input `pool`) repeats it.
+- **What is recorded.** Every pool signal the rules produce, taken or
+  skipped, HQ-tagged exactly as the live rows, under `bucket: pool`. Pool
+  `scan` rows are NOT the coverage heartbeat: `last_scan()` reads the live
+  bucket.
+- **What is sent.** Alerts on the HQ tier only, as for the watchlist, and
+  **at most five a session**, ranked by **relative strength**: the
+  63-session return spread against SPY (`universe.RS_LOOKBACK`), the number
+  the universe already ranks on. Pool HQ signals beyond the cap are
+  recorded, not alerted. The four-hour cooldown applies. Each alert carries
+  the suggested contract exactly as a watchlist alert does; that is the
+  "check the option chain for at most five" of the owner's request.
+- **Grading.** The same resolver, the same bases, the same dust floor.
+  Pool rows are graded on the pool-scan run (frames already fetched) and in
+  the post-close pass; on the other in-session runs they wait.
+- **Reading.** H0 and H1 as below, asked of EACH bucket on its own. A
+  pooled line across buckets is descriptive only. The 349-episode stopping
+  rule applies per bucket.
+- **Expected arrival, stated now.** The live record holds 27 signals and 0
+  HQ (ADX ≥ 35 failed on every tagged row). By the rule of three the HQ
+  share of base signals is below ~11 % at 95 %; at ~6 base signals a day
+  across the pool that is fewer than ~0.65 HQ a day. The cap of five will
+  rarely bind.
+- **Prediction.** HQ fires rarely on the pool; where it fires, its mean R
+  does not exceed base by +0.15 R; the pool's base mean is not
+  distinguishable from the live bucket's.
+
+Enforcement: `scanner.py --selftest` (the pool harness) and
+`consistency_check.check_pool_bucket_wired()`.
+
 ## The finding this answers (BACKLOG 24, review H2)
 
 Between 2026-09-16 and 2026-10-07 the scanner recorded 19 base signals on 8
