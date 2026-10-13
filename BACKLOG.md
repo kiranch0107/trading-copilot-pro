@@ -40,8 +40,15 @@ landed in the repo and the removal says so in the commit.
   only) and will close AAPL again. Until an "update trade_journal.json from
   app" commit appears on `main`, the journal in the repo is MISSING the
   AAPL 2026-10-09 355C close (expired worthless, −1.0 R, 2026-10-13 13:03
-  ET) and `open_positions.json` still carries AAPL. The new token's expiry
-  date goes here when the owner reports it: ____.
+  ET) and `open_positions.json` still carries AAPL. *Resolved the same
+  day, 13:27 ET:* the owner replaced the token and closed AAPL again; the
+  commits "update trade_journal.json from app" (2a0a6bc) and "update
+  open_positions.json from app" (9cfa226) landed, the journal carries AAPL
+  2026-10-09 355C as LOSS −1.0 R / −$111 (expired worthless), and the open
+  positions are NVDA and PFE only. **The new token's expiry date was not
+  captured.** It is shown on github.com → Settings → Developer settings →
+  Personal access tokens → Fine-grained tokens, next to the token's name.
+  Owner: look it up and put it here, and in the December rotation item: ____.
 
 ---
 
