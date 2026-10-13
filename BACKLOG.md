@@ -1324,7 +1324,7 @@ Two pieces, each needing its own pre-registration before a row is written:
 
 ---
 
-## 29. Day trading by chart reading — PHASE 1 COMPLETE ON BOTH TIMEFRAMES 2026-10-10: NO RULE CLEARS
+## 29. Day trading by chart reading — PHASE 1 COMPLETE ON THREE TIMEFRAMES 2026-10-13: NO RULE CLEARS
 
 **Owner's idea, 2026-10-08; screened 2026-10-09 in `results/day_trading_screen.md`.**
 
@@ -1403,9 +1403,21 @@ honestly: ~100 week clusters, detection limit +0.15 to +0.30 R, so the "mean
 from zero. Built as the `4h` profile of `intraday_rules.py` (`--timeframe
 4h`, `resample_4h`); the check pins all three profiles. Prediction on file: no
 rule clears; timeouts fall well below the hourly run's; the named Fibonacci
-zone stays inside noise of its controls. **Owed: `python intraday_rules.py
---timeframe 4h | tee results/intraday_rules_4h_run1.txt` on the laptop** (no
-fetch: it reads the hourly cache).
+zone stays inside noise of its controls. **Run 2026-10-13 by the owner
+(`results/intraday_rules_4h_run1.md`, raw `_run1.txt`):** 20 names, 104
+weeks, fingerprint `v2-eb11301b7b4c55e4` (equals the hourly run's, as
+required). **No rule clears; every mean is negative**, five of six at
+percentile 0 of random entry. Fibonacci is a measured loss at 99 %
+([−0.44, −0.10]) and its named zone was not the best of three for the third
+time (−0.28 vs −0.15 / −0.70). RSI divergence −0.56 R: the stop at the new
+low is the level overnight gaps go through, and the gapped fill rule priced
+it (155 stops filled at the open across rules). EMA pullback is the only
+rule above random (+0.04, still −0.06 R). Timeouts fell to 1–45 % as
+predicted; the "means near zero" call was wrong, four of six are more
+negative than at hourly. 1,743 setups were skipped by the one-position rule,
+about as many as were taken. **Phase 1 is complete and negative on three
+timeframes; no confirmation window is owed.** Phase 2 remains the owner's
+decision.
 
 ---
 
