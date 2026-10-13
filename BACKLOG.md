@@ -45,10 +45,11 @@ landed in the repo and the removal says so in the commit.
   commits "update trade_journal.json from app" (2a0a6bc) and "update
   open_positions.json from app" (9cfa226) landed, the journal carries AAPL
   2026-10-09 355C as LOSS −1.0 R / −$111 (expired worthless), and the open
-  positions are NVDA and PFE only. **The new token's expiry date was not
-  captured.** It is shown on github.com → Settings → Developer settings →
-  Personal access tokens → Fine-grained tokens, next to the token's name.
-  Owner: look it up and put it here, and in the December rotation item: ____.
+  positions are NVDA and PFE only. **The app's new token expires
+  2027-01-05** (owner, same day). That is one day before the cron-job.org
+  dispatch token (2027-01-06): both are rotated in the last week of
+  December 2026, in one sitting; the forcing-function paragraph under the
+  scheduler item carries both.
 
 ---
 
@@ -1007,13 +1008,22 @@ York are always exactly three hours apart and both observe DST, so the offset
 never drifts. The two monitor slots outside 9:30–16:00 ET are discarded by the
 script's own guard. The doubled `schedule` crons in both YAMLs stay as backup.
 
-**FORCING FUNCTION — the PAT expires 2027-01-06.** Fine-grained token, this repo
-only, Actions: read+write (the response header `x-accepted-github-permissions:
-actions=write` confirmed exactly that scope). When it expires every dispatch
+**FORCING FUNCTION — TWO PATs expire the same week: 2027-01-06 and 2027-01-05.**
+(1) The dispatch token: fine-grained, this repo only, Actions: read+write (the
+response header `x-accepted-github-permissions: actions=write` confirmed
+exactly that scope), expires **2027-01-06**. When it expires every dispatch
 returns 401, both jobs go silent, and the only thing standing between that and
 a repeat of the three-week outage is the coverage alarm, which pages within two
-trading days. **Rotate it in the last week of December 2026** and update both
-cron-job.org jobs' `Authorization` header. Nothing in the repo holds the token.
+trading days. (2) The app's token: fine-grained, this repo only, Contents:
+read+write, Streamlit secret `GITHUB_TOKEN`, issued 2026-10-13 after its
+predecessor died unnoticed (every app write failed from 2026-09-30 to
+2026-10-13 behind a green sidebar; see the hand-off note), expires
+**2027-01-05**. When it expires the app reads from the container's disk and
+every save fails, with the red sidebar box only after the next rerun.
+**Rotate BOTH in the last week of December 2026**: new dispatch token into both
+cron-job.org jobs' `Authorization` header, new app token into Streamlit
+secrets, then one dispatch and one app save to prove each. Nothing in the repo
+holds either token.
 
 The in-repo half — the alarm, the heartbeat, the pins — shipped in #96 and is
 recorded below as it stood on 10-07.
