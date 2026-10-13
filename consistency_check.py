@@ -2666,6 +2666,25 @@ def check_pullback_bucket_wired() -> None:
           "both loops, never alerted")
 
 
+def check_pullback_arrival_outcome_free() -> None:
+    """
+    pullback_arrival.py counts how often the pullback rule fires on history
+    and NOTHING ELSE. The pullback bucket is a forward test read once at 349
+    settled episodes; a history-based R, win rate or exit for the same rule
+    would be the peek the pre-registration exists to prevent. The module's
+    code (not its docstring) must contain no engine call and no outcome word,
+    and the reporter must have nothing to print but counts.
+    """
+    src = Path("pullback_arrival.py").read_text(encoding="utf-8")
+    body = src.split('"""', 2)[2]
+    for banned in ("simulate_trade", "resolve_signal", "outcome", "exit_price", "mean_r",
+                   "win_rate", "stop_distance", "record_signal", "record_outcome"):
+        assert banned not in body, f"pullback_arrival.py mentions {banned!r} outside its docstring"
+    assert "python pullback_arrival.py --selftest" in Path(".github/workflows/tests.yml").read_text()
+    assert "python engine_differential.py --selftest" in Path(".github/workflows/tests.yml").read_text()
+    print("  pullback_arrival.py is outcome-free (counts only); both data checks' selftests run in CI")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -2690,6 +2709,7 @@ CHECKS = [
     ("Phase 2 paper record isolated, one writer",   check_daytrade_paper_isolated),
     ("pool bucket wired, capped, kept apart",       check_pool_bucket_wired),
     ("pullback bucket: shared rule, never alerted", check_pullback_bucket_wired),
+    ("pullback arrival check is outcome-free",       check_pullback_arrival_outcome_free),
     ("outcome buckets never gate a trade",       check_taxonomy_never_gates),
     ("CRLF files keep their line endings",       check_line_endings_preserved),
     ("direction gate is live-only",              check_direction_gate_is_live_only),
