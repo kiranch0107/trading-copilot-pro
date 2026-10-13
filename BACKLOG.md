@@ -1694,6 +1694,34 @@ rule changes.
 
 ---
 
+## 32. Journal review: the trades traded are not the structure tested — ASSESSED 2026-10-13, DECISIONS OPEN
+
+**Owner's question 2026-10-13** ("review our trade journal including
+skipped signals; right vs wrong"), answered in
+`results/journal_review_2026-10-13.md`. Right: size (1–2 contracts, 1–5 %
+of the account, every live trade), one skip rule applied every time,
+honest paper/live and expiry bookkeeping, and the system's seven signal
+trades (+$153) beat the owner's three discretionary ones (−$111, two more
+open at their stops). Wrong: ten of thirteen trades entered under 21 DTE,
+profits taken at +23–131 % never +200 %, losses run to −72/−73/−100 %, one
+call held to expiry — the tested structure (21–45 DTE, +200 %/−50 %, out at
+7 DTE) was never traded; the 5 % budget rule at $5,000 admits only cheap
+short-dated contracts and skipped every liquid name, so the rule and the
+tested window are incompatible here; journal dates are log times (holding
+time unknowable); `signal_key` empty on all rows so zero journal trades
+attach to the record (premium-basis reading has no data after four weeks);
+`alert_history.json` is empty; a test row (ZZZ) sits in the journal; two
+exit-signalled positions are being held to expiry.
+
+**Owner's decisions:** (1) trade only the measured structure, and only
+where affordable, or not at all; (2) take the two stops or note the choice;
+(3) stop discretionary option entries or route them to Phase 2's paper
+record; (4) going forward log trade time and the signal date, delete the
+test row; (5) have the app record the alerts it shows (small app change,
+not started).
+
+---
+
 ## Working conventions
 
 - `signal_core.py` is canonical. `consistency_check.py` enforces 46 cross-module
