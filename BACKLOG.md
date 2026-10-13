@@ -1416,8 +1416,28 @@ rule above random (+0.04, still −0.06 R). Timeouts fell to 1–45 % as
 predicted; the "means near zero" call was wrong, four of six are more
 negative than at hourly. 1,743 setups were skipped by the one-position rule,
 about as many as were taken. **Phase 1 is complete and negative on three
-timeframes; no confirmation window is owed.** Phase 2 remains the owner's
-decision.
+timeframes; no confirmation window is owed.**
+
+**Phase 2, owner's decision 2026-10-13 ("go ahead with Phase 2").**
+Pre-registered in `results/daytrade_paper_preregistration.md` before the
+first call, and built the same day as `daytrade_paper.py`: the owner's
+discretionary call is logged BEFORE entry (ticker, side, a setup name from
+the Phase 1 list or `pattern`/`other`, the price on the screen, stop,
+target) into `daytrade_paper.jsonl`, an append-only hash chain in the
+forward log's format with its own single writer, never read by the journal,
+the app or the scanner. The Phase 1 engine grades it from 5-minute bars:
+next bar's open + 5 bps, stop first, target, else flat at the close, gapped
+levels fill at the open, a twenty-draw random-entry null at the same
+session, the dust floor. The logged price must sit inside the bar trading at
+the call or the call is VOID; a call outside hours or at 15:55 or later is
+refused. **Nothing is read before 349 settled episodes**: the report prints
+counts and withholds the mean, interval, null and verdict, in code, with no
+peek flag. One pooled bar at 95 %: mean ≥ +0.15 R, clustered CI above zero,
+≥ +0.15 over the null. Prediction on file: the record does not clear; the
+mean sits within ±0.10 R of the random null. `check_daytrade_paper_isolated()`
+pins the constants and the one-writer rule. **Owed by the owner: the calls,
+committed the same day, and a weekly `grade` inside the provider's 60-day
+window.** Four to twelve months to a reading.
 
 ---
 
@@ -1473,8 +1493,8 @@ or log is changed by this entry.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 42 cross-module
-  invariants (42 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 43 cross-module
+  invariants (43 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip
