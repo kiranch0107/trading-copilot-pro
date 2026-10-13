@@ -1302,6 +1302,32 @@ the dedupe's natural companion: `record_signal` already keys on the bar.
   signal, taken **or** skipped, matching the rows `record_signal()` writes; it
   used to count only the alert-worthy ones under a name that said otherwise.
 
+**Testing session 2026-10-13, at the owner's request ("thorough testing of
+our code/logic").** Run: all 34 selftests, 45 checks, every module
+compiled and linted, both chains verified, the coverage alarm dry-run.
+Added, as scratch tests not committed as modules: an ENGINE DIFFERENTIAL
+(`backtest.simulate_trade` against `forward_log.resolve_signal` on 596
+random daily paths with random long and short geometries: zero
+disagreements in outcome or R at the grader's recorded precision; both
+void the same gapped fills) and RANDOMIZED PROPERTIES of
+`signal_core.long_levels` and `pullback_signal.evaluate_pullback` (300
+random frames: stop < entry < target, stop within 1.25 ATR and target
+within 4 ATR to the cent, every refusal counted, the SMA the raw frame's).
+A high-effort code review of the day's diff (`6443daf..3090a56`) returned
+eleven findings, all fixed the same day: the pool's once-a-day stamp is now
+written only when its alerts were delivered (a Telegram failure leaves the
+pool due); the record's headline HQ-versus-base numbers and `by_basis` are
+the LIVE bucket's alone; `analyze()` tests the base condition before
+fetching the earnings calendar (the pool scan no longer fetches ~75
+calendars for bars that cannot signal); `relative_strength()` ranks on
+settled, date-aligned closes; the pullback refusals are tallied per run;
+`daytrade_paper` reuses `forward_log.append(path=…)` instead of a copy,
+refuses to log onto a cut chain, and decides same-day calls before any
+fetch; a stale-warning constant derives from the void threshold; the
+intraday null-window wording is corrected by dated notes; a discarded
+bounds lookup is gone. The single-writer check now keys on a
+forward_log.append() call WITHOUT an explicit path.
+
 ---
 
 ## 28. ~~The forward record has intake and no grading~~ — BOTH PIECES BUILT 2026-10-08

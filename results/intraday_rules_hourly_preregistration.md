@@ -7,6 +7,16 @@ committed. Parent: `intraday_rules_preregistration.md` (the 5-minute test,
 run 2026-10-10, no rule cleared — that verdict stands and is NOT reopened
 by this document).
 
+## Wording note, 2026-10-13 (no number changes)
+
+The random null's last entry bar is the last bar on which a detector can
+fire, which is two bars before the session's last bar (the code's
+`random_null` upper bound, the same bound the detectors loop to). The
+sentence below that says "second-from-last" describes that bar
+imprecisely; the run was produced with the code's bound, so the null and
+the real setups share the same window, as intended. Found by the review of
+2026-10-13; recorded rather than edited, because the run is committed.
+
 ## Why a second timeframe is a different hypothesis, and what it costs
 
 The 5-minute rules were defined in bars, and at 5 minutes most of their
