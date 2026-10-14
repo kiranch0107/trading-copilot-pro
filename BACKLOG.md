@@ -1735,6 +1735,37 @@ own scan alerts list is unchanged below it. The single-writer check names
 `record_alert`. Still the owner's: delete the ZZZ row, take or note the two
 stops, and enter the signal bar date when logging.
 
+## 33. ADX 30 instead of 35, on the config the scanner runs — PRE-REGISTERED 2026-10-14, RUN OWED (owner's laptop)
+
+**Owner's question 2026-10-14** ("backtest on existing parameters but ADX as
+30 instead of 35"). Not already answered: `adx_retest_run1.md` (2026-09-10)
+measured the RECORD config (1.0 / 3.0, regime off, both sides) before the
+gap-fill fix, and compared nested aggregates. The scanner runs 1.25 / 4.0,
+volume 1.2×, regime on, longs only. For this run the owner's question
+decides 23's open "which config" for the first time: the live one.
+
+**The unit of the question is the marginal band.** The ADX-30 set is the
+ADX-35 set plus exactly the trades whose signal-bar ADX is in [30, 35), so
+what that band earns is what the change earns. `adx_retest.py` gained
+`--config live` (every shared key from `signal_core.DEFAULTS` via
+`backtest.CFG_TO_PARAMS`; the selftest asserts the built params equal the
+scanner's), `--longs-only`, and `--band LO,HI` (bands cut from the ungated
+run by the ADX carried on each trade's setup; `judge_band` is the
+pre-registered bar: n ≥ 150, mean R > 0 at p ≤ 0.05, detectable at 80 %).
+The old command is unchanged (flags default off). Pre-registration, bars and
+the stated expectation (NOT ESTABLISHED on power, as run 1 and
+`setup_population_run2` predict) in `results/adx_live_preregistration.md`.
+
+**Run (owner, laptop with `.bar_cache/`):**
+`python adx_retest.py --config live --longs-only --levels 0,20,25,30,35 --band 30,35`,
+output to `results/adx_live_run1.txt` with the fingerprint line. Spent data:
+the run can refute, not confirm. A null does not make 30 "better"; it makes
+30 versus 35 a choice about alert volume from a signal with no measured
+edge, which stays the owner's. No `adx_min` change is pre-committed on any
+outcome.
+
+---
+
 ---
 
 ## Working conventions
