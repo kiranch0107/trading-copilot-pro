@@ -1735,7 +1735,7 @@ own scan alerts list is unchanged below it. The single-writer check names
 `record_alert`. Still the owner's: delete the ZZZ row, take or note the two
 stops, and enter the signal bar date when logging.
 
-## 33. ADX 30 instead of 35, on the config the scanner runs — PRE-REGISTERED 2026-10-14, RUN OWED (owner's laptop)
+## 33. ADX 30 instead of 35, on the config the scanner runs — RUN 1 DONE 2026-10-14: NOT ESTABLISHED, DECISION OPEN
 
 **Owner's question 2026-10-14** ("backtest on existing parameters but ADX as
 30 instead of 35"). Not already answered: `adx_retest_run1.md` (2026-09-10)
@@ -1763,6 +1763,23 @@ the run can refute, not confirm. A null does not make 30 "better"; it makes
 30 versus 35 a choice about alert volume from a signal with no measured
 edge, which stays the owner's. No `adx_min` change is pre-committed on any
 outcome.
+
+**Run 1, 2026-10-14 (owner's laptop, `results/adx_live_run1.txt`,
+fingerprint `v2-4ffbb6814f505b97`, six series fetched fresh): NOT
+ESTABLISHED on both bars.** The band [30, 35) holds 199 longs at +0.104 R,
+CI [−0.159, +0.367], p 0.44, under a 0.376 R detectable effect: the trades
+ADX 30 would admit carry nothing the data can see. The ladder is flat
+(+0.13 to +0.26 R at every level, ρ = +0.10, no dose-response): ADX carries
+no information on the live config either, and the 35 gate keeps 15 % of the
+long base signals with no measured benefit. The ungated long side's +0.196 R
+on 2,135 trades is NOT a finding: the set holds the seven swept names
+(long side +0.297 R on their own), `drift_null_run1` found random long
+entries earn the same on this decade, and the cut was chosen after the
+fact. Reading in `adx_live_preregistration.md` § Result. **Owner's
+decision:** keep 35, or lower to 30 as an INTAKE choice (about double the
+HQ alerts, graded forward), recorded as an amendment to
+`forward_record_preregistration.md` before the first row under it. Not a
+measured improvement either way.
 
 ---
 

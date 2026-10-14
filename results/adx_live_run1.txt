@@ -1,0 +1,43 @@
+  ADX   0.0:  2135 trades
+  ADX  20.0:  1347 trades
+  ADX  25.0:   895 trades
+  ADX  30.0:   544 trades
+  ADX  35.0:   329 trades
+  config: live — ADX gate swept; stop 1.25 / target 4.0 ATR, volume 1.2x, regime on, hold 20, longs only
+  data: v2-4ffbb6814f505b97  (13 series, 7 cached / 6 fetched, oldest 5d)
+==============================================================================
+ADX RE-TEST — pre-registered, multiplicity-corrected, power-checked
+==============================================================================
+    ADX  trades    exp R     sd        p  detectable  powered   Holm  n>=floor
+  ----------------------------------------------------------------------------
+      0    2135   +0.196   1.83   0.0000       0.111      yes    yes       yes
+     20    1347   +0.206   1.84   0.0000       0.141      yes    yes       yes
+     25     895   +0.171   1.88   0.0065       0.176       NO    yes       yes
+     30     544   +0.132   1.75   0.0802       0.211       NO     no       yes
+     35     329   +0.264   2.02   0.0174       0.312       NO    yes       yes
+
+  dose-response (Spearman rho, level vs expectancy): +0.10   bar >= 0.6
+
+==============================================================================
+  NOT ESTABLISHED
+    - no dose-response: Spearman rho +0.10 < 0.6 — a lucky bucket, not a filter
+
+  INCONCLUSIVE is not a licence to keep the filter, and it is not
+  a licence to try more levels until one passes. Either widen the
+  sample so the buckets can settle it, or leave the filter alone.
+==============================================================================
+
+  MARGINAL BANDS — signal-bar ADX, from the ungated run (longs only)
+            band  trades    exp R     sd        p             95% CI  detectable  powered  n>=floor
+  -------------------------------------------------------------------------------------------------
+         [0, 20)     878   +0.206   1.80   0.0007   [+0.087, +0.324]       0.170      yes       yes
+        [20, 25)     441   +0.216   1.83   0.0130   [+0.045, +0.386]       0.244       NO       yes
+        [25, 30)     316   +0.198   1.96   0.0718   [-0.018, +0.414]       0.308       NO       yes
+        [30, 35)     199   +0.104   1.89   0.4401   [-0.159, +0.367]       0.376       NO       yes
+       [35, inf)     301   +0.196   1.79   0.0575   [-0.006, +0.399]       0.289       NO       yes
+
+  band [30, 35): NOT ESTABLISHED
+    - p = 0.440 > 0.05: not distinguishable from zero
+    - |mean| 0.104 is under the detectable 0.376 R at 80% power — INCONCLUSIVE, which is not 'no edge'
+  Lowering the threshold to admit this band is then a choice about
+  how many alerts to receive, not a measured improvement.
