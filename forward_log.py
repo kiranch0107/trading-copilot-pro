@@ -580,6 +580,19 @@ def resolve_signal(row: dict, bars: list, today=None,
     }
 
 
+def open_signals(path: Path | None = None) -> list[dict]:
+    """
+    The taken signals with no stop_distance outcome yet — exactly the rows
+    grade_open_signals() offers to the resolver, so a caller that wants to
+    account for them (the scanner's deferral count) reads the same filter.
+    """
+    rows = read_all(path)
+    have = {(o.get("ref_seq"), o.get("basis")) for o in rows
+            if o.get("kind") == "outcome"}
+    return [s for s in rows if counts_as_taken(s)
+            and (s.get("seq"), "stop_distance") not in have]
+
+
 def grade_open_signals(fetch, path: Path | None = None, today=None) -> dict:
     """
     Write a stop_distance outcome for every taken signal whose window has
@@ -587,11 +600,7 @@ def grade_open_signals(fetch, path: Path | None = None, today=None) -> dict:
     or None. One fetch per ticker. Never raises on a row; the report says what
     happened to each.
     """
-    rows = read_all(path)
-    have = {(o.get("ref_seq"), o.get("basis")) for o in rows
-            if o.get("kind") == "outcome"}
-    open_sigs = [s for s in rows if counts_as_taken(s)
-                 and (s.get("seq"), "stop_distance") not in have]
+    open_sigs = open_signals(path)
     report = {"graded": 0, "void": 0, "unsettled": 0, "no_data": 0,
               "failed": 0, "detail": []}
     by_ticker: dict = {}
@@ -1481,6 +1490,8 @@ def selftest() -> int:
     _outs = [x for x in read_all(ag) if x["kind"] == "outcome"]
     assert len(_outs) == 1 and _outs[0]["ref_seq"] == g1["seq"] \
         and _outs[0]["basis"] == "stop_distance" and _outs[0]["detail"]["gap_fill"]
+    assert [x["ticker"] for x in open_signals(ag)] == ["GB"], (
+        open_signals(ag), "open_signals is the grader's own filter: GA graded, GC skipped")
     rep_g2 = grade_open_signals(_fetch, path=ag, today=_today)
     assert rep_g2["graded"] == 0 and len([x for x in read_all(ag) if x["kind"] == "outcome"]) == 1, \
         "a graded signal must never be graded again"
