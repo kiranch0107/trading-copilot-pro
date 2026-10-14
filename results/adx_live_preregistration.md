@@ -101,7 +101,74 @@ the back of a 10-year re-read.
   base signal gated on ADX and regime only, as it always has. This run
   measures the ADX leg alone, which is the leg the question is about.
 
-## Result
+## Result — run 1, 2026-10-14, NOT ESTABLISHED on both bars
 
-_(to be filled by the run: `results/adx_live_run1.txt`, raw output, with the
-fingerprint; and a dated reading here or in `adx_live_run1.md`)_
+**Run by the owner on the laptop, `results/adx_live_run1.txt`, fingerprint
+`v2-4ffbb6814f505b97` (13 series, 7 cached, 6 fetched fresh, oldest 5 days).**
+Six series were not in the cache at this window and were fetched for the
+run, so this fingerprint matches no earlier run's; the file does not say
+which six. Longs only, live config, 12 names, 10 years.
+
+**Primary, the band [30, 35): NOT ESTABLISHED.**
+
+| band | longs | mean R | 95 % CI | p | detectable |
+|---|---:|---:|---|---:|---:|
+| [30, 35) | 199 | +0.104 | [−0.159, +0.367] | 0.440 | 0.376 |
+
+The band clears the 150-trade floor and fails clauses 2 and 3: not
+distinguishable from zero, and under its detectable effect by a factor of
+nearly four. This is the outcome stated in advance. The 199 trades that
+lowering the threshold to 30 would admit carry no measurable expectancy
+either way. **Lowering the threshold is therefore a choice about alert
+volume, not a measured improvement, and the pre-registration does not
+pre-commit to it.** At the record's arrival rates it would roughly
+double the HQ tier's intake (the ADX-30 ladder row holds 544 longs to the
+ADX-35 row's 329) while adding nothing the data can see.
+
+**Secondary, the ladder: NOT ESTABLISHED, no dose-response (ρ = +0.10).**
+
+```
+ADX  0   n=2135   +0.196   Holm yes   powered yes
+ADX 20   n=1347   +0.206   Holm yes   powered yes
+ADX 25   n= 895   +0.171   Holm yes   powered NO
+ADX 30   n= 544   +0.132   Holm no    powered NO
+ADX 35   n= 329   +0.264   Holm yes   powered NO
+```
+
+The bands below 30 are all around +0.2 R and the band at or above 35 is
++0.196; expectancy does not rise with the threshold. On the live config as
+on the record config, ADX carries no information about which long setups
+pay. The 35 gate keeps 15 % of the long base signals (329 of 2,135) and
+the kept 15 % are not better than the rest. This is the same reading as
+run 1 (ρ = −0.70) with the sign of the noise flipped, which is what no
+information looks like twice.
+
+**What the ladder does NOT say.** The ungated long side reads +0.196 R on
+2,135 trades, powered and surviving Holm. That is not a finding and must
+not be quoted as one, for three reasons fixed before the run:
+
+1. **The names.** `SWEPT_MIX_12` holds the seven tickers the parameters
+   were searched on. Their long side on the fixed engine is +0.297 R
+   (`record_recheck_gapfill_run1.txt`, 7t/5y); the clean OOS twelve's is
+   +0.042 R (12t/10y). This set mixes the two and lands between.
+2. **Drift.** `drift_null_run1.txt`: on 20 names over the same decade,
+   random long entries with the same exits and costs earned a median
+   +0.149 R (95 % of draws +0.039 to +0.270), and the real signal's
+   +0.105 R sat inside that band (empirical p 0.81, SIGNAL ADDS NOTHING).
+   +0.196 R on a regime-gated, long-only cut of a bull decade is inside
+   what random entry earns. It has not been nulled on this config and is
+   not evidence until it is.
+3. **The cut.** Longs only, regime on, live geometry, no ADX gate is a
+   configuration chosen after the shorts were measured to lose and after
+   the owner's question, on data every prior test has read. It can refute;
+   it cannot confirm, as the pre-registration says.
+
+**Answer to the owner's question.** ADX 30 is not measurably better or
+worse than 35. Neither threshold has evidence behind it; the forward record
+is the only clean data, and it has 0 HQ signals in 94 rows because the gate
+is set where this bull tape does not go (`logic_review_2026-10-13.md` §(d)).
+If the owner wants more HQ alerts to grade forward, lowering to 30 is a
+defensible intake decision as long as it is recorded as that: an amendment
+to `forward_record_preregistration.md` dated before the first row under the
+new gate, with the config fingerprint changing as it must. The decision is
+the owner's and is not made here.
