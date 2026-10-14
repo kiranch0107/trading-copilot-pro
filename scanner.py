@@ -1288,11 +1288,16 @@ def run(args) -> int:
         _live_open = {r.get("ticker") for r in forward_log.read_all()
                       if forward_log.counts_as_taken(r)
                       and forward_log.bucket_of(r) == "live"}
+        # Read BEFORE grading: a deferred name's rows stay open, so this is
+        # the count the "deferred" line below reports.
+        _open_before = forward_log.open_signals()
+        _deferred_tk: set = set()
 
         def _bars_for(tk: str):
             _df = frames.get(tk)
             if _df is None:
                 if tk not in _live_open and not record_only:
+                    _deferred_tk.add(tk)
                     return None
                 time.sleep(FETCH_GAP_SEC)
                 _df = get_data(tk)
@@ -1303,9 +1308,18 @@ def run(args) -> int:
                         _grep["graded"], _grep["void"], _grep["unsettled"])
         for _d in _grep["detail"][:10]:
             logger.info("forward log: %s", _d)
-        if _grep["failed"] or _grep["no_data"]:
+        # A deferral is not missing data: the grader counts a None fetch as
+        # "no_data" either way, so split the two here. Only a fetch that
+        # really came back empty is a warning.
+        _deferred = sum(1 for s in _open_before if s.get("ticker") in _deferred_tk)
+        if _deferred:
+            logger.info("forward log: grading deferred %d pool/pullback signal(s) in %d "
+                        "name(s) to the pool run or the post-close pass",
+                        _deferred, len(_deferred_tk))
+        _no_data = _grep["no_data"] - _deferred
+        if _grep["failed"] or _no_data:
             logger.warning("forward log: grading skipped %d (no data) / %d (error)",
-                           _grep["no_data"], _grep["failed"])
+                           _no_data, _grep["failed"])
     except Exception as _exc:                          # noqa: BLE001
         logger.warning("forward log: grading failed: %s", _exc)
 
@@ -2086,9 +2100,27 @@ def _selftest_body() -> int:
             forward_log.record_signal("P9", "Bullish", _setup9, "taken", "", {"adx_min": 35},
                                       bar_date=str(_bars4[-5].date()), hq=False, bucket="pool")
             _fetched.clear(); _sent4.clear()
-            run(_ns())
+            # THE LOG LINE: a deferral is reported as such, not as missing
+            # data. Captured on the module logger because the warning is the
+            # only place the distinction shows.
+            import logging as _lg9
+            _caught9: list = []
+            class _Catch9(_lg9.Handler):
+                def emit(self, rec):
+                    _caught9.append((rec.levelno, rec.getMessage()))
+            _h9 = _Catch9(); logger.addHandler(_h9)
+            try:
+                run(_ns())
+            finally:
+                logger.removeHandler(_h9)
             assert "LV9" in _fetched and "P9" not in _fetched, (
                 _fetched, "in session a pool-only name waits; a departed live name is fetched")
+            _defer9 = [m for lvl, m in _caught9 if "grading deferred" in m]
+            assert len(_defer9) == 1 and _defer9[0].startswith(
+                "forward log: grading deferred 1 pool/pullback signal(s) in 1 name(s)"), (
+                _caught9, "P9's one open row is reported as deferred")
+            assert not any(lvl >= _lg9.WARNING and "no data" in m for lvl, m in _caught9), (
+                _caught9, "a deferral must not read as 'no data'")
             _fetched.clear()
             _g["is_post_close_window"] = lambda now=None: True
             run(_ns(force=False, record_only=True))
