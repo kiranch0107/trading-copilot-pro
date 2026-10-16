@@ -428,5 +428,43 @@
       "captured": "2026-09-30 15:23 ET"
     },
     "notes": "Manual close"
+  },
+  {
+    "id": "OPT_NVDA_1790695592",
+    "date": "2026-09-29 11:26 ET",
+    "logged_at": "2026-09-29 11:26 ET",
+    "closed": "2026-10-16 13:08 ET",
+    "mode": "live",
+    "source": "discretionary",
+    "signal_key": null,
+    "traded_at": "2026-09-29 11:26 ET",
+    "closed_at": "2026-10-16 13:08 ET",
+    "ticker": "NVDA 2026-10-16 250C",
+    "trend": "Bullish",
+    "entry": 0.91,
+    "stop": 0,
+    "target": 0,
+    "planned_rr": 0,
+    "exit_price": 0.0,
+    "outcome": "LOSS",
+    "actual_rr": -1.0,
+    "contracts": 1.0,
+    "pnl_usd": -91.0,
+    "entry_features": {
+      "adx": 13.7904,
+      "rsi": 58.7756,
+      "atr": 6.0232,
+      "close": 228.86,
+      "ema20": 222.131,
+      "ema50": 217.4468,
+      "volume": 141544300.0,
+      "vol_avg20": 113388900.0,
+      "rvol": 1.248,
+      "ext_atr": 1.117,
+      "rs_20d": 0.0556,
+      "regime": "Bull",
+      "captured": "2026-09-29 11:26 ET"
+    },
+    "notes": "Expired worthless"
   }
 ]
