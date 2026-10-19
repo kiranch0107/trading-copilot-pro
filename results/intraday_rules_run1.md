@@ -1,3 +1,7 @@
+!! CONFIDENCE INTERVALS in this file were computed with the session-mean standard
+!! error; from 2026-10-19 intraday_rules.clustered() reports the cluster-robust SE of
+!! the trade-weighted mean it prints (BACKLOG 35). Every verdict here failed the mean-R
+!! clause, which the SE does not touch, so no verdict can change; the CI bounds can.
 # Six intraday rules on 5-minute bars — run 1, read as pre-registered
 
 **Run by the owner 2026-10-10 on a laptop with Yahoo access.** `python

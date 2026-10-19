@@ -506,17 +506,35 @@ def random_null(d: pd.DataFrame, trades: list[dict], draw: int) -> list[dict]:
 # ── statistics ──────────────────────────────────────────────────────────
 
 def clustered(trades: list[dict]) -> dict:
-    """Mean R with a session-clustered 95% CI: one cluster per session."""
+    """
+    The TRADE-WEIGHTED mean R with a session-clustered CI: one cluster per
+    session, the intercept-only cluster-robust standard error of that mean,
+
+        SE^2 = G/(G-1) * sum_g [ sum_i (r_gi - mean) ]^2 / N^2
+
+    (external review 2026-10-19, N02). The earlier version reported the
+    trade-weighted mean but took the SE from the EQUALLY weighted session
+    means, which is a different estimator when sessions hold different
+    numbers of trades: on 100 trades at 2.2 R, 100 at 0.2 R and one at
+    1.2 R it printed SE 0.577 and a lower bound above zero; the SE of the
+    mean it printed is 0.862 and the lower bound is below zero. With equal
+    cluster sizes the two coincide, which is why the fixtures here never
+    caught it. Few clusters make the interval approximate; the reading gate
+    is what guards that.
+    """
     if not trades:
         return {"n": 0, "sessions": 0, "mean": float("nan"), "lo": float("nan"), "hi": float("nan")}
     rs = np.array([t["r"] for t in trades], dtype=float)
+    m = float(rs.mean())
     by = {}
     for t in trades:
-        by.setdefault(t["session"], []).append(t["r"])
-    means = np.array([np.mean(v) for v in by.values()])
-    S = len(means)
-    se = float(means.std(ddof=1) / math.sqrt(S)) if S > 1 else float("nan")
-    m = float(rs.mean())
+        by.setdefault(t["session"], []).append(float(t["r"]))
+    S = len(by)
+    if S > 1:
+        scores = np.array([sum(v) - len(v) * m for v in by.values()])
+        se = float(math.sqrt(S / (S - 1) * float((scores ** 2).sum())) / len(rs))
+    else:
+        se = float("nan")
     return {"n": len(rs), "sessions": S, "mean": m, "se": se, "z": CI_Z,
             "lo": m - CI_Z * se if S > 1 else float("nan"),
             "hi": m + CI_Z * se if S > 1 else float("nan")}
@@ -804,6 +822,20 @@ def selftest() -> int:
     st = clustered(fake)
     assert st["n"] == 100 and st["sessions"] == 2 and abs(st["mean"]) < 1e-9
     assert st["hi"] > 1.0, "two clusters of 50 must not look like 100 observations"
+    # ONE ESTIMAND (N02): the SE belongs to the trade-weighted mean. The
+    # review's fixture: 100 at 2.2, 100 at 0.2, one at 1.2. Mean 1.2; the
+    # session-mean SE was 0.577 (lower bound +0.07, clearing zero); the SE of
+    # the mean printed is 0.862 (lower bound -0.49). Equal clusters unchanged.
+    _mix = [{"r": 2.2, "session": "a"}] * 100 + [{"r": 0.2, "session": "b"}] * 100 + \
+           [{"r": 1.2, "session": "c"}]
+    _sm = clustered(_mix)
+    assert abs(_sm["mean"] - 1.2) < 1e-9 and abs(_sm["se"] - 0.86172) < 1e-4, _sm
+    assert _sm["mean"] - 1.96 * _sm["se"] < 0, "the trade-weighted mean's own lower bound is below zero"
+    _eq = clustered([{"r": 1.0, "session": "a"}] * 10 + [{"r": 3.0, "session": "b"}] * 10
+                    + [{"r": 2.0, "session": "c"}] * 10)
+    _means = np.array([1.0, 3.0, 2.0])
+    assert abs(_eq["se"] - _means.std(ddof=1) / math.sqrt(3)) < 1e-12, \
+        "with equal cluster sizes the cluster-robust SE equals the session-mean SE"
     ok, _ = verdict({"n": 100, "sessions": 60, "mean": 0.30, "lo": 0.05, "hi": 0.55}, 0.05)
     assert ok
     ok2, _ = verdict({"n": 100, "sessions": 60, "mean": 0.30, "lo": 0.05, "hi": 0.55}, 0.20)

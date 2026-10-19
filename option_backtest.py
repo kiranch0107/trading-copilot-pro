@@ -126,7 +126,13 @@ def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
 
     # IV proxy: trailing realised vol x a risk premium. Options systematically
     # trade above realised vol; ignoring that would make every entry look cheap.
-    rv = realised_vol(df["Close"].iloc[:entry_i + 1])
+    # KNOWN BEFORE THE ENTRY (external review 2026-10-19): closes through the
+    # SIGNAL bar only. The entry fills on entry_i's open, so entry_i's close
+    # is information the price did not have; it used to be in the window (one
+    # bar of look-ahead; the review measured a 0.24-point change in mean
+    # modelled premium return on its fixture). Committed option results
+    # predate this and say so at their top.
+    rv = realised_vol(df["Close"].iloc[:entry_i])
     if not np.isfinite(rv) or rv <= 0:
         return None
     iv = rv * cfg["iv_mult"]
@@ -430,6 +436,29 @@ def selftest() -> int:
     assert _report_coverage(None, req) == 0, \
         "no coverage recorded must not invent a failure"
     print("no coverage       : exit 0, no false alarm")
+
+    # NO ENTRY LOOK-AHEAD (external review 2026-10-19): the entry premium is
+    # priced from closes through the signal bar. Changing the entry bar's
+    # close, or any later close, must not change it.
+    rng = np.random.default_rng(7)
+    closes = 100.0 * np.exp(np.cumsum(rng.normal(0, 0.02, 80)))
+    frame = pd.DataFrame({"Date": pd.bdate_range("2026-01-02", periods=80).astype(str),
+                          "Open": closes, "High": closes * 1.01, "Low": closes * 0.99,
+                          "Close": closes})
+    cfg = {"iv_mult": 1.15, "dte": 30, "spread_pct": 8.0, "sl": 50, "tp": 100,
+           "dte_exit": 7, "use_thesis": False}
+    base = simulate_option_trade(frame, 40, "Bullish", cfg)
+    assert base is not None
+    moved = frame.copy()
+    moved.loc[41:, "Close"] = moved.loc[41:, "Close"] * 1.30     # the entry bar's close and after
+    alt = simulate_option_trade(moved, 40, "Bullish", cfg)
+    assert alt is not None and abs(alt["entry_prem"] - base["entry_prem"]) < 1e-12, (
+        base["entry_prem"], alt["entry_prem"], "the entry premium read the entry bar's close")
+    before = frame.copy()
+    before.loc[35, "Close"] = before.loc[35, "Close"] * 1.05       # one close inside the window
+    assert abs(simulate_option_trade(before, 40, "Bullish", cfg)["entry_prem"] - base["entry_prem"]) > 1e-9, \
+        "closes up to the signal bar DO price the entry (or the test is vacuous)"
+    print("no look-ahead     : entry premium ignores the entry bar's close and after")
     print("\nAll self-tests passed.")
     return 0
 

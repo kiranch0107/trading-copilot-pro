@@ -227,26 +227,32 @@ def load_jsonl(path: Path) -> tuple[list, str]:
     forward log), fresh from GitHub when a token is configured, else the
     local checkout. Returns (rows, source). The app never writes this file.
     """
-    rows: list = []
+    # EACH SOURCE IS PARSED INTO ITS OWN LIST and returned only whole
+    # (external review 2026-10-19, N08). One list for both meant a remote
+    # file with a valid row followed by a malformed one kept that row and
+    # appended the local file to it: a mixture labelled "local", with
+    # duplicate sequence numbers.
     if gh_enabled():
         try:
             r = requests.get(f"{_GH_API}/repos/{gh_repo()}/contents/{path.name}",
                              headers=_gh_headers(), params={"ref": GITHUB_BRANCH}, timeout=10)
             if r.status_code == 200:
                 raw = base64.b64decode(r.json().get("content", "")).decode("utf-8")
+                remote: list = []
                 for line in raw.splitlines():
                     line = line.strip()
                     if line:
-                        rows.append(json.loads(line))
-                return rows, "github"
+                        remote.append(json.loads(line))
+                return remote, "github"
         except Exception as e:                           # noqa: BLE001
             logger.warning("load_jsonl(%s): %s — falling back to local disk", path, e)
     try:
+        local: list = []
         for line in path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line:
-                rows.append(json.loads(line))
-        return rows, "local (deploy-time copy)"
+                local.append(json.loads(line))
+        return local, "local (deploy-time copy)"
     except Exception:                                    # noqa: BLE001
         return [], "unavailable"
 
@@ -599,6 +605,35 @@ def selftest() -> int:
     assert [p["id"] for p in _closed] == ["A"], (
         f"a real close must still remove the position, got {_closed}")
     print("real deletion    : still honoured when the local copy was read")
+
+    # ── load_jsonl NEVER MIXES SOURCES (external review 2026-10-19, N08) ──
+    # A remote with one valid row then garbage falls back to the LOCAL file
+    # alone; a whole remote is returned alone; no local file reads as
+    # unavailable, not as the remote's good rows.
+    import tempfile as _tf, base64 as _b64x
+    _dir = Path(_tf.mkdtemp())
+    _local = _dir / "fl.jsonl"
+    _local.write_text('{"seq": 1, "src": "local"}\n{"seq": 2, "src": "local"}\n')
+    _bad_remote = _R(200, payload={"content": _b64x.b64encode(
+        b'{"seq": 1, "src": "remote"}\nnot json at all\n').decode()})
+    _good_remote = _R(200, payload={"content": _b64x.b64encode(
+        b'{"seq": 1, "src": "remote"}\n{"seq": 2, "src": "remote"}\n{"seq": 3, "src": "remote"}\n').decode()})
+    globals()["_gh_token"] = lambda: "test-token"
+    try:
+        globals()["requests"] = _fake([_bad_remote], [])
+        rows, src = load_jsonl(_local)
+        assert src.startswith("local") and [r["src"] for r in rows] == ["local", "local"], (src, rows)
+        assert [r["seq"] for r in rows] == [1, 2], "no duplicate sequence numbers from a mixture"
+        globals()["requests"] = _fake([_good_remote], [])
+        rows, src = load_jsonl(_local)
+        assert src == "github" and len(rows) == 3 and all(r["src"] == "remote" for r in rows), (src, rows)
+        globals()["requests"] = _fake([_bad_remote], [])
+        rows, src = load_jsonl(_dir / "missing.jsonl")
+        assert rows == [] and src == "unavailable", (rows, src)
+    finally:
+        globals()["requests"] = real_requests
+        globals()["_gh_token"] = real_token
+    print("load_jsonl        : a partial remote falls back to local alone; whole remote alone; missing -> unavailable")
 
     print("\nAll self-tests passed.")
     return 0

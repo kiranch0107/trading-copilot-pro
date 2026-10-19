@@ -680,7 +680,12 @@ def _yf_download_with_retry(ticker: str, period: str, interval: str) -> pd.DataF
     for attempt in range(_YF_RETRY_TRIES):
         _rl.wait()
         try:
-            out = yf.download(ticker, period=period, interval=interval, progress=False)
+            # auto_adjust=False (external review 2026-10-19, BACKLOG 35): this
+            # is the app's MAIN price fetch and it read yfinance's default,
+            # dividend-ADJUSTED history, while the scanner reads raw. On a
+            # dividend payer the two saw different closes on the same bar.
+            out = yf.download(ticker, period=period, interval=interval, progress=False,
+                              auto_adjust=False)
             # BUG FIX: yf.download returns an EMPTY DataFrame when throttled
             # rather than raising, so `return yf.download(...)` handed back the
             # empty frame on attempt 1 and the retry loop never ran. The caller
@@ -779,8 +784,12 @@ def batch_get_data(tickers: tuple, period: str = "1y",
         return {}
     _rl.wait()
     try:
+        # auto_adjust=False, like every other fetch in this file and the
+        # scanner (external review 2026-10-19): the batch path defaulted to
+        # ADJUSTED prices, so a dividend payer could show one signal in the
+        # app's batch view and another in the scanner on the same bar.
         raw = yf.download(list(tickers), period=period, interval=interval,
-                          progress=False, group_by="ticker")
+                          progress=False, group_by="ticker", auto_adjust=False)
     except Exception as e:
         logger.exception("Batch fetch failed, falling back: %s", e)
         raw = None

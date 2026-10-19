@@ -2685,12 +2685,55 @@ def check_pullback_arrival_outcome_free() -> None:
     print("  pullback_arrival.py is outcome-free (counts only); both data checks' selftests run in CI")
 
 
+def check_yahoo_downloads_raw_prices() -> None:
+    """
+    Every yf.download() call in the live paths passes auto_adjust=False.
+
+    yfinance's default is auto_adjust=True, and a fetch that leaves it out
+    silently reads DIVIDEND-ADJUSTED history: the same bar carries a different
+    close on a dividend payer, so one path signals and another does not. The
+    app's batch fetch left it out while its single fetch named it (external
+    review 2026-10-19, BACKLOG 35). Each call is read to its closing paren so
+    a flag on a continuation line counts.
+    """
+    import re
+    import backtest as _bt
+    assert _bt.AUTO_ADJUST is False, "backtest.AUTO_ADJUST must stay False (raw prices)"
+    calls = 0
+    for fname in ("app.py", "scanner.py", "exit_monitor.py", "backtest.py", "data_source.py"):
+        txt = Path(fname).read_text()
+        for m in re.finditer(r"yf\.download\(", txt):
+            line_start = txt.rfind("\n", 0, m.start()) + 1
+            if "#" in txt[line_start:m.start()]:
+                continue                                  # a comment that mentions the call
+            depth, i = 0, m.end() - 1
+            while i < len(txt):
+                if txt[i] == "(":
+                    depth += 1
+                elif txt[i] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i += 1
+            call = txt[m.start():i + 1]
+            if call[len("yf.download("):-1].strip() in ("", "...", "%s"):
+                continue                                  # a log message or docstring, not a call
+            calls += 1
+            line = txt.count("\n", 0, m.start()) + 1
+            assert "auto_adjust=False" in call or "auto_adjust=AUTO_ADJUST" in call, (
+                f"{fname}:{line}: yf.download() without auto_adjust=False reads "
+                f"adjusted prices — a different series from every other fetch")
+    assert calls >= 6, f"only {calls} yf.download() calls found — the scan has stopped seeing them"
+    print(f"  every yf.download() in the live paths ({calls} calls) names auto_adjust=False")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
     ("compute() agrees across modules",            check_compute_agrees),
     ("app.py compute() indicator set intact",      check_app_compute_source),
     ("app.py defaults derive from signal_core",    check_app_defaults_derived),
+    ("every Yahoo download reads raw prices",      check_yahoo_downloads_raw_prices),
     ("backtest.evaluate_signal callers correct",   check_backtest_callers),
     ("weekly trend + SPY regime are one rule",     check_market_context_shared),
     ("earnings gate is one rule, reads every date", check_earnings_gate_shared),

@@ -1817,7 +1817,7 @@ reading now (recommended: yes, it is a reading change).
 
 ---
 
-## 35. External review of 2026-10-19: twenty claims verified, none wrong; the record reads the forming bar, IV grading will censor departed names from ~11-07, close durability is P0 — GROUPS 1 TO 3 DONE 2026-10-19, GROUPS 4-5 OPEN
+## 35. External review of 2026-10-19: twenty claims verified, none wrong; the record reads the forming bar, IV grading will censor departed names from ~11-07, close durability is P0 — GROUPS 1, 2, 3 AND 5 DONE 2026-10-19, GROUP 4 OPEN
 
 The owner had the repository reviewed outside this project (reviewed SHA
 6095f74 against the 2026-10-08 audit). Verification and response in
@@ -1880,8 +1880,21 @@ reason only after the fifty-day fetch horizon; the call's bar must contain
 the call, an earlier bar never stands in (N01). The evidence hash is
 version 2: symbol, timeframe and every bar's timestamp, OHLC and volume,
 versioned on the outcome row (N07). Grading-validity note in
-`daytrade_paper_preregistration.md`. Guards falsified. **Still open:**
-groups 4 and 5.
+`daytrade_paper_preregistration.md`. Guards falsified.
+
+**Group 5 done 2026-10-19.** `intraday_rules.clustered` reports the
+cluster-robust SE of the trade-weighted mean it prints (N02; with equal
+cluster sizes it equals the old session-mean SE, which is why the fixtures
+never caught it); every committed intraday verdict failed the mean-R
+clause, so none can change, and the six result files say their CI bounds
+predate the fix. `option_backtest.simulate_option_trade` prices the entry
+from closes through the signal bar only (one bar of look-ahead removed);
+the seven committed files that print modelled premiums carry a caveat and
+a re-run is owed. `app.batch_get_data` passes `auto_adjust=False`, and a
+47th consistency check reads every `yf.download()` in the live paths to
+its closing paren for the flag. `gh_sync.load_jsonl` parses each source
+into its own list and returns it only whole (N08). Guards falsified.
+**Still open:** group 4 (persistence), and the option re-runs.
 
 ---
 
@@ -1889,8 +1902,8 @@ groups 4 and 5.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 46 cross-module
-  invariants (46 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 47 cross-module
+  invariants (47 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip
