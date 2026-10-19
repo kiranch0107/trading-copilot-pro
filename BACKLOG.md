@@ -1783,6 +1783,40 @@ measured improvement either way.
 
 ---
 
+## 34. Progress review 2026-10-19: the report counts rows where the pre-registration counts episodes; the 4-ATR target has never been reached — ASSESSED 2026-10-19, DECISIONS OPEN
+
+**Owner's request 2026-10-19** ("re-perform deeper analysis, see what
+improved, what can be improved, what idea can be developed"), answered in
+`results/progress_review_2026-10-19.md`. Improved since 13 Oct: pool bucket
+live (83 rows, ~25 episodes in 5 sessions, ~5 episodes a session against the
+watchlist's ~0.9), pullback bucket live (6 rows, first outcome +1.54 R),
+both stops taken and logged with trade times, journal fields and alert
+history built, ADX 30 answered, 47 green runs. Not done: ZZZ row, empty
+`signal_key` on every journal row, no skip logged since 08-31, Phase 2
+unused, RS-basket-vs-SPY not started.
+
+**Two findings.** (1) `forward_record_preregistration.md` fixes the episode
+as the unit and says only the first bar's row is graded; the grader grades
+every row and `report()` prints row counts under an "EPISODES" line. 132
+rows are 43 episodes; 49 settled rows are 17 settled episodes; the live
+bucket reads −0.18 R by rows and +0.16 R by episodes. Fix: an `episodes()`
+reading beside the rows, gate on episodes, no amendment needed. (2) Of 21
+settled rows carrying the full 4-ATR target, 0 reached it (19 stopped, 2
+timed out); all 16 target hits are resistance-capped targets under 1.5 R.
+The live geometry's realised payoff needs a 51 % win rate; the live bucket
+has 42 %.
+
+**Proposed, as pre-registrations:** (A) a forward random-entry control row
+beside every taken signal, graded by the same resolver, read as signal
+minus control; (B) a weekly basket row for the 8 selected names against
+SPY; (C) an amendment naming the pool as the population for the
+base-signal question; (D) re-pose H1, since a tier that fired 0 times in
+132 cannot be compared. Predictions stated in the file. **Owner's
+decisions:** which of A to D to pre-register; whether to build the episode
+reading now (recommended: yes, it is a reading change).
+
+---
+
 ---
 
 ## Working conventions
