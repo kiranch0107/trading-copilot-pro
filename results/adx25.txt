@@ -1,3 +1,5 @@
+!! MAX DRAWDOWN in this file predates 2026-10-19, when backtest.stats() began counting
+!! the dip from initial equity (BACKLOG 35); the figure here can only be UNDERSTATED.
 !! STALE FILL RULE -- read with this caveat (BACKLOG 21, fixed 2026-10-08).
 !! Every R in this file was produced while backtest.simulate_trade() filled a
 !! stop that was gapped THROUGH at the stop, so no loss here is worse than

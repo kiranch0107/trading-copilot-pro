@@ -786,7 +786,12 @@ def stats(trades: list[dict]) -> dict:
         return {"trades": 0}
     r = np.array([t["r"] for t in trades])
     wins = r[r > 0]; losses = r[r < 0]
-    equity = np.cumsum(r)
+    # INITIAL EQUITY IS A PEAK (external review 2026-10-19, BACKLOG 35). The
+    # curve used to start at the first trade's result, so a run that opened
+    # with losses reported a drawdown of zero until a later peak formed: one
+    # -1 R trade read as no drawdown. The committed files that print this
+    # figure predate the fix and say so at their top.
+    equity = np.concatenate(([0.0], np.cumsum(r)))
     peak = np.maximum.accumulate(equity)
     max_dd = float((equity - peak).min())
     gp = wins.sum(); gl = abs(losses.sum())
@@ -2250,6 +2255,14 @@ def selftest() -> int:
     print(f"end-to-end synthetic run : {len(trades)} trade(s), no exceptions")
     for t in trades:
         assert t["filled"] and np.isfinite(t["r"])
+
+    # ── DRAWDOWN COUNTS THE DIP FROM INITIAL EQUITY (external review 2026-10-19) ──
+    _t = lambda rr: {"r": rr, "hold": 1}
+    assert stats([_t(-1.0)])["max_dd"] == -1.0, stats([_t(-1.0)])
+    assert stats([_t(-1.0), _t(3.0), _t(-2.0)])["max_dd"] == -2.0
+    assert stats([_t(2.0), _t(-1.0)])["max_dd"] == -1.0
+    assert stats([_t(1.0), _t(1.0)])["max_dd"] == 0.0, "a curve that only rises has no drawdown"
+    print("drawdown                : one -1 R trade is a -1 R drawdown, not zero")
 
     print("\nAll self-tests passed.")
     return 0

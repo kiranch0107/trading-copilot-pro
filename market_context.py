@@ -337,12 +337,24 @@ def get_weekly_trend(ticker: str, fetch) -> str | None:
         return None
 
 
-def get_spy_regime(fetch, ticker: str = "SPY") -> dict:
-    """Macro regime, with the fetch injected. Always returns the dict shape."""
+def get_spy_regime(fetch, ticker: str = "SPY", now=None) -> dict:
+    """
+    Macro regime, with the fetch injected. Always returns the dict shape.
+
+    SETTLED BAR ONLY (external review 2026-10-19, BACKLOG 35). A daily frame
+    fetched during the session ends with today's forming bar, and the regime
+    read its live price against the 200-SMA while the stock setup it gates
+    was read from yesterday's settled bar. Dropping the forming bar here
+    covers every caller (scanner and app) with one rule, the same one the
+    stock frames already follow.
+    """
     try:
         df = fetch(ticker, REGIME_PERIOD, "1d")
         if df is not None and isinstance(getattr(df, "columns", None), pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
+        if df is not None and len(df) >= 2:
+            import signal_core as sc
+            df, _dropped = sc.drop_partial_bar(df, now=now)
         return spy_regime_from_bars(df)
     except Exception as e:
         logger.warning("SPY regime unavailable (%s)", e)
@@ -501,6 +513,24 @@ def selftest() -> int:
     def _boom(t, p, i): raise RuntimeError("rate limited")
     assert get_weekly_trend("X", _boom) is None
     assert get_spy_regime(_boom)["regime"] == "Unknown"
+
+    # ── THE FORMING BAR DOES NOT SET THE REGIME (external review 2026-10-19) ──
+    # 259 settled closes rising 300 -> 500, then today's bar at 100 while the
+    # session is open: the regime is Bull on yesterday's close, not Bear on a
+    # price that has not closed. After the close the same bar counts.
+    import datetime as _dtm, pytz as _pytz
+    _et = _pytz.timezone("America/New_York")
+    _closes = list(np.linspace(300, 500, 259)) + [100.0]
+    _idx = pd.bdate_range(end="2026-10-14", periods=260)
+    _frame = _spy(_closes); _frame.index = _idx
+    _mid = _et.localize(_dtm.datetime(2026, 10, 14, 12, 0))
+    _post = _et.localize(_dtm.datetime(2026, 10, 14, 17, 0))
+    _fetch_fixed = lambda t, p, i: _frame.copy()
+    assert get_spy_regime(_fetch_fixed, now=_mid)["regime"] == "Bull", \
+        get_spy_regime(_fetch_fixed, now=_mid)
+    assert get_spy_regime(_fetch_fixed, now=_post)["regime"] == "Bear", \
+        get_spy_regime(_fetch_fixed, now=_post)
+    print("forming bar             : ignored mid-session (Bull on the settled close), read after the close (Bear)")
     print(f"fetch wrappers          : inject, degrade to None/Unknown on error")
 
 

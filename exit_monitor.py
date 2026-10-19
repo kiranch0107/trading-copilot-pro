@@ -702,6 +702,12 @@ def run(args) -> int:
     now_epoch = time.time()
     sent = 0
     unpriced: list[str] = []
+    # TOTAL FAILURE IS NOT SUCCESS (external review 2026-10-19, BACKLOG 35).
+    # A check that raised was logged and skipped, and run() returned 0, so a
+    # morning on which every check failed was a green workflow. Counted here;
+    # the exit status at the end says so.
+    attempted = 0
+    failed_checks = 0
 
     for pos in positions:
         # EXIT_SIGNALLED is still watched — see EXIT_PRIORITY. Only a
@@ -713,9 +719,11 @@ def run(args) -> int:
                         pos.get("ticker", "?"))
             continue
 
+        attempted += 1
         try:
             ev = check_option_position(pos)
         except Exception as e:
+            failed_checks += 1
             logger.exception("Check failed for %s: %s", pos.get("ticker"), e)
             continue
 
@@ -781,17 +789,29 @@ def run(args) -> int:
                     "last_check_epoch": now_epoch,
                 })
 
+    write_failed = False
     if not args.dry_run:
         try:
             path.write_text(json.dumps(positions, indent=2, default=str))
         except Exception as e:
+            write_failed = True
             logger.error("Could not write %s: %s — alerts sent but state not "
                          "saved, so expect a duplicate next run.", path, e)
 
     if unpriced:
         logger.warning("%d position(s) had NO PRICE this run: %s — their TP/SL "
                        "rules did not run.", len(unpriced), ", ".join(unpriced))
+    if failed_checks:
+        logger.warning("%d of %d position check(s) raised and were skipped — "
+                       "partial coverage this run.", failed_checks, attempted)
     logger.info("Done. %d exit alert(s) sent.", sent)
+    if attempted and failed_checks == attempted:
+        logger.error("EVERY position check failed (%d of %d): nothing was "
+                     "monitored this run. Exiting nonzero so the workflow shows "
+                     "it instead of a green run.", failed_checks, attempted)
+        return 1
+    if write_failed:
+        return 1
     return 0
 
 
@@ -1018,6 +1038,39 @@ def selftest() -> int:
             _g["send_telegram"] = _real_send
 
     _real_send = _g["send_telegram"]
+
+    # ── TOTAL CHECK FAILURE EXITS NONZERO; PARTIAL FAILURE DOES NOT ──
+    # (external review 2026-10-19). Two positions: when every check raises
+    # the run is a failure the workflow must show; when one of two raises the
+    # other was still monitored and the run is a (logged) partial.
+    def _run_rc(rows, checker):
+        d = _P(_tf.mkdtemp()) / "pos.json"
+        d.write_text(json.dumps(rows))
+        _real_check = _g["check_option_position"]
+        _g["check_option_position"] = checker
+        _g["send_telegram"] = lambda *a, **k: True
+        try:
+            return run(_ap.Namespace(positions=str(d), diagnose=False, force=True, dry_run=False))
+        finally:
+            _g["check_option_position"] = _real_check
+            _g["send_telegram"] = _real_send
+    _two = [{"id": "A", "ticker": "AAA", "right": "CALL", "strike": 10.0, "expiry": "2099-01-01",
+             "contracts": 1.0, "entry_premium": 1.0, "rules": {"tp_pct": 200, "sl_pct": 50},
+             "status": "OPEN"},
+            {"id": "B", "ticker": "BBB", "right": "CALL", "strike": 10.0, "expiry": "2099-01-01",
+             "contracts": 1.0, "entry_premium": 1.0, "rules": {"tp_pct": 200, "sl_pct": 50},
+             "status": "OPEN"}]
+    def _boom(pos):
+        raise RuntimeError("quote service down")
+    def _half(pos):
+        if pos["id"] == "A":
+            raise RuntimeError("one bad quote")
+        return {"exit": False, "mid": 1.0, "pnl_pct": 0.0, "dte": 30}
+    assert _run_rc([dict(r) for r in _two], _boom) == 1, "every check failed -> nonzero"
+    assert _run_rc([dict(r) for r in _two], _half) == 0, "one of two failed -> partial, exit 0"
+    assert _run_rc([], _boom) == 0, "nothing to check is not a failure"
+    print("exit status       : all checks failed -> 1; one of two -> 0 (partial); none -> 0")
+
     _base = {"id": "X", "ticker": "TEST", "right": "CALL", "strike": 10.0,
              "expiry": "2099-01-01", "contracts": 1.0, "entry_premium": 1.00,
              "rules": {"tp_pct": 200, "sl_pct": 50},
