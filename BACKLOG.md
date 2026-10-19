@@ -1817,6 +1817,31 @@ reading now (recommended: yes, it is a reading change).
 
 ---
 
+## 35. External review of 2026-10-19: twenty claims verified, none wrong; the record reads the forming bar, IV grading will censor departed names from ~11-07, close durability is P0 — VERIFIED 2026-10-19, DECISIONS OPEN
+
+The owner had the repository reviewed outside this project (reviewed SHA
+6095f74 against the 2026-10-08 audit). Verification and response in
+`results/external_review_2026-10-19_response.md`. CONFIRMED and biting
+the record now: the daily grader reads today's forming bar (`frames[tk]`
+is raw; a timeout was marked at an 11:10 ET price); the SPY regime is read
+from the forming bar; `_scan_cfg` omits volume threshold, HQ min R:R and
+regime policy; the exit monitor returns success when every check failed.
+CONFIRMED with a date: IV snapshots for names that left the watchlist are
+never graded, and the grader anchors on history start rather than the
+snapshot date; first premium rows are due ~2026-11-07. CONFIRMED, latent:
+keyed journal attachment skips ticker/direction; the paper grader treats a
+truncated session as complete; the intraday CI mixes two estimators (no
+verdict can flip: all 18 rules failed the mean-R clause); option entry
+premium uses the entry bar's close; app batch download uses adjusted
+prices; write retry re-puts without re-merging; close proceeds after a
+failed journal save (the 10-13 AAPL incident). NOT VERIFIED: contract
+selection divergence, quote/risk NaN acceptance, DTE/weekend timing,
+portfolio chronology. POLICY: dry-run scan rows, ADX rounding at the gate.
+**Owner's decisions:** the order of work in the response file §"Order of
+work"; group 1 and group 2 are small and recommended now.
+
+---
+
 ---
 
 ## Working conventions
