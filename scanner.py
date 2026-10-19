@@ -448,14 +448,23 @@ def get_data(ticker: str) -> pd.DataFrame | None:
     return df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
 
 
-def bars_for_grading(df: pd.DataFrame) -> list:
+def bars_for_grading(df: pd.DataFrame, now: datetime | None = None) -> list:
     """
     A raw OHLC frame as the plain rows forward_log.resolve_signal() reads:
     [{"date": "YYYY-MM-DD", "open", "high", "low", "close"}, ...], ascending.
 
+    SETTLED BARS ONLY (external review 2026-10-19, BACKLOG 35). The frame the
+    scan fetched mid-session still carries today's forming bar, and the
+    grader read it: a 20-bar timeout was marked at an 11:10 ET price, and a
+    level touched before noon was graded as if the bar had closed. Today's
+    bar is dropped here until the session closes, so an outcome that forms
+    intraday is written on the next run after the bar settles. The resolver
+    and its rules are unchanged; only the bars it is shown are.
+
     forward_log is stdlib-only by design (it is the tamper-evident record and
     must stay importable anywhere), so pandas stops here.
     """
+    df, _dropped = sc.drop_partial_bar(df, now=now if now is not None else datetime.now(ET))
     out = []
     dates = sc._bar_dates(df, None)
     for d, (o, h, l, c) in zip(dates, df[["Open", "High", "Low", "Close"]].itertuples(index=False)):
@@ -961,11 +970,20 @@ def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
 
 def _scan_cfg() -> dict:
     """The rules in force, as the scan heartbeat fingerprints them."""
+    # COMPLETE (external review 2026-10-19, BACKLOG 35): the four fields
+    # added on 2026-10-19 were already in force but not named, so a change
+    # to any of them would not have moved the fingerprint. Naming them moves
+    # it once, from e7d75b855a51; forward_log.KNOWN_CONFIGS declares both as
+    # one dataset with the same rules.
     return {"adx_min": PARAMS.adx_min,
             "min_rr": PARAMS.min_rr,
+            "hq_min_rr": PARAMS.hq_min_rr,
             "atr_stop_mult": PARAMS.atr_stop_mult,
             "atr_tgt_mult": PARAMS.atr_tgt_mult,
+            "volume_mult": PARAMS.volume_mult,
+            "volume_soft_mult": PARAMS.volume_soft_mult,
             "weekly_confirm": PARAMS.weekly_confirm,
+            "spy_regime_on": PARAMS.spy_regime_on,
             "longs_only": risk_params.LONGS_ONLY}
 
 
@@ -1157,14 +1175,17 @@ def run(args) -> int:
     # message, not one per scheduled run.
     if is_total_outage(failed, WATCHLIST):
         if not recently_alerted(state, "SCANNER", "OUTAGE"):
-            send_alert(
+            _outage_sent = send_alert(
                 "⚠️ SCANNER OUTAGE\n"
                 f"All {len(WATCHLIST)} watchlist tickers failed to return "
                 f"usable data, so nothing was scanned this run. This is NOT "
                 f"'no setups' — it means the scan did not happen.\n\n"
                 f"{', '.join(failed)}",
                 dry_run=args.dry_run)
-            if not args.dry_run:
+            # Stamped only when it was DELIVERED (external review 2026-10-19):
+            # a failed send used to start the cooldown, so an outage that
+            # coincided with a Telegram failure went unreported for 4 hours.
+            if _outage_sent and not args.dry_run:
                 state["SCANNER:OUTAGE"] = time.time()
         else:
             logger.warning("Total scan outage, but an outage alert was sent "
@@ -1984,6 +2005,65 @@ def _selftest_body() -> int:
     finally:
         forward_log.LOG = _real_log3
         globals()["send_alert"] = _real_send3
+
+    # ── GRADING READS SETTLED BARS ONLY (external review 2026-10-19) ──
+    # The forming bar is dropped until the session closes; after the close
+    # it is the best data there is and is kept. Dates are pinned so the
+    # test does not depend on when it runs.
+    import pandas as _pd5
+    _f5 = _pd5.DataFrame({"Open": [10.0, 11.0, 12.0], "High": [10.5, 11.5, 12.5],
+                          "Low": [9.5, 10.5, 11.5], "Close": [10.2, 11.2, 12.2]},
+                         index=_pd5.DatetimeIndex(["2026-10-12", "2026-10-13", "2026-10-14"]))
+    _mid = ET.localize(_dt2(2026, 10, 14, 12, 0))
+    _post = ET.localize(_dt2(2026, 10, 14, 17, 0))
+    assert [b["date"] for b in bars_for_grading(_f5, now=_mid)] == ["2026-10-12", "2026-10-13"], \
+        "mid-session: today's forming bar must not reach the grader"
+    assert [b["date"] for b in bars_for_grading(_f5, now=_post)] == \
+        ["2026-10-12", "2026-10-13", "2026-10-14"], "after the close: today's bar is settled and kept"
+    print("grading bars            : forming bar dropped mid-session, kept after the close")
+
+    # ── THE FINGERPRINT IN FORCE IS DECLARED (external review 2026-10-19) ──
+    # forward_log.KNOWN_CONFIGS is what report() reads to call two hashes one
+    # dataset. If a rule changes, or a field is added to _scan_cfg(), this
+    # fails until the new hash is declared there and in the pre-registration,
+    # which is the order the record requires.
+    _fp_now = forward_log.config_fingerprint(_scan_cfg())
+    assert _fp_now == "c357a0d01ff5" and _fp_now in forward_log.KNOWN_CONFIGS, (
+        _fp_now, _scan_cfg(), "undeclared config fingerprint: declare it before the first row")
+    print(f"config fingerprint      : {_fp_now}, declared in forward_log.KNOWN_CONFIGS")
+
+    # ── OUTAGE STAMP ONLY ON DELIVERY (external review 2026-10-19) ──
+    _tmpl6 = _pl2.Path(_tf2.mkdtemp()) / "outage.jsonl"
+    _g6 = globals()
+    _saved6 = {k: _g6[k] for k in ("get_data", "get_spy_regime", "save_state", "load_state",
+                                   "WATCHLIST", "FETCH_GAP_SEC", "pool_tickers", "send_alert")}
+    _real_log6 = forward_log.LOG
+    _state6: dict = {}
+    _sent6: list = []
+    try:
+        forward_log.LOG = _tmpl6
+        _g6["get_data"] = lambda tk: None                 # every name fails: a total outage
+        _g6["get_spy_regime"] = lambda: None
+        _g6["save_state"] = lambda st: _state6.update(st)
+        _g6["load_state"] = lambda: dict(_state6)
+        _g6["WATCHLIST"] = ["AAA", "BBB"]
+        _g6["FETCH_GAP_SEC"] = 0
+        _g6["pool_tickers"] = lambda wl: []
+        import argparse as _ap6
+        _ns6 = lambda: _ap6.Namespace(force=True, dry_run=False, record_only=False, force_pool=False)
+        _g6["send_alert"] = lambda m, dry_run=False: (_sent6.append(m) or False)   # Telegram down
+        run(_ns6())
+        assert any("SCANNER OUTAGE" in m for m in _sent6), "the outage alert was attempted"
+        assert "SCANNER:OUTAGE" not in _state6, "an UNDELIVERED outage alert must not start the cooldown"
+        _sent6.clear()
+        _g6["send_alert"] = lambda m, dry_run=False: (_sent6.append(m) or True)    # delivered
+        run(_ns6())
+        assert any("SCANNER OUTAGE" in m for m in _sent6), "with no stamp, the next run alerts again"
+        assert "SCANNER:OUTAGE" in _state6, "a delivered outage alert starts the cooldown"
+        print("outage cooldown         : stamped on delivery only; a failed send leaves the next run free to alert")
+    finally:
+        forward_log.LOG = _real_log6
+        _g6.update(_saved6)
 
     # ── THE POOL BUCKET (BACKLOG 30): once a session, HQ only, capped, ranked ──
     _tmpl4 = _pl2.Path(_tf2.mkdtemp()) / "pool.jsonl"

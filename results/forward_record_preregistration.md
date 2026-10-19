@@ -5,6 +5,28 @@ and tagging HQ"). Written and committed BEFORE the first row under the new rule
 is recorded.** Everything below is fixed. Nothing here may be changed after a
 result is seen; the timestamp on this file in git is the point of it.
 
+## Amendment 2026-10-19 — settled bars only, and a fingerprint that names every rule (BACKLOG 35). READING CHANGES: no rule changes
+
+Two corrections from the external review of 2026-10-19, declared before the
+first row they touch.
+
+1. **Grading reads settled bars only.** The frame the scan fetched
+   mid-session carried today's forming bar and `resolve_signal` was shown
+   it: a 20-bar timeout was marked at an 11:10 ET price and a level touched
+   before noon was graded as if the bar had closed. From 2026-10-19
+   `scanner.bars_for_grading` drops today's bar until the session closes.
+   An outcome that forms intraday is written on the next run after the bar
+   settles (the post-close pass at the latest). The resolver, its stop-first
+   rule, costs, hold and void reasons are unchanged.
+2. **The config fingerprint now names every rule in force.** It hashed six
+   fields; `hq_min_rr` 1.0, `volume_mult` 1.2, `volume_soft_mult` 0.7 and
+   `spy_regime_on` True were in force throughout but not named, so a change
+   to any of them would not have moved it. Naming them moves the hash once,
+   from `e7d75b855a51` to `c357a0d01ff5`, with the same rules. Rows under
+   both hashes are ONE dataset; `forward_log.KNOWN_CONFIGS` declares both
+   and `report()` says so instead of warning. Any later hash is a rule
+   change and warns as before.
+
 ## Amendment 2026-10-13 — the pool bucket (BACKLOG 30). ADDITIVE: nothing below about the live watchlist changes
 
 **Owner's decision 2026-10-13 ("lets run HQ scan once a day during market

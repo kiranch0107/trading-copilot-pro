@@ -96,6 +96,23 @@ def _digest(prev: str, body: dict) -> str:
     return hashlib.sha256((prev + _canon(body)).encode()).hexdigest()[:32]
 
 
+# DECLARED FINGERPRINTS. A fingerprint moves when the cfg dict the scanner
+# passes changes. When the RULES change that is two datasets; when only the
+# fields NAMED in the dict change (2026-10-19: four parameters already in
+# force were added so a later change to them would move it) it is one
+# dataset wearing two hashes. report() tells the two apart by this table:
+# every fingerprint in the log declared here is read as one dataset and the
+# note is printed; an undeclared one keeps the "DIFFERENT CONFIGS" warning.
+# Declared in results/forward_record_preregistration.md (amendment
+# 2026-10-19) before the first row under the new hash.
+KNOWN_CONFIGS = {
+    "e7d75b855a51": "2026-10-08 to 2026-10-19: adx_min 35, min_rr 0.5, stop 1.25 / "
+                    "target 4.0 ATR, weekly off, longs only",
+    "c357a0d01ff5": "from 2026-10-19: the SAME rules; hq_min_rr 1.0, volume 1.2x, "
+                    "volume floor 0.7x and regime on are now named in the hash",
+}
+
+
 def config_fingerprint(cfg: dict) -> str:
     """Short hash of the rules in force.
 
@@ -997,7 +1014,12 @@ def report(path: Path | None = None) -> int:
         print(f"  skipped because:")
         for reason, n in sorted(s["skip_reasons"].items(), key=lambda kv: -kv[1]):
             print(f"    {n:>5}  {reason}")
-    if len(s["configs"]) > 1:
+    if len(s["configs"]) > 1 and all(c in KNOWN_CONFIGS for c in s["configs"]):
+        print(f"\n  {len(s['configs'])} config fingerprints, all declared "
+              f"(results/forward_record_preregistration.md): one dataset, same rules")
+        for c in s["configs"]:
+            print(f"    {c}  {KNOWN_CONFIGS[c]}")
+    elif len(s["configs"]) > 1:
         print(f"\n  ! {len(s['configs'])} DIFFERENT CONFIGS in one log: "
               f"{', '.join(s['configs'])}")
         print(f"    These are separate datasets. Pooling them measures the mix.")
@@ -1143,6 +1165,33 @@ def selftest() -> int:
     f1 = config_fingerprint({"adx_min": 25})
     f2 = config_fingerprint({"adx_min": 30})
     assert f1 != f2, "two different rule sets produced one fingerprint"
+    # ── DECLARED FINGERPRINTS READ AS ONE DATASET; AN UNDECLARED ONE WARNS ──
+    # The two declared hashes are reproduced from the exact dicts the scanner
+    # passed, so the table cannot drift from what the rows carry.
+    _old_cfg = {"adx_min": 35.0, "min_rr": 0.5, "atr_stop_mult": 1.25, "atr_tgt_mult": 4.0,
+                "weekly_confirm": False, "longs_only": True}
+    _new_cfg = dict(_old_cfg, hq_min_rr=1.0, volume_mult=1.2, volume_soft_mult=0.7,
+                    spy_regime_on=True)
+    assert config_fingerprint(_old_cfg) == "e7d75b855a51", config_fingerprint(_old_cfg)
+    assert config_fingerprint(_new_cfg) == "c357a0d01ff5", config_fingerprint(_new_cfg)
+    assert set(KNOWN_CONFIGS) == {"e7d75b855a51", "c357a0d01ff5"}, KNOWN_CONFIGS
+    import contextlib as _ctx, io as _io
+    _kp = Path(tempfile.mkdtemp()) / "known.jsonl"
+    _ks = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0}
+    record_signal("KA", "Bullish", _ks, "taken", "", _old_cfg, bar_date="2026-10-01", path=_kp, hq=False)
+    record_signal("KB", "Bullish", _ks, "taken", "", _new_cfg, bar_date="2026-10-02", path=_kp, hq=False)
+    _buf = _io.StringIO()
+    with _ctx.redirect_stdout(_buf):
+        report(_kp)
+    assert "all declared" in _buf.getvalue() and "DIFFERENT CONFIGS" not in _buf.getvalue(), _buf.getvalue()
+    record_signal("KC", "Bullish", _ks, "taken", "", dict(_new_cfg, adx_min=30.0),
+                  bar_date="2026-10-03", path=_kp, hq=False)
+    _buf = _io.StringIO()
+    with _ctx.redirect_stdout(_buf):
+        report(_kp)
+    assert "DIFFERENT CONFIGS" in _buf.getvalue(), "an undeclared fingerprint must still warn"
+    print("declared configs : the two declared hashes reproduce; declared = one dataset, undeclared = warning")
+
     assert config_fingerprint({"a": 1, "b": 2}) == config_fingerprint({"b": 2, "a": 1}), (
         "key order changed the fingerprint; the same rules must hash the same")
     print(f"config stamp     : {f1} vs {f2}, key order irrelevant")

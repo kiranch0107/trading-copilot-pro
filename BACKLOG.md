@@ -1817,7 +1817,7 @@ reading now (recommended: yes, it is a reading change).
 
 ---
 
-## 35. External review of 2026-10-19: twenty claims verified, none wrong; the record reads the forming bar, IV grading will censor departed names from ~11-07, close durability is P0 — VERIFIED 2026-10-19, DECISIONS OPEN
+## 35. External review of 2026-10-19: twenty claims verified, none wrong; the record reads the forming bar, IV grading will censor departed names from ~11-07, close durability is P0 — GROUP 1 DONE 2026-10-19, GROUPS 2-5 OPEN
 
 The owner had the repository reviewed outside this project (reviewed SHA
 6095f74 against the 2026-10-08 audit). Verification and response in
@@ -1839,6 +1839,21 @@ selection divergence, quote/risk NaN acceptance, DTE/weekend timing,
 portfolio chronology. POLICY: dry-run scan rows, ADX rounding at the gate.
 **Owner's decisions:** the order of work in the response file §"Order of
 work"; group 1 and group 2 are small and recommended now.
+
+**Group 1 done 2026-10-19 (owner: "go with group 1").** Grading reads
+settled bars only (`bars_for_grading` drops the forming bar until the
+close; outcomes land on the next run after the bar settles); the SPY regime
+is read from the settled bar in `market_context.get_spy_regime`, which
+covers the scanner and the app; `_scan_cfg` names `hq_min_rr`,
+`volume_mult`, `volume_soft_mult` and `spy_regime_on`, so the fingerprint
+moves once from `e7d75b855a51` to `c357a0d01ff5` with the same rules,
+declared in `forward_log.KNOWN_CONFIGS` and in the forward pre-registration
+(amendment 2026-10-19) before the first row under it; the exit monitor
+exits 1 when every check raised or the state write failed, 0 on a partial
+with a warning; the outage cooldown is stamped on delivery only;
+`backtest.stats` counts the drawdown from initial equity, and the five
+committed files that print the old figure say so at their top. Every guard
+falsified. **Still open:** groups 2 to 5.
 
 ---
 
