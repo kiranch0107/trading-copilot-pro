@@ -800,6 +800,20 @@ def attach_outcomes(journal: list, path: Path | None = None,
                     f"{tid}: signal_key {key!r} names a {sig.get('decision')} "
                     f"signal ({sig.get('reason')})")
                 continue
+            # THE KEY MUST NAME THIS TRADE'S UNDERLYING AND DIRECTION (external
+            # review 2026-10-19, N03). The keyed path checked existence, taken
+            # status and date only, so a BBB bearish row carrying an AAA
+            # bullish key was attached to AAA for good. The app builds keys
+            # from its inputs; the record must not trust an imported, edited
+            # or stale row to.
+            if str(sig.get("ticker", "")).upper() != underlying \
+                    or sig.get("trend") != row.get("trend"):
+                report["no_match"] += 1
+                report["detail"].append(
+                    f"{tid}: signal_key {key!r} names {sig.get('ticker')} "
+                    f"{sig.get('trend')}, not this trade's {underlying} "
+                    f"{row.get('trend')} — refused")
+                continue
             if sig.get("seq") in settled_seqs:
                 report["already"] += 1
                 continue
@@ -1671,8 +1685,20 @@ def selftest() -> int:
                attach_outcomes([_trade(id="T-late", signal_key="NKE|Bearish|2026-09-09",
                                        date="2026-09-08 10:00 ET")], path=ao3)["detail"])
     assert len([x for x in read_all(ao3) if x["kind"] == "outcome"]) == 1
+    # A key for ANOTHER underlying or the other direction is refused, whatever
+    # the row says (N03): the 09-09 NKE Bearish key on an AAA Bullish trade,
+    # and on an NKE Bullish trade. Neither writes a row.
+    for _bad in ({"ticker": "AAA 2026-10-16 100C", "trend": "Bullish"},
+                 {"ticker": "NKE 2026-10-16 40C", "trend": "Bullish"}):
+        _rb = attach_outcomes([_trade(id="T-mismatch", signal_key="NKE|Bearish|2026-09-09",
+                                      date="2026-09-12 10:00 ET", **_bad)], path=ao3)
+        assert _rb["attached"] == 0 and _rb["no_match"] == 1 and \
+            any("refused" in d and "names NKE Bearish" in d for d in _rb["detail"]), (_bad, _rb)
+    assert len([x for x in read_all(ao3) if x["kind"] == "outcome"]) == 1, \
+        "a mismatched key must not attach"
     print("signal key       : exact match beats ambiguity; skipped / missing / "
-          "later-bar keys refused with the reason")
+          "later-bar keys refused with the reason; a key for another name or "
+          "direction refused")
 
     # IDEMPOTENCY IS TWO LAYERS, and both are tested because the outer one
     # hides the inner. attach_outcomes() skips a trade_id it has already seen,
