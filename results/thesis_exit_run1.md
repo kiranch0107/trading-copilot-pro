@@ -1,3 +1,7 @@
+!! MODELLED OPTION PREMIUMS in this file predate 2026-10-19, when option_backtest
+!! stopped reading the entry bar's own close into the realised-vol window (one bar
+!! of look-ahead; BACKLOG 35). The review measured a 0.24-point change in mean premium
+!! return on its fixture. Every premium here is off by that order; a re-run is owed.
 > **STALE FILL RULE — read with this caveat (BACKLOG 21, fixed 2026-10-08).**
 > Every R in this file was produced while `backtest.simulate_trade()` filled a
 > stop that was gapped THROUGH at the stop, so no loss here is worse than about
