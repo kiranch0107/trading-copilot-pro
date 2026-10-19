@@ -39,6 +39,7 @@ end. Correctness is exercised through the app, same as before.
 from __future__ import annotations
 
 import logging
+import secrets
 import time
 from datetime import datetime
 from pathlib import Path
@@ -106,9 +107,15 @@ def load_journal() -> list:
     return st.session_state[_SS_JOURNAL]
 
 
-def save_journal(d: list) -> None:
+def save_journal(d: list) -> str | None:
+    """Returns the durable-write error, or None. close_position() reads it:
+    a journal row that did not land must not remove the position."""
     st.session_state[_SS_JOURNAL] = d
-    gh_sync.save(JOURNAL_FILE, d)
+    _data, err = gh_sync.save_result(JOURNAL_FILE, d)
+    st.session_state["_gh_last_error"] = err
+    if err:
+        st.error(f"⚠️ **Could not save the journal to GitHub** — {err}")
+    return err
 
 
 # ─────────────────────────────────────────────
@@ -135,8 +142,13 @@ def save_positions(d: list) -> None:
     # flip OPEN -> EXIT_SIGNALLED). See gh_sync.save()'s docstring — this is
     # the one file in the app where a plain overwrite could discard an exit
     # alert the monitor just wrote.
+    # closed_ids: the journal's ids are the tombstones. A remote-only id in
+    # the journal was closed here; any other remote-only id was added by
+    # another app session and must survive this write (BACKLOG 35 group 4).
     st.session_state[_SS_POSITIONS] = d
-    st.session_state[_SS_POSITIONS] = gh_sync.save(POSITIONS_FILE, d, merge=True)
+    closed = {j.get("id") for j in load_journal() if j.get("id")}
+    st.session_state[_SS_POSITIONS] = gh_sync.save(POSITIONS_FILE, d, merge=True,
+                                                   closed_ids=closed)
 
 
 def load_skipped() -> list:
@@ -164,7 +176,7 @@ def log_skipped_signal(ticker: str, trend: str, reason: str,
     """
     skipped = load_skipped()
     skipped.append({
-        "id":       f"SKIP_{ticker}_{int(time.time())}",
+        "id":       f"SKIP_{ticker}_{int(time.time())}_{secrets.token_hex(2)}",
         "ticker":   ticker,
         "trend":    trend,
         "price":    round(float(price), 2) if price else None,
@@ -231,7 +243,9 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
     positions = load_positions()
     now_epoch = time.time()
     pos = {
-        "id":               f"OPT_{ticker}_{int(now_epoch)}",
+        # A random suffix: two entries on one name within a second collided
+        # on the epoch alone (BACKLOG 35 group 4).
+        "id":               f"OPT_{ticker}_{int(now_epoch)}_{secrets.token_hex(2)}",
         "ticker":           ticker,
         "right":            right.upper(),          # CALL | PUT
         "strike":           float(strike),
@@ -259,9 +273,18 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
 
 
 def close_position(position_id: str, exit_premium: float, outcome: str,
-                   notes: str = "", closed_at: str | None = None) -> None:
+                   notes: str = "", closed_at: str | None = None) -> dict:
     """
     Move a position out of the open store and into the journal.
+
+    ACKNOWLEDGED CLOSE (external review 2026-10-19, BACKLOG 35 group 4). The
+    position is removed from the open store ONLY after the journal row's
+    durable write succeeded. On 2026-10-13 the journal put failed on a dead
+    token, the position was removed anyway, and the close existed nowhere but
+    the browser tab. Returns {"ok": bool, "error": str | None, "id": ...};
+    the caller shows the error and the position stays open, to be closed
+    again once the write path works. Idempotent: a second close of the same
+    id replaces its journal row rather than adding one.
 
     For options the R multiple is measured in PREMIUM terms — (exit − entry) /
     entry — because that is what was actually at risk. On a long option your
@@ -279,7 +302,7 @@ def close_position(position_id: str, exit_premium: float, outcome: str,
     positions = load_positions()
     pos = next((p for p in positions if p["id"] == position_id), None)
     if pos is None:
-        return
+        return {"ok": False, "error": "position not found", "id": position_id}
 
     if pos.get("right"):     # option position
         entry_prem = float(pos["entry_premium"])
@@ -319,16 +342,21 @@ def close_position(position_id: str, exit_premium: float, outcome: str,
             "entry_features": pos.get("entry_features", {}),
             "notes":      notes or pos.get("notes", ""),
         })
-        save_journal(journal)
+        err = save_journal(journal)
     else:                     # legacy share position
-        add_journal_trade(
+        err = add_journal_trade(
             alert_id=pos["id"], ticker=pos["ticker"], trend=pos["trend"],
             entry=pos["entry"], stop=pos["stop"], target=pos["target"],
             rr=pos.get("rr", 0), exit_price=exit_premium, outcome=outcome,
             notes=notes or pos.get("notes", ""), setup_date=pos["opened"],
         )
 
+    if err:
+        # The row did not land durably: keep the position so the close can
+        # be retried, and say so. Removing it here is how a close vanished.
+        return {"ok": False, "error": err, "id": position_id}
     save_positions([p for p in positions if p["id"] != position_id])
+    return {"ok": True, "error": None, "id": position_id}
 
 
 def log_alert(ticker, trend, strength, entry, stop, target, rr, price,
@@ -364,7 +392,7 @@ def log_alert(ticker, trend, strength, entry, stop, target, rr, price,
             return False
 
     alerts.append({
-        "id":             f"{ticker}_{int(now_epoch)}",
+        "id":             f"{ticker}_{int(now_epoch)}_{secrets.token_hex(2)}",
         "timestamp":      datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d %H:%M ET"),
         "epoch":          now_epoch,   # tz-safe cooldown source of truth
         "ticker":  ticker, "trend":    trend,    "strength": strength,
@@ -398,7 +426,7 @@ def add_journal_trade(alert_id, ticker, trend, entry, stop, target,
         "planned_rr": rr, "exit_price": exit_price,
         "outcome": outcome, "actual_rr": pnl_r, "notes": notes,
     })
-    save_journal(journal)
+    return save_journal(journal)
     alerts = load_alerts()
     for a in alerts:
         if a["id"] == alert_id:
@@ -806,6 +834,25 @@ def selftest() -> int:
             "close_position dropped the signal key; attach_outcomes needs it on the journal row"
         assert _rows[_pn["id"]]["signal_key"] is None
         assert not _mem["pos"], "both positions closed"
+        # ── ACKNOWLEDGED CLOSE (group 4): a failed journal write keeps the
+        # position and reports; a later successful close removes it. ──
+        _pf = open_option_position("AMD", "CALL", 100.0, "2026-11-20", 1, 1.0, _rules)
+        _g["save_journal"] = lambda d: "GitHub PUT 401: Bad credentials"
+        _res = close_position(_pf["id"], 1.5, "WIN")
+        assert _res["ok"] is False and "401" in _res["error"], _res
+        assert any(p["id"] == _pf["id"] for p in _mem["pos"]), \
+            "a close whose journal row did not land must NOT remove the position"
+        _g["save_journal"] = lambda d: (_mem.__setitem__("jrn", list(d)) or None)
+        _res2 = close_position(_pf["id"], 1.5, "WIN")
+        assert _res2["ok"] is True and not any(p["id"] == _pf["id"] for p in _mem["pos"])
+        assert sum(1 for j in _mem["jrn"] if j["id"] == _pf["id"]) == 1, "a retried close writes one row"
+        assert close_position("nope", 1.0, "WIN")["ok"] is False
+        # ── IDS DO NOT COLLIDE WITHIN A SECOND ──
+        _a = open_option_position("MSFT", "CALL", 400.0, "2026-11-20", 1, 2.0, _rules)
+        _b = open_option_position("MSFT", "CALL", 400.0, "2026-11-20", 1, 2.0, _rules)
+        assert _a["id"] != _b["id"] and _a["id"].startswith("OPT_MSFT_"), (_a["id"], _b["id"])
+        print("acknowledged close      : failed journal write keeps the position and reports; "
+              "retry closes once; same-second ids differ")
     finally:
         _g.update(_saved_io)
     print("signal key              : stored on the position, carried to the "
