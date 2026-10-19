@@ -209,6 +209,14 @@ SUGGEST_OPTIONS  = True
 # bucket in the forward log. Pre-registered as a dated amendment to
 # results/forward_record_preregistration.md.
 POOL_ALERT_CAP   = 5
+# IV GRADING FETCHES DEPARTED NAMES (external review 2026-10-19, N05;
+# BACKLOG 35). The grader was handed closes only for names in `frames`, the
+# current watchlist, so a snapshot taken on a name that then rotated out
+# was never graded: with 3 of 8 names rotating weekly, most snapshots would
+# have been censored by the time their window closed. The post-close pass
+# now fetches each unresolved name once, up to this many per pass; the rest
+# wait for the next pass and the log says so.
+IV_GRADE_FETCH_CAP = 20
 POOL_STATE_KEY   = "POOL:DATE"   # the ET date the pool was last scanned
 OPT_MIN_DTE      = 21
 OPT_MAX_DTE      = 45
@@ -1375,13 +1383,39 @@ def run(args) -> int:
                 _wrote += 1 if _row else 0
             logger.info("iv snapshot: %d row(s) written%s", _wrote,
                         f", refused {_refused}" if _refused else "")
-            _closes_for = lambda t: ([{"date": b["date"], "close": b["close"]}
-                                      for b in bars_for_grading(frames[t])]
-                                     if t in frames else None)
-            _ig = iv_snapshot.grade(_closes_for)
-            if _ig["graded"] or _ig["failed"]:
-                logger.info("iv snapshot: graded %d, unsettled %d, no data %d, failed %d",
-                            _ig["graded"], _ig["unsettled"], _ig["no_data"], _ig["failed"])
+            _iv_fetched: list = []
+            _iv_deferred: list = []
+
+            def _closes_for(t):
+                _df_iv = frames.get(t)
+                if _df_iv is None:
+                    # A name no longer on the watchlist: fetch it once, within
+                    # the cap, so its open snapshots can settle (N05).
+                    if len(_iv_fetched) >= IV_GRADE_FETCH_CAP:
+                        _iv_deferred.append(t)
+                        return None
+                    time.sleep(FETCH_GAP_SEC)
+                    _df_iv = get_data(t)
+                    _iv_fetched.append(t)
+                    if _df_iv is None:
+                        return None
+                return [{"date": b["date"], "close": b["close"]}
+                        for b in bars_for_grading(_df_iv)]
+            # The exchange calendar makes the window check exact: consecutive
+            # closes must be exactly one session apart (N04).
+            _sessions_between = lambda a, b: trading_days_between(
+                date.fromisoformat(a), date.fromisoformat(b))
+            _ig = iv_snapshot.grade(_closes_for, sessions_between=_sessions_between)
+            if _ig["graded"] or _ig["failed"] or _iv_fetched or _iv_deferred:
+                logger.info("iv snapshot: graded %d, unsettled %d, no data %d, failed %d, "
+                            "held %d (anchor missing %d, gap %d, bad close %d); departed "
+                            "names fetched %d, deferred %d",
+                            _ig["graded"], _ig["unsettled"], _ig["no_data"], _ig["failed"],
+                            _ig["anchor_missing"] + _ig["gap"] + _ig["bad_close"],
+                            _ig["anchor_missing"], _ig["gap"], _ig["bad_close"],
+                            len(_iv_fetched), len(_iv_deferred))
+            for _d in _ig["detail"][:10]:
+                logger.info("iv snapshot: %s", _d)
         except Exception as _exc:                          # noqa: BLE001
             logger.warning("iv snapshot failed: %s", _exc)
 
@@ -1941,7 +1975,8 @@ def _selftest_body() -> int:
         _saved = {k: _g[k] for k in ("get_data", "compute", "analyze",
                                      "get_spy_regime", "save_state", "load_state",
                                      "WATCHLIST", "FETCH_GAP_SEC", "suggest_option",
-                                     "is_post_close_window", "fetch_atm_chain")}
+                                     "is_post_close_window", "fetch_atm_chain",
+                                     "IV_GRADE_FETCH_CAP", "trading_days_between")}
         _saved_state: dict = {}
         _iv_tmp = _pl2.Path(_tf2.mkdtemp()) / "iv.jsonl"
         _real_iv_log = iv_snapshot.LOG
@@ -1951,10 +1986,27 @@ def _selftest_body() -> int:
             return {"expiry": "2026-07-31", "dte": 31,
                     "calls": [{"strike": 100.0, "impliedVolatility": 0.42}],
                     "puts": [{"strike": 100.0, "impliedVolatility": 0.44}]}
+        # DEPARTED NAMES ARE FETCHED FOR IV GRADING (N05), AND THE WINDOW IS
+        # CHECKED ON THE EXCHANGE CALENDAR (N04). Three names left the watchlist
+        # with snapshots old enough to settle. Cap 2: DDD (whole history) and
+        # DDE (history missing one midweek session inside the window) are
+        # fetched, EEE is deferred. DDD is graded; DDE is held as a gap, which
+        # only the injected calendar can see (a lone missing Tuesday is 2
+        # calendar days, under the stdlib fallback's 4). The fixture is a
+        # plain business-day range, so the calendar injected is weekdays.
+        _iv_departed_date = str(_bars3[-25].date())
+        for _nm in ("DDD", "DDE", "EEE"):
+            iv_snapshot.record(_iv_departed_date, _nm, "2026-07-31", 31, 100.0, 100.0, 43.0, 0.0,
+                               "yahoo", path=_iv_tmp)
+        _midweek = next(k for k in range(-20, -6) if _bars3[k].weekday() in (1, 2, 3))
+        _fr3_holed = _fr3.drop(_bars3[_midweek])
+        _got: list = []
         try:
             iv_snapshot.LOG = _iv_tmp
+            _g["IV_GRADE_FETCH_CAP"] = 2
+            _g["trading_days_between"] = lambda a, b: len(_pd3.bdate_range(a, b)) - 1
             _g["fetch_atm_chain"] = _fake_chain
-            _g["get_data"] = lambda tk: _fr3
+            _g["get_data"] = lambda tk: (_got.append(tk) or (_fr3_holed if tk == "DDE" else _fr3))
             _g["compute"] = lambda df: df
             _g["analyze"] = _fake_analyze
             _g["get_spy_regime"] = lambda: None
@@ -1980,10 +2032,23 @@ def _selftest_body() -> int:
             _g.update(_saved)
             iv_snapshot.LOG = _real_iv_log
         assert not _sent3, f"record-only sent an alert: {_sent3}"
+        _departed_fetched = [t for t in _got if t in ("DDD", "DDE", "EEE")]
+        assert sorted(_departed_fetched) == ["DDD", "DDE"], (
+            _got, "two departed names are fetched under a cap of 2, in name order; EEE is deferred")
+        _prem3 = {r["ticker"] for r in iv_snapshot.read_all(_iv_tmp) if r["kind"] == "premium"}
+        assert _prem3 == {"DDD"}, (
+            _prem3, "DDD graded from its fetch; DDE held (a session missing inside its window); "
+                    "EEE deferred, not graded")
+        _p3 = next(r for r in iv_snapshot.read_all(_iv_tmp) if r["kind"] == "premium")
+        assert _p3["anchor"] == _iv_departed_date and _p3["window_end"] == str(_bars3[-4].date()) \
+            and len(_p3["closes_hash"]) == 16, _p3
+        print("iv departed names       : fetched within the cap, graded on the exact anchor; a missing "
+              "midweek session is held by the exchange calendar; the rest deferred")
         # THE IV SNAPSHOT RODE ON THE POST-CLOSE PASS: one row per watchlist
         # name, ATM at 100 with the call/put mean, and only in that pass (the
         # first run above was outside the window and fetched no chain).
-        _ivr = [r for r in iv_snapshot.read_all(_iv_tmp) if r["kind"] == "iv"]
+        _ivr = [r for r in iv_snapshot.read_all(_iv_tmp) if r["kind"] == "iv"
+                and r["ticker"] not in ("DDD", "DDE", "EEE")]   # the seeded departed names
         assert sorted(r["ticker"] for r in _ivr) == ["AAA", "BBB", "CCC"], _ivr
         assert all(abs(r["iv"] - 43.0) < 1e-9 and r["dte"] == 31 for r in _ivr), _ivr
         assert sorted(_chain_fetches) == ["AAA", "BBB", "CCC"], (
