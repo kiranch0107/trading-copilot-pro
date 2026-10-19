@@ -1817,7 +1817,7 @@ reading now (recommended: yes, it is a reading change).
 
 ---
 
-## 35. External review of 2026-10-19: twenty claims verified, none wrong; the record reads the forming bar, IV grading will censor departed names from ~11-07, close durability is P0 — GROUPS 1, 2, 3 AND 5 DONE 2026-10-19, GROUP 4 OPEN
+## 35. External review of 2026-10-19: twenty claims verified, none wrong; the record reads the forming bar, IV grading will censor departed names from ~11-07, close durability is P0 — ALL FIVE GROUPS DONE 2026-10-19; OPTION RE-RUNS OWED
 
 The owner had the repository reviewed outside this project (reviewed SHA
 6095f74 against the 2026-10-08 audit). Verification and response in
@@ -1894,7 +1894,25 @@ a re-run is owed. `app.batch_get_data` passes `auto_adjust=False`, and a
 47th consistency check reads every `yf.download()` in the live paths to
 its closing paren for the flag. `gh_sync.load_jsonl` parses each source
 into its own list and returns it only whole (N08). Guards falsified.
-**Still open:** group 4 (persistence), and the option re-runs.
+**Still open:** the option re-runs.
+
+**Group 4 done 2026-10-19.** `journal_store.close_position` removes the
+position only after the journal row's durable write succeeded and returns
+`{ok, error}`; the app shows a failed close and keeps the position (the
+10-13 incident cannot recur silently). `gh_sync.save_result` returns the
+write error beside the data; `save()` wraps it. `_gh_put` re-merges
+against the remote as it then is on every sha-conflict retry (`remerge`
+callback) instead of re-putting the stale payload, and `save_result`
+returns and caches what was actually written. `merge_positions` reads the
+journal's ids as tombstones (`closed_ids`): a remote-only id in the
+journal was closed here, any other was added by another app session and
+survives; on equal rank the monitor-owned fields come from the record with
+the newer `last_check_epoch`, app-owned fields stay the app's. Position
+and skip ids carry a random suffix so two entries in one second cannot
+collide. Guards falsified. **Still open from the review:** the option
+re-runs on frozen bars (owner's laptop); contract-selection divergence,
+NaN quote handling, DTE/weekend timing and portfolio chronology were not
+verified here and are not addressed.
 
 ---
 

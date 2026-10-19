@@ -2254,9 +2254,14 @@ with TAB_POSITIONS:
                 _ct = trade_time_input(f"cl_{p['id']}", "Closed at")
                 if st.button("📓 Close & log to journal", type="primary",
                              key=f"close_{p['id']}"):
-                    close_position(p["id"], fill, oc, nt, closed_at=_ct)
-                    st.success(f"{p['ticker']} closed and logged.")
-                    st.rerun()
+                    _cres = close_position(p["id"], fill, oc, nt, closed_at=_ct)
+                    if _cres.get("ok"):
+                        st.success(f"{p['ticker']} closed and logged.")
+                        st.rerun()
+                    else:
+                        st.error(f"{p['ticker']} NOT closed — the journal row did not save "
+                                 f"({_cres.get('error')}). The position stays open; fix the "
+                                 f"sync and close it again.")
         st.divider()
 
     # ── Currently open ──
@@ -2307,10 +2312,15 @@ with TAB_POSITIONS:
                     mn = st.text_input("Notes", key=f"mn_{p['id']}")
                     _mt = trade_time_input(f"mc_{p['id']}", "Closed at")
                     if st.button("Confirm close", type="primary", key=f"cf_{p['id']}"):
-                        close_position(p["id"], mf, mo, mn, closed_at=_mt)
-                        st.session_state.pop(f"closing_{p['id']}", None)
-                        st.success(f"{p['ticker']} closed and logged.")
-                        st.rerun()
+                        _cres = close_position(p["id"], mf, mo, mn, closed_at=_mt)
+                        if _cres.get("ok"):
+                            st.session_state.pop(f"closing_{p['id']}", None)
+                            st.success(f"{p['ticker']} closed and logged.")
+                            st.rerun()
+                        else:
+                            st.error(f"{p['ticker']} NOT closed — the journal row did not save "
+                                     f"({_cres.get('error')}). The position stays open; fix the "
+                                     f"sync and close it again.")
 
     st.divider()
 

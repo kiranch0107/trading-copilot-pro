@@ -170,9 +170,17 @@ def _gh_get(path: str) -> tuple[list | None, str | None, str | None]:
         return None, None, f"GitHub GET failed: {e}"
 
 
-def _gh_put(path: str, data: list, message: str) -> str | None:
+def _gh_put(path: str, data: list, message: str, remerge=None) -> str | None:
     """
     Write a JSON file to the repo. Returns an error string, or None on success.
+
+    RE-MERGE ON CONFLICT (external review 2026-10-19, BACKLOG 35 group 4).
+    A 409/412 means another writer landed between this call's GET and PUT.
+    Retrying with the SAME payload against the fresh sha overwrote whatever
+    that writer changed: the merge was done against the old remote. With
+    `remerge(remote_data)` given, the payload is rebuilt from the remote as
+    it now is before every retry; without it the retry is a plain overwrite,
+    which is correct only for app-owned files nobody else writes.
 
     READ-MODIFY-WRITE: we always re-fetch the current sha immediately before
     writing. exit_monitor.py also writes this file (to mark exit_alerted), so a
@@ -192,9 +200,11 @@ def _gh_put(path: str, data: list, message: str) -> str | None:
     last = None
     for attempt in range(_PUT_MAX_ATTEMPTS):
         try:
-            _, sha, err = _gh_get(path)
+            remote_now, sha, err = _gh_get(path)
             if err:
                 return err
+            if attempt and remerge is not None:
+                data = remerge(remote_now if remote_now is not None else [])
             body = {
                 "message": message,
                 "content": base64.b64encode(
@@ -257,11 +267,48 @@ def load_jsonl(path: Path) -> tuple[list, str]:
         return [], "unavailable"
 
 
+# Fields exit_monitor.py writes. On two records of the same id and rank, these
+# come from the record the monitor touched more recently (last_check_epoch);
+# everything else is app-owned and comes from local.
+MONITOR_FIELDS = frozenset({"status", "exit_alerted", "exit_reason", "exit_detail",
+                            "exit_premium", "exit_pnl_pct", "exit_detected",
+                            "exit_history", "last_check_epoch"})
+
+
+def _take_monitor_fields(lp: dict, rp: dict) -> dict:
+    """lp with the monitor-owned fields from whichever record the monitor
+    touched last. Equal or missing epochs keep lp as it is."""
+    try:
+        if float(rp.get("last_check_epoch") or 0) <= float(lp.get("last_check_epoch") or 0):
+            return lp
+    except (TypeError, ValueError):
+        return lp
+    out = dict(lp)
+    for k in MONITOR_FIELDS:
+        if k in rp:
+            out[k] = rp[k]
+    return out
+
+
 def merge_positions(local: list | None, remote: list,
-                    *, local_complete: bool = True) -> list:
+                    *, local_complete: bool = True, closed_ids=None) -> list:
     """
     Merge position lists by id, so the app and the monitor don't clobber
     each other.
+
+    TWO RULES ADDED 2026-10-19 (external review, BACKLOG 35 group 4):
+
+    - DELETIONS ARE TOMBSTONED BY THE JOURNAL. With `closed_ids` (the ids in
+      the closed-trade journal) given, a remote-only id is dropped only when
+      it is in that set: the app closed it. Any other remote-only id was ADDED
+      by another writer (a second app session on another device) and is kept.
+      Without `closed_ids` the old rule stands: absence from a complete local
+      list is a deletion.
+    - EQUAL RANK IS SETTLED BY THE MONITOR'S CLOCK. Two EXIT_SIGNALLED records
+      used to resolve to local, so the app's stale THESIS could overwrite the
+      monitor's later STOP. The monitor-owned fields (MONITOR_FIELDS) now come
+      from the record with the larger last_check_epoch; app-owned fields stay
+      local's.
 
     The monitor's job is to flip a position to EXIT_SIGNALLED. The app's job is
     to add new positions and remove closed ones. If both wrote at once, plain
@@ -298,9 +345,14 @@ def merge_positions(local: list | None, remote: list,
     for rp in remote:
         lp = by_id.get(rp["id"])
         if lp is None:
-            continue          # app deleted it (closed) — respect that
-        if rank.get(rp.get("status"), 0) > rank.get(lp.get("status"), 0):
+            if closed_ids is not None and rp["id"] not in closed_ids:
+                by_id[rp["id"]] = rp      # added elsewhere, not closed here: keep
+            continue                       # closed by the app — respect that
+        rr, lr = rank.get(rp.get("status"), 0), rank.get(lp.get("status"), 0)
+        if rr > lr:
             by_id[rp["id"]] = rp
+        elif rr == lr:
+            by_id[rp["id"]] = _take_monitor_fields(lp, rp)
     return list(by_id.values())
 
 
@@ -382,7 +434,45 @@ def load(path: Path) -> list:
     return local
 
 
-def save(path: Path, data: list, *, merge: bool = False) -> list:
+def save_result(path: Path, data: list, *, merge: bool = False,
+                closed_ids=None) -> tuple[list, str | None]:
+    """
+    save() with the outcome in the return value: (data_persisted, error).
+    error is None when the durable write succeeded (or GitHub is off), else
+    the message. Callers that must NOT proceed on a failed write (closing a
+    position: the journal row has to land before the position is removed)
+    read this instead of save()'s UI side effect (BACKLOG 35 group 4).
+    """
+    _local_save(path, data)     # best-effort cache; wiped on container restart
+    if not gh_enabled():
+        return data, None
+    remerge = None
+    final = {"data": data}
+    if merge:
+        incoming = list(data)
+        complete = not local_read_failed(path)
+
+        def _remerge(remote):
+            merged = merge_positions(incoming, remote, local_complete=complete,
+                                     closed_ids=closed_ids)
+            final["data"] = merged          # what the PUT will carry, latest wins
+            return merged
+        remerge = _remerge
+        remote, _sha, err = _gh_get(path.name)
+        if not err and remote:
+            data = remerge(remote)
+            # RE-SAVE LOCALLY so the on-disk cache reflects the MERGED state
+            # (see save() below for why).
+            _local_save(path, data)
+    err = _gh_put(path.name, data, f"chore: update {path.name} from app", remerge=remerge)
+    if final["data"] is not data:
+        # A conflict retry re-merged against a newer remote: the cache and
+        # the caller get what was actually written, not the first merge.
+        _local_save(path, final["data"])
+    return final["data"], err
+
+
+def save(path: Path, data: list, *, merge: bool = False, closed_ids=None) -> list:
     """
     Write through to the repo AND local disk. Returns the data actually
     persisted — identical to `data` unless merge=True and a concurrent
@@ -399,32 +489,13 @@ def save(path: Path, data: list, *, merge: bool = False) -> list:
     write fails the user is told in the UI, because "I logged a position and
     it vanished" is exactly the failure a silent warning produced.
     """
-    _local_save(path, data)     # best-effort cache; wiped on container restart
-    if not gh_enabled():
-        st.session_state["_gh_last_error"] = None
-        return data
-    if merge:
-        remote, _sha, err = _gh_get(path.name)
-        if not err and remote:
-            # local_complete=False when this file's local copy failed to parse
-            # this process: `data` then descends from a read that returned
-            # nothing, and absence in it is not evidence of a deletion.
-            data = merge_positions(
-                data, remote, local_complete=not local_read_failed(path))
-            # RE-SAVE LOCALLY so the on-disk cache reflects the MERGED state.
-            #
-            # The _local_save above ran on the pre-merge copy. When the merge
-            # pulls in a change only the remote had — an OPEN -> EXIT_SIGNALLED
-            # flip written by exit_monitor.py is the case that matters — the
-            # cache never learns about it. A later GitHub outage then falls back
-            # to a local copy missing exactly the exit alert this merge just
-            # picked up, and the app shows a position as still open.
-            #
-            # Only reachable on the merge path, which is open_positions.json
-            # alone; every other file here is app-owned and the first save is
-            # already correct.
-            _local_save(path, data)
-    err = _gh_put(path.name, data, f"chore: update {path.name} from app")
+    # The merge path RE-SAVES LOCALLY after merging so the on-disk cache
+    # reflects the merged state: the first _local_save runs on the pre-merge
+    # copy, and when the merge pulls in a change only the remote had (an
+    # OPEN -> EXIT_SIGNALLED flip from exit_monitor.py) the cache would never
+    # learn it; a later GitHub outage would then serve a position as open.
+    # A sha conflict on the PUT re-merges against the remote as it then is.
+    data, err = save_result(path, data, merge=merge, closed_ids=closed_ids)
     st.session_state["_gh_last_error"] = err
     if err:
         st.error(f"⚠️ **Could not save to GitHub** — {err}\n\n"
@@ -520,6 +591,66 @@ def selftest() -> int:
             "resurrecting it would reopen a position the user closed"
         print(f"merge_positions         : EXIT_SIGNALLED beats OPEN, keeps "
               f"new, respects closes")
+
+        # ── GROUP 4 (2026-10-19): tombstones by the journal; the monitor's clock ──
+        import json as _json, tempfile as _tmp
+        # With closed_ids given, a remote-only id NOT in the journal was added
+        # by another app session and survives; one in the journal was closed.
+        _m2 = {p["id"]: p for p in merge_positions(local, remote, closed_ids={"C"})}
+        assert "C" not in _m2, "a remote-only id in the journal is a close"
+        _m3 = {p["id"]: p for p in merge_positions(local, remote, closed_ids=set())}
+        assert "C" in _m3, "a remote-only id NOT in the journal was added elsewhere: keep it"
+        # Equal rank: the app's stale THESIS must not overwrite the monitor's
+        # later STOP; app-owned fields (notes) stay the app's.
+        _lp = {"id": "A", "status": "EXIT_SIGNALLED", "exit_reason": "THESIS",
+               "last_check_epoch": 100.0, "notes": "app edited"}
+        _rp = {"id": "A", "status": "EXIT_SIGNALLED", "exit_reason": "STOP",
+               "last_check_epoch": 200.0, "notes": "old"}
+        _m4 = merge_positions([_lp], [_rp])[0]
+        assert _m4["exit_reason"] == "STOP" and _m4["notes"] == "app edited", _m4
+        _m5 = merge_positions([_rp], [_lp])[0]
+        assert _m5["exit_reason"] == "STOP", "the older record never overwrites the newer"
+        print("tombstones / clock      : journal ids are closes, other remote-only ids kept; "
+              "equal rank takes the monitor's newer fields, keeps app fields")
+
+        # ── A SHA CONFLICT RE-MERGES against the remote as it then is ──
+        # GET 1: remote A OPEN. PUT 1: 409 (the monitor landed EXIT_SIGNALLED
+        # meanwhile). GET 2: remote A EXIT_SIGNALLED. PUT 2 must carry
+        # EXIT_SIGNALLED, not the first merge's OPEN.
+        _bodies: list = []
+        def _put_capture(seq):
+            def _put(url, headers=None, json=None, timeout=None):
+                calls["put"] += 1
+                _bodies.append(json)
+                return seq[min(calls["put"] - 1, len(seq) - 1)]
+            return _put
+        _get1 = _R(200, payload={"content": _b64.b64encode(
+            _json.dumps([{"id": "A", "status": "OPEN", "last_check_epoch": 1.0}]).encode()).decode(), "sha": "s1"})
+        _get2 = _R(200, payload={"content": _b64.b64encode(
+            _json.dumps([{"id": "A", "status": "EXIT_SIGNALLED", "exit_reason": "STOP",
+                          "last_check_epoch": 2.0}]).encode()).decode(), "sha": "s2"})
+        with _tmp.TemporaryDirectory() as _d2:
+            _p2 = pathlib.Path(_d2) / "open_positions.json"
+            _p2.write_text("[]")
+            calls["get"] = calls["put"] = 0
+            _fk = _fake([_get1, _get2, _get2], [])
+            _fk.put = _put_capture([_R(409, "conflict"), _R(201)])
+            globals()["requests"] = _fk
+            _ret, _err = save_result(_p2, [{"id": "A", "status": "OPEN", "notes": "n"}], merge=True)
+            assert _err is None and calls["put"] == 2, (_err, calls)
+            _sent2 = _json.loads(_b64.b64decode(_bodies[1]["content"]).decode())
+            assert {p["id"]: p for p in _sent2}["A"]["status"] == "EXIT_SIGNALLED", (
+                _sent2, "the retry re-put the stale merge; the monitor's exit flag would be lost")
+            assert {p["id"]: p for p in _ret}["A"]["status"] == "EXIT_SIGNALLED", "the caller gets the re-merged state"
+        print("conflict re-merge       : a 409 retry rebuilds the payload from the fresh remote")
+
+        # ── save_result REPORTS A FAILED WRITE instead of only showing it ──
+        calls["get"] = calls["put"] = 0
+        globals()["requests"] = _fake([ok_get], [_R(401, "Bad credentials")])
+        with _tmp.TemporaryDirectory() as _d3:
+            _ret, _err = save_result(pathlib.Path(_d3) / "trade_journal.json", [{"id": "J"}])
+            assert _err and "401" in _err, _err
+        print("save_result             : a failed durable write is returned, not only displayed")
 
         # ── THE CACHE MUST HOLD THE MERGED STATE, NOT THE PRE-MERGE COPY ──
         # merge_positions() was tested in isolation; save() was not, and the
