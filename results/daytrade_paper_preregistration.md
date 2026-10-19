@@ -8,6 +8,20 @@ paragraph this document makes exact. Phase 1 (five-minute, hourly and
 4-hour) measured no edge in any objective version of the tools; this test
 is of the one thing Phase 1 could not codify, the owner's reading.
 
+## Grading-validity note, 2026-10-19 (not an amendment: no rule changes; BACKLOG 35, external review N01 and N07)
+
+Written while the record holds one voided test call and nothing else. A
+call is graded only from a WHOLE session: timestamps ordered and unique,
+five minutes apart, first bar 09:30 ET, last bar 15:55 ET (12:55 on a half
+day). A truncated or holed session is held (the call stays open for a
+better fetch) and voided with its reason (`session_incomplete`,
+`session_gap`, `bars_unordered`, `call_bar_missing`) only after the
+fifty-day fetch horizon. The call's bar must contain the call; an earlier
+bar never stands in for a missing one. The evidence hash is version 2:
+symbol, timeframe and every bar's timestamp, open, high, low, close and
+volume, with the version on the outcome row. Entry, exit, costs, the null
+and the reading gate are unchanged.
+
 ## Defect note, 2026-10-13 (not an amendment: no rule changes)
 
 The first call (#1, TSLA, a test of the command) was graded 28 seconds

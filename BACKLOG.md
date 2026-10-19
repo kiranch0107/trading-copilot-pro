@@ -1817,7 +1817,7 @@ reading now (recommended: yes, it is a reading change).
 
 ---
 
-## 35. External review of 2026-10-19: twenty claims verified, none wrong; the record reads the forming bar, IV grading will censor departed names from ~11-07, close durability is P0 — GROUPS 1 AND 2 DONE 2026-10-19, GROUPS 3-5 OPEN
+## 35. External review of 2026-10-19: twenty claims verified, none wrong; the record reads the forming bar, IV grading will censor departed names from ~11-07, close durability is P0 — GROUPS 1 TO 3 DONE 2026-10-19, GROUPS 4-5 OPEN
 
 The owner had the repository reviewed outside this project (reviewed SHA
 6095f74 against the 2026-10-08 audit). Verification and response in
@@ -1868,7 +1868,20 @@ and the oldest. The post-close pass fetches each departed name once for IV
 grading, up to `IV_GRADE_FETCH_CAP` = 20 a pass, and logs
 fetched/deferred/held counts. Grading-validity note in
 `option_iv_preregistration.md` (Part B), before the first premium row.
-Guards falsified. **Still open:** groups 3 to 5.
+Guards falsified.
+
+**Group 3 done 2026-10-19 (owner: "go with G3-5 in your own order").**
+`forward_log.attach_outcomes` refuses a signal key whose ticker or
+direction is not the journal row's (N03). `daytrade_paper.resolve_call`
+grades only from a whole session (`session_coverage`: ordered unique
+timestamps five minutes apart, 09:30 to 15:55 ET, 12:55 on a half day);
+a truncated, holed or duplicated session is HELD and voided with its
+reason only after the fifty-day fetch horizon; the call's bar must contain
+the call, an earlier bar never stands in (N01). The evidence hash is
+version 2: symbol, timeframe and every bar's timestamp, OHLC and volume,
+versioned on the outcome row (N07). Grading-validity note in
+`daytrade_paper_preregistration.md`. Guards falsified. **Still open:**
+groups 4 and 5.
 
 ---
 

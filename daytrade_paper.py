@@ -50,7 +50,7 @@ import hashlib
 import json
 import math
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -73,6 +73,8 @@ PRICE_TOL = 0.001                  # the logged price must sit inside its bar, �
 NO_BARS_DAYS = 50                  # Yahoo serves 60 days of 5m bars; VOID after this
 STALE_WARN_DAYS = NO_BARS_DAYS - 10  # the report nags this many days before the void
 LAST_CALL_MINUTE = 15 * 60 + 55    # the last 5m bar opens 15:55; nothing opens after it
+BAR_MINUTES = 5                    # the Phase 1 profile; the grader asserts it
+BARS_HASH_VERSION = 2              # v1 hashed rounded closes only (external review N07)
 
 
 # ── the chain (forward_log's format, a separate file, a separate writer) ──
@@ -143,9 +145,52 @@ def fetch_5m(ticker: str):
     return ir._yahoo_intraday(ticker)
 
 
-def _bars_hash(d, idx) -> str:
-    closes = ",".join(f"{float(x):.4f}" for x in d["Close"].iloc[idx[0]:idx[-1] + 1])
-    return hashlib.sha256(closes.encode()).hexdigest()[:16]
+def _bars_hash(d, idx, ticker: str = "") -> str:
+    """
+    Fingerprint of the session's bars AS THE GRADER READ THEM (external review
+    2026-10-19, N07). Version 1 hashed rounded closes only, so a Low moved
+    from 99 to 94 (enough to hit a 95 stop) left the fingerprint unchanged.
+    Version 2 covers the symbol, the timeframe and every bar's timestamp,
+    open, high, low, close and volume. The outcome row carries the version.
+    """
+    import pandas as pd
+    sl = d.iloc[idx[0]:idx[-1] + 1]
+    ts = pd.to_datetime(sl["Date"], utc=True)
+    parts = [f"v{BARS_HASH_VERSION}|{ticker.upper()}|{ir.TIMEFRAME}"]
+    for t, o, h, l, c, v in zip(ts, sl["Open"], sl["High"], sl["Low"], sl["Close"], sl["Volume"]):
+        parts.append(f"{t.isoformat()}:{float(o):.4f}:{float(h):.4f}:{float(l):.4f}:"
+                     f"{float(c):.4f}:{float(v):.0f}")
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
+def session_coverage(d, idx: list, session: str) -> str | None:
+    """
+    None when the session's bars are complete and well formed; else why not
+    (external review 2026-10-19, N01). "Flat at the session's close" needs
+    the close: a frame that ends at 11:05 ET used to receive a final timeout
+    there, permanently. Required: timestamps ordered and unique, exactly
+    BAR_MINUTES apart, the first bar at 09:30 ET and the last at 15:55 ET
+    (12:55 on a half day). Anything else is HELD (the call stays open for a
+    better fetch) and voided with this reason only after NO_BARS_DAYS.
+    """
+    import pandas as pd
+    import signal_core as sc
+    if not idx:
+        return "no_bars"
+    starts = pd.to_datetime(d["Date"].iloc[idx], utc=True)
+    if not starts.is_monotonic_increasing or starts.duplicated().any():
+        return "bars_unordered"
+    diffs = starts.diff().dropna()
+    if len(diffs) and (diffs != pd.Timedelta(minutes=BAR_MINUTES)).any():
+        return "session_gap"
+    et = starts.dt.tz_convert(ET)
+    first, last = et.iloc[0], et.iloc[-1]
+    half = session in sc.MARKET_HALF_DAYS
+    last_open = (12 * 60 + 55) if half else LAST_CALL_MINUTE
+    if (first.hour * 60 + first.minute) != 9 * 60 + 30 or \
+            (last.hour * 60 + last.minute) != last_open:
+        return "session_incomplete"
+    return None
 
 
 def resolve_call(call: dict, bars, today: datetime | None = None) -> dict | None:
@@ -155,7 +200,9 @@ def resolve_call(call: dict, bars, today: datetime | None = None) -> dict | None
     call is younger than NO_BARS_DAYS).
 
     VOID reasons: no_bars, no_bar_after_call, price_outside_bar,
-    gapped_before_fill, geometry.
+    gapped_before_fill, geometry; and, only after NO_BARS_DAYS of HOLDING
+    for a better fetch: session_incomplete, session_gap, bars_unordered,
+    call_bar_missing (external review 2026-10-19, N01).
     """
     import pandas as pd
     t_call = datetime.fromisoformat(call["ts"]).astimezone(timezone.utc)
@@ -181,12 +228,21 @@ def resolve_call(call: dict, bars, today: datetime | None = None) -> dict | None
     idx = [int(i) for i in d.index[d["session"] == session]]
     if not idx:
         return void("no_bars") if (today - t_call).days > NO_BARS_DAYS else None
+    # THE SESSION MUST BE WHOLE before anything in it is graded: a truncated
+    # or holed session is held, not graded, and voided only when it is too
+    # old to be refetched. The call's bar must CONTAIN the call
+    # (bar_start <= call < bar_end); the latest earlier bar used to stand in
+    # for a missing one and moved the trade without saying so.
+    why = session_coverage(d, idx, session)
+    if why:
+        return void(why) if (today - t_call).days > NO_BARS_DAYS else None
     starts = pd.to_datetime(d["Date"].iloc[idx], utc=True)
-    k = None
-    for i, t0 in zip(idx, starts):
-        if t0.to_pydatetime() <= t_call:
-            k = i
-    if k is None or k >= idx[-1]:
+    width = timedelta(minutes=BAR_MINUTES)
+    k = next((i for i, t0 in zip(idx, starts)
+              if t0.to_pydatetime() <= t_call < t0.to_pydatetime() + width), None)
+    if k is None:
+        return void("call_bar_missing") if (today - t_call).days > NO_BARS_DAYS else None
+    if k >= idx[-1]:
         return void("no_bar_after_call")
     lo, hi = float(d["Low"].iloc[k]), float(d["High"].iloc[k])
     if not (lo * (1 - PRICE_TOL) <= call["price"] <= hi * (1 + PRICE_TOL)):
@@ -209,7 +265,7 @@ def resolve_call(call: dict, bars, today: datetime | None = None) -> dict | None
                mae_r=round(float(r["mae_r"]), 3),
                signal_bar=str(d["Date"].iloc[k]), exit_bar=str(d["Date"].iloc[r["exit_i"]]),
                null_r=round(sum(nulls) / len(nulls), 4) if nulls else None, null_n=len(nulls),
-               bars_hash=_bars_hash(d, idx))
+               bars_hash=_bars_hash(d, idx, call["ticker"]), bars_hash_v=BARS_HASH_VERSION)
     return out
 
 
@@ -439,6 +495,53 @@ def selftest() -> int:
         "00:00 ET the next day: gradable"
     print("void             : price outside its bar, stale with no bars, call inside the last bar; "
           "a young call stays open; one outcome per call; same-day sessions wait for the close")
+
+    # ── THE SESSION MUST BE WHOLE (external review 2026-10-19, N01) ──
+    # Graded the NEXT day, a frame that ends at 11:05 used to receive a final
+    # timeout there. Now: held while young, voided with the reason when old.
+    _next = datetime(2026, 10, 14, 12, 0, tzinfo=utc)
+    _old = datetime(2026, 12, 20, 12, 0, tzinfo=utc)
+    truncated = frame.iloc[:78 + 20]                   # 10-13 ends at 11:05
+    assert resolve_call(c7, truncated, _next) is None, "truncated session: HELD, not a timeout"
+    assert resolve_call(c7, truncated, _old)["reason"] == "session_incomplete"
+    holed = frame.drop(frame.index[78 + 30]).reset_index(drop=True)   # one 5m bar missing mid-session
+    assert resolve_call(c7, holed, _next) is None and resolve_call(c7, holed, _old)["reason"] == "session_gap"
+    dup = pd.concat([frame, frame.iloc[[78 + 30]]], ignore_index=True).sort_values("Date").reset_index(drop=True)
+    assert resolve_call(c7, dup, _old)["reason"] == "bars_unordered"
+    assert resolve_call(c7, frame, _next) is not None, "the whole session grades as before"
+    # the call's bar must CONTAIN the call: with the 10:05 bar missing, 10:00
+    # must not stand in for it (that moved the trade); held, then void
+    missing_call_bar = frame.drop(frame.index[78 + 7]).reset_index(drop=True)
+    assert resolve_call(c7, missing_call_bar, _next) is None
+    assert resolve_call(c7, missing_call_bar, _old)["reason"] == "session_gap", \
+        "a missing bar is a session gap first; coverage is checked before the call is placed"
+    _pre_open = dict(c7, ts="2026-10-13T13:25:00+00:00")                 # 09:25 ET, no bar contains it
+    assert resolve_call(_pre_open, frame, _next) is None
+    assert resolve_call(_pre_open, frame, _old)["reason"] == "call_bar_missing"
+    # a half day (2026-11-27, close 13:00) is whole at 42 bars (09:30..12:55), not 78
+    _half = ir._session_frame([100.0] * 42, "2026-11-27", spread=0.1)
+    _half_d = ir.prepare(_half)
+    assert session_coverage(_half_d, list(range(42)), "2026-11-27") is None
+    assert session_coverage(ir.prepare(ir._session_frame([100.0] * 41, "2026-11-27", spread=0.1)),
+                            list(range(41)), "2026-11-27") == "session_incomplete"
+    _half78 = ir.prepare(ir._session_frame([100.0] * 78, "2026-11-27", spread=0.1))
+    assert session_coverage(_half78, list(range(78)), "2026-11-27") == "session_incomplete"
+    print("whole session    : truncated / holed / duplicated sessions held then voided by reason; "
+          "the call's bar must contain the call; half days are 42 bars")
+
+    # ── THE EVIDENCE HASH COVERS WHAT DECIDES THE TRADE (N07) ──
+    _d = ir.prepare(frame)
+    _idx = [int(i) for i in _d.index[_d["session"] == "2026-10-13"]]
+    _h0 = _bars_hash(_d, _idx, "TSLA")
+    _low = frame.copy(); _low.loc[78 + 12, "Low"] = _low.loc[78 + 12, "Low"] - 5.0
+    assert _bars_hash(ir.prepare(_low), _idx, "TSLA") != _h0, "a moved Low must change the fingerprint"
+    _vol = frame.copy(); _vol.loc[78 + 12, "Volume"] = 1.0
+    assert _bars_hash(ir.prepare(_vol), _idx, "TSLA") != _h0, "volume is part of the evidence"
+    assert _bars_hash(_d, _idx, "NVDA") != _h0, "the symbol is part of the evidence"
+    assert _bars_hash(_d, _idx, "TSLA") == _h0 and len(_h0) == 16
+    assert all(r.get("bars_hash_v") == BARS_HASH_VERSION for r in read_all(path)
+               if r.get("kind") == "outcome" and r.get("bars_hash")), "outcome rows carry the hash version"
+    print("evidence hash    : v2 covers symbol, timeframe, timestamp, OHLC and volume; versioned on the row")
 
     # Tamper: edit a logged stop and the chain says so.
     lines = path.read_text(encoding="utf-8").splitlines()
