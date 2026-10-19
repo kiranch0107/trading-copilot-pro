@@ -1817,7 +1817,7 @@ reading now (recommended: yes, it is a reading change).
 
 ---
 
-## 35. External review of 2026-10-19: twenty claims verified, none wrong; the record reads the forming bar, IV grading will censor departed names from ~11-07, close durability is P0 — GROUP 1 DONE 2026-10-19, GROUPS 2-5 OPEN
+## 35. External review of 2026-10-19: twenty claims verified, none wrong; the record reads the forming bar, IV grading will censor departed names from ~11-07, close durability is P0 — GROUPS 1 AND 2 DONE 2026-10-19, GROUPS 3-5 OPEN
 
 The owner had the repository reviewed outside this project (reviewed SHA
 6095f74 against the 2026-10-08 audit). Verification and response in
@@ -1853,7 +1853,22 @@ exits 1 when every check raised or the state write failed, 0 on a partial
 with a warning; the outage cooldown is stamped on delivery only;
 `backtest.stats` counts the drawdown from initial equity, and the five
 committed files that print the old figure say so at their top. Every guard
-falsified. **Still open:** groups 2 to 5.
+falsified.
+
+**Group 2 done 2026-10-19 (owner: "fix group 2").** `iv_snapshot.grade`
+computes a premium only when the snapshot date itself is in the history and
+the 21 DISTINCT sessions after it are present, each exactly one exchange
+session apart (the scanner injects `trading_days_between`; the stdlib
+fallback is a 4-calendar-day gap rule), with finite positive closes
+(`window_after`); a window that fails is held and counted (anchor missing,
+gap, bad close), never shifted, compressed or voided; conflicting duplicate
+dates reject the history; the premium row carries anchor, window start and
+end and a hash of the dated closes; `summary` reports unresolved snapshots
+and the oldest. The post-close pass fetches each departed name once for IV
+grading, up to `IV_GRADE_FETCH_CAP` = 20 a pass, and logs
+fetched/deferred/held counts. Grading-validity note in
+`option_iv_preregistration.md` (Part B), before the first premium row.
+Guards falsified. **Still open:** groups 3 to 5.
 
 ---
 

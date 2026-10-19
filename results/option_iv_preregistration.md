@@ -98,6 +98,21 @@ requires the IV line on every committed option result.
 
 ## Part B — the single-name premium, measured forward (months)
 
+> **Grading-validity note, 2026-10-19 (BACKLOG 35; external review N04,
+> N05). Written before the first premium row exists (the first is due
+> ~2026-11-07). The horizon, the formula and the reading rule below are
+> unchanged; this fixes what the grader accepts as "the 21 sessions after
+> the snapshot".** A premium is computed only when the snapshot date itself
+> is in the fetched history and the 21 DISTINCT sessions after it are
+> present, each exactly one exchange session apart (the scanner's calendar),
+> with every close finite and positive. A window that fails is HELD
+> (counted by reason, left open for a later fetch), never computed on a
+> shifted or compressed window and never voided. The premium row records
+> its anchor, first and last session and a hash of the dated closes. Names
+> that have left the watchlist are fetched once per post-close pass (up to
+> 20 a pass) so their snapshots settle; before this they were never graded,
+> which would have censored most of the sample under weekly rotation.
+
 **Question.** For the names the engine runs on, is implied vol above the
 realised vol that followed, and by how much — the same question
 `vrp_check.py` answered for SPX, on the names that matter.

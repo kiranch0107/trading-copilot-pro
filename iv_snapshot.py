@@ -60,6 +60,11 @@ TRADING_DAYS = 252
 HAC_LAG = FORWARD_SESSIONS - 1      # overlapping windows -> Newey-West
 READING_SESSIONS = 126              # six months of sessions before a reading
 MAX_IV_POINTS = 500.0               # above this the quote is garbage, not vol
+# THE WINDOW MUST BE WHOLE (external review 2026-10-19, N04; BACKLOG 35).
+# Consecutive sessions are at most this many calendar days apart: Thu -> Mon
+# over a Friday holiday, or Fri -> Tue over a Monday one. A larger gap means
+# the provider is missing a session and the 21 closes are not 21 sessions.
+MAX_SESSION_GAP_DAYS = 4
 
 
 # ---------------------------------------------------------------------------
@@ -104,10 +109,22 @@ def realised_vol_points(closes: list, window: int = RV_WINDOW) -> float | None:
 def forward_realised_points(closes_after: list, sessions: int = FORWARD_SESSIONS) -> float | None:
     """Annualised vol of the FIRST `sessions` returns after the snapshot:
     closes_after[0] is the snapshot day's close, so the window is the
-    `sessions` closes that follow it. None until all of them exist."""
-    cs = [float(c) for c in closes_after if c is not None and float(c) > 0]
-    if len(cs) < sessions + 1:
+    `sessions` closes that follow it. None until all of them exist.
+
+    STRICT (N04): a missing, non-finite or non-positive close inside the
+    window returns None. It used to be dropped, which compressed time and
+    computed a 21-session vol over fewer sessions without saying so."""
+    if len(closes_after) < sessions + 1:
         return None
+    cs = []
+    for c in closes_after[: sessions + 1]:
+        try:
+            v = float(c)
+        except (TypeError, ValueError):
+            return None
+        if not (math.isfinite(v) and v > 0):
+            return None
+        cs.append(v)
     rets = [math.log(cs[i] / cs[i - 1]) for i in range(1, sessions + 1)]
     m = sum(rets) / len(rets)
     var = sum((r - m) ** 2 for r in rets) / (len(rets) - 1)
@@ -201,18 +218,93 @@ def record(date: str, ticker: str, expiry: str, dte: int, strike: float,
 # Grading: the premium, 21 sessions later
 # ---------------------------------------------------------------------------
 
-def grade(fetch_closes, path: Path | None = None) -> dict:
+def _days_between(a: str, b: str) -> int:
+    import datetime as _dt
+    return (_dt.date.fromisoformat(b) - _dt.date.fromisoformat(a)).days
+
+
+def window_after(by_date: dict, anchor: str, sessions: int = FORWARD_SESSIONS,
+                 sessions_between=None):
+    """
+    The snapshot day's close and the `sessions` DISTINCT sessions after it,
+    from `by_date` ({"YYYY-MM-DD": close}). Returns (dates, closes, None) or
+    (None, None, reason):
+
+      anchor_missing  the history passes over the snapshot date without it
+                      (or starts after it): a shifted window is not this
+                      snapshot's window, so it is never computed
+      unsettled       fewer than `sessions` sessions exist after the anchor
+      gap             a session is missing from the provider's history.
+                      With `sessions_between(a, b)` injected (the scanner
+                      passes its exchange calendar) every consecutive pair
+                      must be exactly one session apart, which catches a
+                      missing Tuesday. Without it the rule is the calendar
+                      gap MAX_SESSION_GAP_DAYS, which catches only a hole
+                      next to a weekend; stdlib has no exchange calendar.
+      bad_close       a close in the window is missing, non-finite or <= 0
+
+    The review's case: a 22-row history with one date repeated counted as 21
+    sessions, and a history that started before the snapshot but skipped its
+    date produced a premium for a window that began a day late. Neither can
+    here: sessions are distinct dates, and the anchor must be one of them.
+    """
+    anchor = str(anchor)[:10]
+    dates = sorted(by_date)
+    if not dates:
+        return None, None, "unsettled"
+    if anchor not in by_date:
+        return None, None, ("anchor_missing" if dates[-1] > anchor else "unsettled")
+    after = [d for d in dates if d > anchor]
+    if len(after) < sessions:
+        return None, None, "unsettled"
+    win = [anchor] + after[:sessions]
+    for a, b in zip(win, win[1:]):
+        if sessions_between is not None:
+            if sessions_between(a, b) != 1:
+                return None, None, "gap"
+        elif _days_between(a, b) > MAX_SESSION_GAP_DAYS:
+            return None, None, "gap"
+    vals = []
+    for d in win:
+        try:
+            v = float(by_date[d])
+        except (TypeError, ValueError):
+            return None, None, "bad_close"
+        if not (math.isfinite(v) and v > 0):
+            return None, None, "bad_close"
+        vals.append(v)
+    return win, vals, None
+
+
+def closes_hash(dates: list, closes: list) -> str:
+    """Fingerprint of the exact dated closes a premium was computed from."""
+    import hashlib
+    body = ",".join(f"{d}:{float(c):.4f}" for d, c in zip(dates, closes))
+    return hashlib.sha256(body.encode()).hexdigest()[:16]
+
+
+GRADE_HOLDS = ("anchor_missing", "gap", "bad_close")   # counted, left open, never graded
+
+
+def grade(fetch_closes, path: Path | None = None, sessions_between=None) -> dict:
     """
     For every iv row without a premium row, `fetch_closes(ticker)` returns
     [{"date", "close"}, ...] ascending; a premium row is written when the
-    21 sessions after the snapshot exist. One fetch per ticker. Never raises
-    on a row.
+    snapshot date itself and the 21 distinct, gap-free, finite sessions after
+    it exist (window_after). One fetch per ticker. Never raises on a row.
+
+    A window that fails validation is HELD, not graded and not voided: it is
+    counted under its reason and stays open for a later, better fetch. The
+    premium row records the window it was computed from (anchor, first and
+    last session) and a hash of the dated closes, so the result can be
+    reproduced or disputed.
     """
     rows = read_all(path)
     graded = {(r.get("ticker"), r.get("date")) for r in rows if r.get("kind") == "premium"}
     open_rows = [r for r in rows if r.get("kind") == "iv"
                  and (r.get("ticker"), r.get("date")) not in graded]
-    rep = {"graded": 0, "unsettled": 0, "no_data": 0, "failed": 0, "detail": []}
+    rep = {"graded": 0, "unsettled": 0, "no_data": 0, "failed": 0,
+           "anchor_missing": 0, "gap": 0, "bad_close": 0, "detail": []}
     by_tk: dict = {}
     for r in open_rows:
         by_tk.setdefault(r["ticker"], []).append(r)
@@ -223,19 +315,36 @@ def grade(fetch_closes, path: Path | None = None) -> dict:
             rep["failed"] += len(snaps); rep["detail"].append(f"{tk}: {e}"); continue
         if not closes:
             rep["no_data"] += len(snaps); continue
-        closes = sorted(closes, key=lambda c: c["date"])
+        by_date: dict = {}
+        conflict = None
+        for c in closes:
+            d = str(c.get("date"))[:10]
+            if d in by_date and by_date[d] != c.get("close"):
+                conflict = d
+            by_date[d] = c.get("close")
+        if conflict:
+            rep["failed"] += len(snaps)
+            rep["detail"].append(f"{tk}: two different closes dated {conflict} — history rejected")
+            continue
         for s in snaps:
             try:
-                after = [c["close"] for c in closes if c["date"] >= s["date"]]
-                if not after or closes[0]["date"] > s["date"]:
-                    rep["no_data"] += 1; continue
-                realised = forward_realised_points(after)
-                if realised is None:
+                win, vals, why = window_after(by_date, s["date"],
+                                              sessions_between=sessions_between)
+                if why == "unsettled":
                     rep["unsettled"] += 1; continue
+                if why:
+                    rep[why] += 1
+                    rep["detail"].append(f"{tk} {s['date']}: held, {why}")
+                    continue
+                realised = forward_realised_points(vals)
+                if realised is None:                     # cannot happen past window_after
+                    rep["bad_close"] += 1; continue
                 _append({"kind": "premium", "date": s["date"], "ticker": tk,
                          "realised": round(realised, 4),
                          "premium": round(float(s["iv"]) - realised, 4),
-                         "sessions": FORWARD_SESSIONS}, path=path)
+                         "sessions": FORWARD_SESSIONS,
+                         "anchor": win[0], "window_start": win[1], "window_end": win[-1],
+                         "closes_hash": closes_hash(win, vals)}, path=path)
                 rep["graded"] += 1
             except Exception as e:                       # noqa: BLE001
                 rep["failed"] += 1; rep["detail"].append(f"{tk} {s.get('date')}: {e}")
@@ -271,9 +380,13 @@ def summary(path: Path | None = None) -> dict:
     pooled = {"days": len(daily),
               "mean": (sum(daily) / len(daily)) if daily else float("nan"),
               "se_hac": hac_se(daily) if len(daily) >= 2 else float("nan")}
+    done = {(r["ticker"], r["date"]) for r in prems}
+    unresolved = sorted(r["date"] for r in ivs if (r["ticker"], r["date"]) not in done)
     return {"snapshots": len(ivs), "graded": len(prems), "sessions": len(dates),
             "first": dates[0] if dates else None, "last": dates[-1] if dates else None,
             "names": per_name, "pooled": pooled,
+            "unresolved": len(unresolved),
+            "oldest_unresolved": unresolved[0] if unresolved else None,
             "is_reading": len(dates) >= READING_SESSIONS}
 
 
@@ -286,7 +399,8 @@ def report(path: Path | None = None) -> int:
         print("  empty. The post-close pass has not written a snapshot yet.")
         return 0
     print(f"  {s['snapshots']} snapshots on {s['sessions']} sessions "
-          f"({s['first']} -> {s['last']}), {s['graded']} graded")
+          f"({s['first']} -> {s['last']}), {s['graded']} graded, "
+          f"{s['unresolved']} unresolved (oldest {s['oldest_unresolved']})")
     print(f"  {'name':<8}{'snaps':>7}{'graded':>8}{'mean':>9}{'HAC se':>9}{'% >0':>7}")
     for tk, v in s["names"].items():
         print(f"  {tk:<8}{v['snapshots']:>7}{v['graded']:>8}{v['mean']:>+9.2f}"
@@ -378,6 +492,78 @@ def selftest() -> int:
     assert g3["unsettled"] == 1 and g3["graded"] == 0, g3
     print("grading          : one premium per snapshot after 21 sessions, idempotent, "
           "unsettled stays open, one fetch per name")
+
+    # ── THE WINDOW MUST BE WHOLE (external review 2026-10-19, N04) ──
+    # Business-day histories so the gap rule is exercised on real spacing.
+    import datetime as _dtw
+    def _bdays(start: _dtw.date, n: int) -> list:
+        out, d = [], start
+        while len(out) < n:
+            if d.weekday() < 5:
+                out.append(d.isoformat())
+            d += _dtw.timedelta(days=1)
+        return out
+    _dates = _bdays(_dtw.date(2026, 9, 1), 30)
+    _hist = {d: closes[i] for i, d in enumerate(_dates)}
+    _anchor = _dates[2]
+    win, vals, why = window_after(_hist, _anchor)
+    assert why is None and win[0] == _anchor and len(win) == 22 and win[1] == _dates[3] \
+        and win[-1] == _dates[23], (why, win[:2], win[-1])
+    # the anchor itself missing, history on both sides: HELD, never a shifted window
+    _no_anchor = {d: v for d, v in _hist.items() if d != _anchor}
+    assert window_after(_no_anchor, _anchor)[2] == "anchor_missing"
+    # history that starts after the snapshot: held the same way
+    assert window_after({d: v for d, v in _hist.items() if d > _anchor}, _anchor)[2] == "anchor_missing"
+    # history that has not reached the snapshot yet: unsettled, not held
+    assert window_after({d: v for d, v in _hist.items() if d < _anchor}, _anchor)[2] == "unsettled"
+    # 22 rows dated the same day are ONE session: unsettled
+    assert window_after({_anchor: 100.0}, _anchor)[2] == "unsettled"
+    assert window_after({d: v for d, v in _hist.items() if d <= _dates[22]}, _anchor)[2] == "unsettled", \
+        "20 sessions after the anchor is not a closed window"
+    # a missing session inside the window. With the exchange calendar
+    # injected a single missing Tuesday (09-15) is a gap; without it only a
+    # hole next to a weekend is visible (Fri 09-11 and Mon 09-14 removed:
+    # Thu -> Tue is 5 days), and a lone Tuesday is NOT, which is why the
+    # scanner injects its calendar.
+    def _weekday_sessions(a, b):
+        da, db = _dtw.date.fromisoformat(a), _dtw.date.fromisoformat(b)
+        return sum(1 for i in range(1, (db - da).days + 1)
+                   if (da + _dtw.timedelta(days=i)).weekday() < 5)
+    _gappy = {d: v for d, v in _hist.items() if d != _dates[10]}
+    assert window_after(_gappy, _anchor, sessions_between=_weekday_sessions)[2] == "gap"
+    assert window_after(_hist, _anchor, sessions_between=_weekday_sessions)[2] is None
+    _hole = {d: v for d, v in _hist.items() if d not in (_dates[8], _dates[9])}
+    assert window_after(_hole, _anchor)[2] == "gap", window_after(_hole, _anchor)
+    assert window_after(_gappy, _anchor)[2] is None, "stdlib fallback cannot see a lone missing Tuesday"
+    # a bad close inside the window is held, never dropped to compress time
+    for bad in (None, 0.0, -1.0, float("nan"), float("inf"), "x"):
+        _badh = dict(_hist); _badh[_dates[12]] = bad
+        assert window_after(_badh, _anchor)[2] == "bad_close", bad
+    assert forward_realised_points([100.0, 0.0] + [100.0] * 20) is None
+    assert forward_realised_points([100.0, None] + [100.0] * 20) is None
+    print("window           : exact anchor, 21 distinct sessions, no gap > 4 days, finite closes; else HELD")
+
+    # grade() applies it and records the window: the anchor-missing snapshot is
+    # counted and left open, the whole one is graded with its window and hash.
+    tmp3 = Path(tempfile.mkdtemp()) / "iv3.jsonl"
+    record(_anchor, "XYZ", "2026-10-02", 30, 100.0, 100.0, 40.0, 30.0, "yahoo", path=tmp3)
+    record(_dates[4], "XYZ", "2026-10-02", 30, 100.0, 100.0, 41.0, 30.0, "yahoo", path=tmp3)
+    _series_no_anchor = [{"date": d, "close": v} for d, v in sorted(_no_anchor.items())]
+    g4 = grade(lambda tk: _series_no_anchor, path=tmp3)
+    assert g4["anchor_missing"] == 1 and g4["graded"] == 1, g4
+    _p4 = [r for r in read_all(tmp3) if r["kind"] == "premium"]
+    assert len(_p4) == 1 and _p4[0]["anchor"] == _dates[4] and _p4[0]["window_start"] == _dates[5] \
+        and _p4[0]["window_end"] == _dates[25] and len(_p4[0]["closes_hash"]) == 16, _p4
+    g5 = grade(lambda tk: [{"date": d, "close": v} for d, v in sorted(_hist.items())], path=tmp3)
+    assert g5["graded"] == 1 and g5["anchor_missing"] == 0, (g5, "a held snapshot is graded by a later whole fetch")
+    _dup = [{"date": _dates[0], "close": 100.0}, {"date": _dates[0], "close": 101.0}]
+    record(_dates[6], "DUP", "2026-10-02", 30, 100.0, 100.0, 41.0, 30.0, "yahoo", path=tmp3)
+    g6 = grade(lambda tk: _dup if tk == "DUP" else None, path=tmp3)
+    assert g6["failed"] == 1 and any("two different closes" in d for d in g6["detail"]), g6
+    s3 = summary(tmp3)
+    assert s3["unresolved"] == 1 and s3["oldest_unresolved"] == _dates[6], s3
+    print("grade holds      : anchor missing -> held and counted, graded on a later whole fetch; "
+          "conflicting duplicates reject the history; unresolved visible")
 
     # Reading gate and pooled SE.
     s = summary(tmp2)
