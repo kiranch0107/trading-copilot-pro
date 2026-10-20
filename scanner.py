@@ -816,11 +816,12 @@ def analyze(df: pd.DataFrame, ticker: str,
     _setup = {k: r.get(k) for k in
               ("price", "entry", "stop", "target", "rr", "rsi", "adx", "atr",
                "strength", "high_quality", "filters_pass", "filters_total")}
-    _cfg = {"adx_min": PARAMS.adx_min, "min_rr": PARAMS.min_rr,
-            "atr_stop_mult": PARAMS.atr_stop_mult,
-            "atr_tgt_mult": PARAMS.atr_tgt_mult,
-            "weekly_confirm": PARAMS.weekly_confirm,
-            "longs_only": risk_params.LONGS_ONLY}
+    # ONE CONFIG DICT FOR EVERY ROW. This was a second literal beside
+    # _scan_cfg(): when the fingerprint fields were completed on 2026-10-19
+    # the scan rows moved to the new hash and the signal rows did not. Found
+    # in the 2026-10-20 log; the selftest now asserts a recorded signal row
+    # carries the same fingerprint as the scan row.
+    _cfg = _scan_cfg()
 
     # THE HQ TIER IS A TAG ON THE RECORD, NOT A GATE ON IT. Owner decision
     # 2026-10-08, pre-registered in results/forward_record_preregistration.md:
@@ -1669,6 +1670,15 @@ def _selftest_body() -> int:
             f"three signals fired and {len(_rows)} were logged. The ones that "
             f"never became alerts are exactly the ones that make the record "
             f"worth having")
+        # ONE FINGERPRINT FOR EVERY ROW (2026-10-20): the rows the REAL
+        # analyze() writes must carry _scan_cfg()'s hash, the same one the
+        # scan rows carry. A second config literal in analyze() split the
+        # 10-20 scan's rows across two hashes; this is the path that writes
+        # signal rows, so this is where the guard has to sit.
+        _fp_sig = forward_log.config_fingerprint(_scan_cfg())
+        assert all(x["config"] == _fp_sig for x in _rows), (
+            {x["config"] for x in _rows}, _fp_sig,
+            "signal rows written by analyze() carry a different fingerprint from _scan_cfg()")
         # THE TIER TAGS; IT DOES NOT GATE (results/forward_record_preregistration.md).
         _byt = {x["ticker"]: x for x in _rows}
         assert _byt["ZC"]["decision"] == "taken" and _byt["ZC"]["hq"] is False, (
