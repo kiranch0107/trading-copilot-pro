@@ -170,7 +170,19 @@ def _gh_get(path: str) -> tuple[list | None, str | None, str | None]:
         return None, None, f"GitHub GET failed: {e}"
 
 
-def _gh_put(path: str, data: list, message: str, remerge=None) -> str | None:
+# THE VERSION THIS SESSION LOADED, per file (second review 2026-10-20). An
+# app-owned file (the journal, the skip log, the alert log) is written whole,
+# so a second app session that loaded an older copy would overwrite the first
+# session's rows. save_result() refuses that: a non-merged file is written
+# only when the remote sha still equals the one this session loaded; a file
+# loaded from the local fallback is "unknown" and is not overwritten at all
+# until it is reloaded from the repo.
+_LOADED_SHA: dict = {}
+SHA_UNKNOWN = "unknown"
+
+
+def _gh_put(path: str, data: list, message: str, remerge=None,
+            expected_sha=None) -> str | None:
     """
     Write a JSON file to the repo. Returns an error string, or None on success.
 
@@ -203,8 +215,17 @@ def _gh_put(path: str, data: list, message: str, remerge=None) -> str | None:
             remote_now, sha, err = _gh_get(path)
             if err:
                 return err
-            if attempt and remerge is not None:
+            # ONE SNAPSHOT FOR THE MERGE AND THE SHA, on EVERY attempt (second
+            # review 2026-10-20). Re-merging only on a retry left the first
+            # PUT carrying a merge against an older GET than the sha it sent:
+            # a remote change between the two reads was overwritten without
+            # any conflict being raised.
+            if remerge is not None:
                 data = remerge(remote_now if remote_now is not None else [])
+            elif expected_sha is not None and sha != expected_sha:
+                return (f"{path} changed in the repo since this session loaded it "
+                        f"(loaded {str(expected_sha)[:7]}, now {str(sha)[:7]}); "
+                        f"reload the page and apply the change again")
             body = {
                 "message": message,
                 "content": base64.b64encode(
@@ -216,6 +237,14 @@ def _gh_put(path: str, data: list, message: str, remerge=None) -> str | None:
             r = requests.put(f"{_GH_API}/repos/{gh_repo()}/contents/{path}",
                              headers=_gh_headers(), json=body, timeout=10)
             if r.status_code in (200, 201):
+                try:
+                    new_sha = (r.json() or {}).get("content", {}).get("sha")
+                except Exception:                        # noqa: BLE001
+                    new_sha = None
+                if new_sha:
+                    _LOADED_SHA[path] = new_sha
+                else:
+                    _LOADED_SHA.pop(path, None)
                 return None
             if r.status_code in _PUT_RETRY_STATUSES:
                 last = f"GitHub PUT {r.status_code}: {r.text[:160]}"
@@ -342,6 +371,11 @@ def merge_positions(local: list | None, remote: list,
         return list(by_id.values())
 
     by_id = {p["id"]: p for p in local}
+    if closed_ids is not None:
+        # A LOCAL record whose id the journal says is closed is a stale
+        # session's copy (second review 2026-10-20); it must not resurrect
+        # a position another session closed.
+        by_id = {k: v for k, v in by_id.items() if k not in closed_ids}
     for rp in remote:
         lp = by_id.get(rp["id"])
         if lp is None:
@@ -416,11 +450,14 @@ def load(path: Path) -> list:
         if err:
             logger.warning("%s — falling back to local disk", err)
             st.session_state["_gh_last_error"] = err
+            _LOADED_SHA[path.name] = SHA_UNKNOWN     # remote state not seen
         elif data is not None:
             _LOCAL_READ_FAILED.discard(path.name)
+            _LOADED_SHA[path.name] = _sha
             return data
         else:
             _LOCAL_READ_FAILED.discard(path.name)
+            _LOADED_SHA.pop(path.name, None)         # no file yet: first write is unconditional
             return []          # file not created yet
     local = _local_load(path)
     if local is None:
@@ -443,11 +480,19 @@ def save_result(path: Path, data: list, *, merge: bool = False,
     position: the journal row has to land before the position is removed)
     read this instead of save()'s UI side effect (BACKLOG 35 group 4).
     """
-    _local_save(path, data)     # best-effort cache; wiped on container restart
+    local_ok = _local_save(path, data)     # best-effort cache; wiped on container restart
     if not gh_enabled():
-        return data, None
+        # With GitHub off, local disk IS the store: a failed write is a failure.
+        return data, (None if local_ok else f"could not write {path} on local disk")
     remerge = None
     final = {"data": data}
+    expected = None
+    if not merge:
+        expected = _LOADED_SHA.get(path.name)
+        if expected == SHA_UNKNOWN:
+            return data, (f"{path.name} was loaded from the local fallback and the repo copy "
+                          f"has not been seen; reload before saving so nothing in the "
+                          f"repo is overwritten blind")
     if merge:
         incoming = list(data)
         complete = not local_read_failed(path)
@@ -464,7 +509,8 @@ def save_result(path: Path, data: list, *, merge: bool = False,
             # RE-SAVE LOCALLY so the on-disk cache reflects the MERGED state
             # (see save() below for why).
             _local_save(path, data)
-    err = _gh_put(path.name, data, f"chore: update {path.name} from app", remerge=remerge)
+    err = _gh_put(path.name, data, f"chore: update {path.name} from app",
+                  remerge=remerge, expected_sha=expected)
     if final["data"] is not data:
         # A conflict retry re-merged against a newer remote: the cache and
         # the caller get what was actually written, not the first merge.
@@ -651,6 +697,60 @@ def selftest() -> int:
             _ret, _err = save_result(pathlib.Path(_d3) / "trade_journal.json", [{"id": "J"}])
             assert _err and "401" in _err, _err
         print("save_result             : a failed durable write is returned, not only displayed")
+
+        # ── SECOND REVIEW 2026-10-20: the FIRST PUT merges against the sha it sends ──
+        # GET 1 (save_result's pre-merge): A OPEN, sha s1. GET 2 (_gh_put's):
+        # A EXIT_SIGNALLED, sha s2 — the monitor landed between the two reads.
+        # The single PUT must carry EXIT_SIGNALLED; there is no conflict to
+        # retry on, so the old code overwrote the exit flag.
+        _bodies2: list = []
+        def _put_cap2(seq):
+            def _put(url, headers=None, json=None, timeout=None):
+                calls["put"] += 1; _bodies2.append(json)
+                return seq[min(calls["put"] - 1, len(seq) - 1)]
+            return _put
+        with _tmp.TemporaryDirectory() as _d4:
+            _p4 = pathlib.Path(_d4) / "open_positions.json"; _p4.write_text("[]")
+            calls["get"] = calls["put"] = 0
+            _fk2 = _fake([_get1, _get2], []); _fk2.put = _put_cap2([_R(201)])
+            globals()["requests"] = _fk2
+            _ret4, _err4 = save_result(_p4, [{"id": "A", "status": "OPEN"}], merge=True)
+            assert _err4 is None and calls["put"] == 1
+            _sent4 = _json.loads(_b64.b64decode(_bodies2[0]["content"]).decode())
+            assert {p["id"]: p for p in _sent4}["A"]["status"] == "EXIT_SIGNALLED", (
+                _sent4, "the first PUT carried a merge against an older read than its sha")
+        print("one snapshot            : the first PUT merges against the same read as its sha")
+
+        # ── a stale LOCAL copy of a closed position does not resurrect it ──
+        assert merge_positions([{"id": "A", "status": "OPEN"}], [], closed_ids={"A"}) == []
+        assert merge_positions([{"id": "A", "status": "OPEN"}], []) != [], "without closed_ids the old rule stands"
+        print("local tombstone         : a closed id is dropped from the local list too")
+
+        # ── APP-OWNED FILES ARE WRITTEN ONLY AT THE VERSION THIS SESSION LOADED ──
+        with _tmp.TemporaryDirectory() as _d5:
+            _p5 = pathlib.Path(_d5) / "trade_journal.json"
+            _LOADED_SHA["trade_journal.json"] = "s1"
+            calls["get"] = calls["put"] = 0
+            globals()["requests"] = _fake([_R(200, payload={"content": _b64.b64encode(b"[]").decode(), "sha": "s2"})], [_R(201)])
+            _r5, _e5 = save_result(_p5, [{"id": "J"}])
+            assert _e5 and "changed in the repo" in _e5 and calls["put"] == 0, (_e5, calls)
+            calls["get"] = calls["put"] = 0
+            globals()["requests"] = _fake([_R(200, payload={"content": _b64.b64encode(b"[]").decode(), "sha": "s1"})], [_R(201)])
+            _r5, _e5 = save_result(_p5, [{"id": "J"}])
+            assert _e5 is None and calls["put"] == 1, (_e5, calls)
+            _LOADED_SHA["trade_journal.json"] = SHA_UNKNOWN
+            calls["get"] = calls["put"] = 0
+            _r5, _e5 = save_result(_p5, [{"id": "J"}])
+            assert _e5 and "reload before saving" in _e5 and calls["put"] == 0, (_e5, calls)
+            _LOADED_SHA.pop("trade_journal.json", None)
+        print("conditional write       : a changed or unseen remote refuses the overwrite; a matching version writes")
+
+        # ── GITHUB OFF: a failed local write is a failure ──
+        globals()["_gh_token"] = lambda: None
+        _r6, _e6 = save_result(pathlib.Path("/proc/no-such-dir/x.json"), [{"id": "L"}])
+        assert _e6 and "local disk" in _e6, _e6
+        globals()["_gh_token"] = lambda: "test-token"
+        print("local backend           : an unwritable local store is reported, not success")
 
         # ── THE CACHE MUST HOLD THE MERGED STATE, NOT THE PRE-MERGE COPY ──
         # merge_positions() was tested in isolation; save() was not, and the

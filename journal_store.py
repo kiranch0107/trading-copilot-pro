@@ -96,9 +96,11 @@ def load_alerts() -> list:
     return st.session_state[_SS_ALERTS]
 
 
-def save_alerts(d: list) -> None:
+def save_alerts(d: list) -> str | None:
     st.session_state[_SS_ALERTS] = d
-    gh_sync.save(ALERT_LOG_FILE, d)
+    _data, err = gh_sync.save_result(ALERT_LOG_FILE, d)
+    st.session_state["_gh_last_error"] = err
+    return err
 
 
 def load_journal() -> list:
@@ -109,12 +111,17 @@ def load_journal() -> list:
 
 def save_journal(d: list) -> str | None:
     """Returns the durable-write error, or None. close_position() reads it:
-    a journal row that did not land must not remove the position."""
-    st.session_state[_SS_JOURNAL] = d
+    a journal row that did not land must not remove the position.
+
+    The session's copy moves only on success (second review 2026-10-20):
+    the journal feeds the statistics and the position tombstones, so a row
+    that did not land durably must not be read as if it had."""
     _data, err = gh_sync.save_result(JOURNAL_FILE, d)
     st.session_state["_gh_last_error"] = err
     if err:
-        st.error(f"⚠️ **Could not save the journal to GitHub** — {err}")
+        st.error(f"⚠️ **Could not save the journal** — {err}")
+    else:
+        st.session_state[_SS_JOURNAL] = d
     return err
 
 
@@ -137,7 +144,7 @@ def load_positions() -> list:
     return st.session_state[_SS_POSITIONS]
 
 
-def save_positions(d: list) -> None:
+def save_positions(d: list) -> str | None:
     # merge=True: exit_monitor.py also writes this file independently (to
     # flip OPEN -> EXIT_SIGNALLED). See gh_sync.save()'s docstring — this is
     # the one file in the app where a plain overwrite could discard an exit
@@ -147,8 +154,12 @@ def save_positions(d: list) -> None:
     # another app session and must survive this write (BACKLOG 35 group 4).
     st.session_state[_SS_POSITIONS] = d
     closed = {j.get("id") for j in load_journal() if j.get("id")}
-    st.session_state[_SS_POSITIONS] = gh_sync.save(POSITIONS_FILE, d, merge=True,
-                                                   closed_ids=closed)
+    data, err = gh_sync.save_result(POSITIONS_FILE, d, merge=True, closed_ids=closed)
+    st.session_state[_SS_POSITIONS] = data
+    st.session_state["_gh_last_error"] = err
+    if err:
+        st.error(f"⚠️ **Could not save open positions** — {err}")
+    return err
 
 
 def load_skipped() -> list:
@@ -354,9 +365,14 @@ def close_position(position_id: str, exit_premium: float, outcome: str,
     if err:
         # The row did not land durably: keep the position so the close can
         # be retried, and say so. Removing it here is how a close vanished.
-        return {"ok": False, "error": err, "id": position_id}
-    save_positions([p for p in positions if p["id"] != position_id])
-    return {"ok": True, "error": None, "id": position_id}
+        return {"ok": False, "journaled": False, "error": err, "id": position_id}
+    perr = save_positions([p for p in positions if p["id"] != position_id])
+    if perr:
+        # The journal row landed; the position's removal did not. The close
+        # is PENDING: closing again rewrites the same journal row (one per
+        # id) and retries the removal.
+        return {"ok": False, "journaled": True, "error": perr, "id": position_id}
+    return {"ok": True, "journaled": True, "error": None, "id": position_id}
 
 
 def log_alert(ticker, trend, strength, entry, stop, target, rr, price,
@@ -426,12 +442,22 @@ def add_journal_trade(alert_id, ticker, trend, entry, stop, target,
         "planned_rr": rr, "exit_price": exit_price,
         "outcome": outcome, "actual_rr": pnl_r, "notes": notes,
     })
-    return save_journal(journal)
+    # REGRESSION FIXED (second review 2026-10-20): `return save_journal(...)`
+    # had made the alert bookkeeping below unreachable, so a successful share
+    # close never marked its alert journaled. The journal's durability decides
+    # the return; the bookkeeping runs on success and reports its own failure
+    # without undoing the journal row.
+    err = save_journal(journal)
+    if err:
+        return err
     alerts = load_alerts()
     for a in alerts:
         if a["id"] == alert_id:
             a["journaled"] = True
-    save_alerts(alerts)
+    book_err = save_alerts(alerts)
+    if book_err:
+        logger.warning("journal row saved; alert bookkeeping did not: %s", book_err)
+    return None
 
 
 def trade_mode(entry: dict) -> str:
@@ -847,14 +873,58 @@ def selftest() -> int:
         assert _res2["ok"] is True and not any(p["id"] == _pf["id"] for p in _mem["pos"])
         assert sum(1 for j in _mem["jrn"] if j["id"] == _pf["id"]) == 1, "a retried close writes one row"
         assert close_position("nope", 1.0, "WIN")["ok"] is False
+        # journal landed, position removal failed: pending, journaled, kept
+        _pg = open_option_position("PG", "CALL", 150.0, "2026-11-20", 1, 1.0, _rules)
+        _g["save_positions"] = lambda d: "GitHub PUT 500: boom"
+        _res3 = close_position(_pg["id"], 1.2, "WIN")
+        assert _res3["ok"] is False and _res3["journaled"] is True and "500" in _res3["error"], _res3
+        assert any(p["id"] == _pg["id"] for p in _mem["pos"]), "removal failed: the position stays"
+        _g["save_positions"] = lambda d: (_mem.__setitem__("pos", list(d)) or None)
+        assert close_position(_pg["id"], 1.2, "WIN")["ok"] is True
+        assert sum(1 for j in _mem["jrn"] if j["id"] == _pg["id"]) == 1, "the retry rewrote one row"
+        # share-close bookkeeping (regression fixed): success marks the alert
+        # journaled; a failed journal save marks nothing and returns the error.
+        _alerts = [{"id": "AL1", "journaled": False}]
+        _saved_al = {k: _g[k] for k in ("load_alerts", "save_alerts")}
+        try:
+            _g["load_alerts"] = lambda: _alerts
+            _g["save_alerts"] = lambda d: None
+            assert add_journal_trade("AL1", "AAA", "Bullish", 100.0, 98.0, 106.0, 3.0, 104.0, "WIN",
+                                     "", setup_date="2026-10-01") is None
+            assert _alerts[0]["journaled"] is True, "a successful share close must mark its alert journaled"
+            _alerts[0]["journaled"] = False
+            _g["save_journal"] = lambda d: "GitHub PUT 401: Bad credentials"
+            assert add_journal_trade("AL1", "AAA", "Bullish", 100.0, 98.0, 106.0, 3.0, 104.0, "WIN",
+                                     "", setup_date="2026-10-01") == "GitHub PUT 401: Bad credentials"
+            assert _alerts[0]["journaled"] is False, "a failed journal save marks nothing"
+            _g["save_journal"] = lambda d: (_mem.__setitem__("jrn", list(d)) or None)
+        finally:
+            _g.update(_saved_al)
         # ── IDS DO NOT COLLIDE WITHIN A SECOND ──
         _a = open_option_position("MSFT", "CALL", 400.0, "2026-11-20", 1, 2.0, _rules)
         _b = open_option_position("MSFT", "CALL", 400.0, "2026-11-20", 1, 2.0, _rules)
         assert _a["id"] != _b["id"] and _a["id"].startswith("OPT_MSFT_"), (_a["id"], _b["id"])
         print("acknowledged close      : failed journal write keeps the position and reports; "
-              "retry closes once; same-second ids differ")
+              "retry closes once; same-second ids differ; a failed removal is a pending close; "
+              "share-close bookkeeping runs on success")
     finally:
         _g.update(_saved_io)
+
+    # ── save_journal MOVES THE SESSION COPY ONLY ON SUCCESS ──
+    _real_sr = gh_sync.save_result
+    try:
+        st.session_state[_SS_JOURNAL] = [{"id": "old"}]
+        gh_sync.save_result = lambda path, data, **kw: (data, "GitHub PUT 401: Bad credentials")
+        assert save_journal([{"id": "old"}, {"id": "new"}]) is not None
+        assert [j["id"] for j in st.session_state[_SS_JOURNAL]] == ["old"], \
+            "a row that did not land durably must not enter the session's journal"
+        gh_sync.save_result = lambda path, data, **kw: (data, None)
+        assert save_journal([{"id": "old"}, {"id": "new"}]) is None
+        assert [j["id"] for j in st.session_state[_SS_JOURNAL]] == ["old", "new"]
+    finally:
+        gh_sync.save_result = _real_sr
+        st.session_state.pop(_SS_JOURNAL, None)
+    print("journal session copy    : updated on durable success only")
     print("signal key              : stored on the position, carried to the "
           "journal row, None when not given")
 

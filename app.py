@@ -2259,9 +2259,12 @@ with TAB_POSITIONS:
                         st.success(f"{p['ticker']} closed and logged.")
                         st.rerun()
                     else:
-                        st.error(f"{p['ticker']} NOT closed — the journal row did not save "
-                                 f"({_cres.get('error')}). The position stays open; fix the "
-                                 f"sync and close it again.")
+                        st.error((f"{p['ticker']}: journal row saved but the position could not "
+                                  f"be removed ({_cres.get('error')}). Close it again to retry.")
+                                 if _cres.get("journaled") else
+                                 (f"{p['ticker']} NOT closed — the journal row did not save "
+                                  f"({_cres.get('error')}). The position stays open; fix the "
+                                  f"sync and close it again."))
         st.divider()
 
     # ── Currently open ──
@@ -2318,9 +2321,12 @@ with TAB_POSITIONS:
                             st.success(f"{p['ticker']} closed and logged.")
                             st.rerun()
                         else:
-                            st.error(f"{p['ticker']} NOT closed — the journal row did not save "
-                                     f"({_cres.get('error')}). The position stays open; fix the "
-                                     f"sync and close it again.")
+                            st.error((f"{p['ticker']}: journal row saved but the position could not "
+                                      f"be removed ({_cres.get('error')}). Close it again to retry.")
+                                     if _cres.get("journaled") else
+                                     (f"{p['ticker']} NOT closed — the journal row did not save "
+                                      f"({_cres.get('error')}). The position stays open; fix the "
+                                      f"sync and close it again."))
 
     st.divider()
 
