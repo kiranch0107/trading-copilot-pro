@@ -1920,6 +1920,40 @@ verified here and are not addressed.
 
 ---
 
+## 36. Second external review (2026-10-20): persistence completed, a regression of mine fixed, numeric validation and rule-level gate precision open — VERIFIED AND PARTLY FIXED 2026-10-20
+
+The owner had the 2026-10-19 fixes re-audited (reviewed SHA 340a221).
+Verification and response in `results/external_review_2026-10-20_response.md`;
+every claim checked held. **Fixed 2026-10-20:** the first PUT now merges
+against the same GET that supplies its sha (a remote change between two
+reads was overwritten with no conflict); app-owned files are written only
+at the version this session loaded, a changed or unseen remote refuses the
+overwrite (`gh_sync._LOADED_SHA`); a close whose journal row landed but
+whose position removal failed is reported as pending and completes on
+retry; `save_journal` moves the session copy on success only; a stale
+local record of a closed id is dropped in the merge; with GitHub off a
+failed local write is reported; and the regression PR #142 introduced
+(`return save_journal(...)` made the share-close alert bookkeeping
+unreachable) is fixed with both paths tested. Guards falsified.
+
+**Open, group A (small, mechanical):** one validator for finite OHLC,
+positive prices, sorted unique sessions; finite R before `record_outcome`;
+finite spot/strike before an IV row; finite OHLC in the paper grader's
+`session_coverage`; `0 < bid <= ask` and integer contracts in
+`risk_params.check_option_cost`; drop bars dated after today whatever the
+clock; UUID-sized id suffix. **Open, group B (research engines, re-runs
+owed):** backtest warm-up discontinuity, execution bar dropped on missing
+volume, option clock by calendar dates and end-of-sample trades marked
+open, spread maturity, portfolio chronology. **Open, group C (app
+paths):** partial batch retry, contract selection divergence, regime
+minimum history shared with the backtest, macro status wording.
+**Owner's decision:** unrounded gate comparisons (ADX, R:R) are a rule
+change that moves what the record records and need a dated declaration
+before their first row. The three policy items (dry-run rows, next-open
+R:R, opening-target precedence) stay policy.
+
+---
+
 ---
 
 ## Working conventions
