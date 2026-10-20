@@ -1670,6 +1670,15 @@ def _selftest_body() -> int:
             f"three signals fired and {len(_rows)} were logged. The ones that "
             f"never became alerts are exactly the ones that make the record "
             f"worth having")
+        # ONE FINGERPRINT FOR EVERY ROW (2026-10-20): the rows the REAL
+        # analyze() writes must carry _scan_cfg()'s hash, the same one the
+        # scan rows carry. A second config literal in analyze() split the
+        # 10-20 scan's rows across two hashes; this is the path that writes
+        # signal rows, so this is where the guard has to sit.
+        _fp_sig = forward_log.config_fingerprint(_scan_cfg())
+        assert all(x["config"] == _fp_sig for x in _rows), (
+            {x["config"] for x in _rows}, _fp_sig,
+            "signal rows written by analyze() carry a different fingerprint from _scan_cfg()")
         # THE TIER TAGS; IT DOES NOT GATE (results/forward_record_preregistration.md).
         _byt = {x["ticker"]: x for x in _rows}
         assert _byt["ZC"]["decision"] == "taken" and _byt["ZC"]["hq"] is False, (
@@ -2209,10 +2218,6 @@ def _selftest_body() -> int:
             assert "P3:Bullish" not in _state4 and "P4:Bullish" in _state4, \
                 "only the alerted names get a cooldown stamp"
             _rows4 = forward_log.read_all(_tmpl4)
-            _sigs4 = [r for r in _rows4 if r["kind"] == "signal"]
-            assert _sigs4 and all(r["config"] == _fp_now for r in _sigs4), (
-                {r["config"] for r in _sigs4}, _fp_now,
-                "signal rows must carry the same fingerprint as the scan rows (one _scan_cfg)")
             _scans4 = [r for r in _rows4 if r["kind"] == "scan"]
             assert [forward_log.bucket_of(r) for r in _scans4] == ["live", "pool"], _scans4
             assert _scans4[1]["tickers"] == ["P1", "P2", "P3", "P4", "P5", "P6", "P7"] \
