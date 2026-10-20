@@ -1920,7 +1920,7 @@ verified here and are not addressed.
 
 ---
 
-## 36. Second external review (2026-10-20): persistence completed, a regression of mine fixed, numeric validation and rule-level gate precision open — VERIFIED AND PARTLY FIXED 2026-10-20
+## 36. Second and third external reviews (2026-10-20): persistence completed in two passes, a regression of mine fixed, numeric validation and rule-level gate precision open — VERIFIED AND PARTLY FIXED 2026-10-20
 
 The owner had the 2026-10-19 fixes re-audited (reviewed SHA 340a221).
 Verification and response in `results/external_review_2026-10-20_response.md`;
@@ -1935,6 +1935,16 @@ local record of a closed id is dropped in the merge; with GitHub off a
 failed local write is reported; and the regression PR #142 introduced
 (`return save_journal(...)` made the share-close alert bookkeeping
 unreachable) is fixed with both paths tested. Guards falsified.
+
+**Third pass, same day (reviewed 612de5c):** five gaps in the above, all
+confirmed and fixed: the loaded-version ledger is per session
+(`gh_sync._sha_store()` in `st.session_state`), not per process; a failed
+position removal leaves the session's list as persisted so the close is
+retryable; the local fallback copy is written on a successful durable
+write only; closed ids for the merge are the session journal's UNION the
+repo journal's read at save time; a file loaded as absent must be created,
+and refuses if another writer created it since (`SHA_ABSENT`). Guards
+falsified. Response file § "Third pass".
 
 **Open, group A (small, mechanical):** one validator for finite OHLC,
 positive prices, sorted unique sessions; finite R before `record_outcome`;

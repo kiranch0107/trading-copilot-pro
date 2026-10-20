@@ -40,3 +40,20 @@ fallback load; local write failure reported as success; bookkeeping
 unreachable again; failed removal reported ok; session journal updated
 before acknowledgment) each fail the right assertion; files restored
 byte-identical. Full tests.yml harness and 47 consistency checks pass.
+
+## Third pass (same day, reviewed the bot commit 612de5c, code as merged by PR #144)
+
+Five persistence gaps in the fixes above, all CONFIRMED by reading and all
+fixed in the follow-up PR:
+
+| gap | what happened | fix |
+|---|---|---|
+| Shared revision tracking | `_LOADED_SHA` was a module dict; Streamlit serves every tab and device from one process, so a second session's load refreshed the version the first session's save then matched | the ledger lives in `st.session_state` (`_sha_store()`); the module dict only when no session exists |
+| Pending-close retry failed | `save_positions` put the list without the position into the session BEFORE the write; on failure the retry found no position | on failure the session keeps the previously persisted list; the close is retryable |
+| Rejected writes entered the fallback copy | the local cache was written before the PUT, so a rejected write surfaced as committed in the next outage | the cache is written on a successful durable write only (GitHub off: local is the store and its failure is reported) |
+| Closed positions could reappear | a stale session's closed ids came from its own journal copy | `journal_closed_ids()` is the session's ids UNION the repo journal's ids read at save time; unreadable adds nothing |
+| First-create race | a file this session loaded as absent, then created by another writer, was overwritten with its sha | `SHA_ABSENT`: the first write must create; a file that now exists refuses with "reload" |
+
+Each guard falsified by mutation. Still open from this review: numeric
+validation (group A), rounded gates (owner's rule decision), stale-data
+checks, research engines (group B).
