@@ -1851,6 +1851,10 @@ declared in `forward_log.KNOWN_CONFIGS` and in the forward pre-registration
 (amendment 2026-10-19) before the first row under it; the exit monitor
 exits 1 when every check raised or the state write failed, 0 on a partial
 with a warning; the outage cooldown is stamped on delivery only;
+(correction 2026-10-20: the signal path held a second config literal, so
+the 10-20 11:07 scan wrote its signal rows under the old hash and its scan
+rows under the new one; both are declared, and from the next scan every
+row uses `_scan_cfg()`, asserted by the selftest);
 `backtest.stats` counts the drawdown from initial equity, and the five
 committed files that print the old figure say so at their top. Every guard
 falsified.
