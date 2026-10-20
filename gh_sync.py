@@ -177,8 +177,36 @@ def _gh_get(path: str) -> tuple[list | None, str | None, str | None]:
 # only when the remote sha still equals the one this session loaded; a file
 # loaded from the local fallback is "unknown" and is not overwritten at all
 # until it is reloaded from the repo.
-_LOADED_SHA: dict = {}
+_LOADED_SHA: dict = {}          # fallback when no session is available (tests, scripts)
 SHA_UNKNOWN = "unknown"
+SHA_ABSENT = "absent"           # the repo had no such file when this session loaded
+
+
+def _sha_store() -> dict:
+    """
+    The loaded-version ledger of THIS SESSION. Streamlit serves every open
+    tab and device from one process, so a module-level dict was shared: a
+    second session's load refreshed the version the first session's save
+    then matched, and the first session overwrote the second's rows (third
+    review 2026-10-20). Bound to st.session_state; the module dict only
+    when there is no session.
+    """
+    try:
+        return st.session_state.setdefault("_gh_loaded_sha", {})
+    except Exception:                                    # noqa: BLE001
+        return _LOADED_SHA
+
+
+def remote_ids(path: Path) -> set | None:
+    """The ids in the repo copy of a list file right now, or None when it
+    cannot be read. journal_store reads the remote journal's ids so a stale
+    session's deletion markers are completed by every other session's."""
+    if not gh_enabled():
+        return None
+    data, _sha, err = _gh_get(path.name)
+    if err or data is None:
+        return None
+    return {d.get("id") for d in data if isinstance(d, dict) and d.get("id")}
 
 
 def _gh_put(path: str, data: list, message: str, remerge=None,
@@ -222,7 +250,14 @@ def _gh_put(path: str, data: list, message: str, remerge=None,
             # any conflict being raised.
             if remerge is not None:
                 data = remerge(remote_now if remote_now is not None else [])
-            elif expected_sha is not None and sha != expected_sha:
+            elif expected_sha == SHA_ABSENT and sha is not None:
+                # FIRST-CREATE RACE (third review 2026-10-20): this session
+                # loaded no file; another writer has created one since.
+                # Sending its sha would overwrite it; refuse instead.
+                return (f"{path} was created in the repo by another writer since this "
+                        f"session loaded (now {str(sha)[:7]}); reload the page and apply "
+                        f"the change again")
+            elif expected_sha not in (None, SHA_ABSENT) and sha != expected_sha:
                 return (f"{path} changed in the repo since this session loaded it "
                         f"(loaded {str(expected_sha)[:7]}, now {str(sha)[:7]}); "
                         f"reload the page and apply the change again")
@@ -242,9 +277,9 @@ def _gh_put(path: str, data: list, message: str, remerge=None,
                 except Exception:                        # noqa: BLE001
                     new_sha = None
                 if new_sha:
-                    _LOADED_SHA[path] = new_sha
+                    _sha_store()[path] = new_sha
                 else:
-                    _LOADED_SHA.pop(path, None)
+                    _sha_store().pop(path, None)
                 return None
             if r.status_code in _PUT_RETRY_STATUSES:
                 last = f"GitHub PUT {r.status_code}: {r.text[:160]}"
@@ -450,14 +485,14 @@ def load(path: Path) -> list:
         if err:
             logger.warning("%s — falling back to local disk", err)
             st.session_state["_gh_last_error"] = err
-            _LOADED_SHA[path.name] = SHA_UNKNOWN     # remote state not seen
+            _sha_store()[path.name] = SHA_UNKNOWN    # remote state not seen
         elif data is not None:
             _LOCAL_READ_FAILED.discard(path.name)
-            _LOADED_SHA[path.name] = _sha
+            _sha_store()[path.name] = _sha
             return data
         else:
             _LOCAL_READ_FAILED.discard(path.name)
-            _LOADED_SHA.pop(path.name, None)         # no file yet: first write is unconditional
+            _sha_store()[path.name] = SHA_ABSENT     # no file yet: the first write must CREATE it
             return []          # file not created yet
     local = _local_load(path)
     if local is None:
@@ -480,15 +515,18 @@ def save_result(path: Path, data: list, *, merge: bool = False,
     position: the journal row has to land before the position is removed)
     read this instead of save()'s UI side effect (BACKLOG 35 group 4).
     """
-    local_ok = _local_save(path, data)     # best-effort cache; wiped on container restart
     if not gh_enabled():
         # With GitHub off, local disk IS the store: a failed write is a failure.
+        local_ok = _local_save(path, data)
         return data, (None if local_ok else f"could not write {path} on local disk")
+    # THE LOCAL CACHE IS WRITTEN ON SUCCESS ONLY (third review 2026-10-20). It
+    # was written before the PUT, so a write the repo REJECTED sat in the
+    # fallback copy and surfaced as committed during the next outage.
     remerge = None
     final = {"data": data}
     expected = None
     if not merge:
-        expected = _LOADED_SHA.get(path.name)
+        expected = _sha_store().get(path.name)
         if expected == SHA_UNKNOWN:
             return data, (f"{path.name} was loaded from the local fallback and the repo copy "
                           f"has not been seen; reload before saving so nothing in the "
@@ -506,14 +544,12 @@ def save_result(path: Path, data: list, *, merge: bool = False,
         remote, _sha, err = _gh_get(path.name)
         if not err and remote:
             data = remerge(remote)
-            # RE-SAVE LOCALLY so the on-disk cache reflects the MERGED state
-            # (see save() below for why).
-            _local_save(path, data)
     err = _gh_put(path.name, data, f"chore: update {path.name} from app",
                   remerge=remerge, expected_sha=expected)
-    if final["data"] is not data:
-        # A conflict retry re-merged against a newer remote: the cache and
-        # the caller get what was actually written, not the first merge.
+    if err is None:
+        # The cache holds what the repo now holds: the merged state on the
+        # merge path (so an outage never serves a copy missing an exit flag
+        # the merge picked up), the data as sent otherwise.
         _local_save(path, final["data"])
     return final["data"], err
 
@@ -729,7 +765,7 @@ def selftest() -> int:
         # ── APP-OWNED FILES ARE WRITTEN ONLY AT THE VERSION THIS SESSION LOADED ──
         with _tmp.TemporaryDirectory() as _d5:
             _p5 = pathlib.Path(_d5) / "trade_journal.json"
-            _LOADED_SHA["trade_journal.json"] = "s1"
+            _sha_store()["trade_journal.json"] = "s1"
             calls["get"] = calls["put"] = 0
             globals()["requests"] = _fake([_R(200, payload={"content": _b64.b64encode(b"[]").decode(), "sha": "s2"})], [_R(201)])
             _r5, _e5 = save_result(_p5, [{"id": "J"}])
@@ -738,12 +774,57 @@ def selftest() -> int:
             globals()["requests"] = _fake([_R(200, payload={"content": _b64.b64encode(b"[]").decode(), "sha": "s1"})], [_R(201)])
             _r5, _e5 = save_result(_p5, [{"id": "J"}])
             assert _e5 is None and calls["put"] == 1, (_e5, calls)
-            _LOADED_SHA["trade_journal.json"] = SHA_UNKNOWN
+            _sha_store()["trade_journal.json"] = SHA_UNKNOWN
             calls["get"] = calls["put"] = 0
             _r5, _e5 = save_result(_p5, [{"id": "J"}])
             assert _e5 and "reload before saving" in _e5 and calls["put"] == 0, (_e5, calls)
-            _LOADED_SHA.pop("trade_journal.json", None)
+            _sha_store().pop("trade_journal.json", None)
         print("conditional write       : a changed or unseen remote refuses the overwrite; a matching version writes")
+
+        # ── THIRD REVIEW 2026-10-20 ──
+        # The ledger is the SESSION's, not the process's.
+        assert _sha_store() is st.session_state["_gh_loaded_sha"], "the version ledger must live in session state"
+        assert _sha_store() is not _LOADED_SHA
+        # First-create race: this session loaded no file (ABSENT); another
+        # writer created one since -> refused, no PUT. Still absent -> created.
+        with _tmp.TemporaryDirectory() as _d7:
+            _p7 = pathlib.Path(_d7) / "skipped_signals.json"
+            calls["get"] = calls["put"] = 0
+            globals()["requests"] = _fake([_R(404)], [])
+            assert load(_p7) == [] and _sha_store()["skipped_signals.json"] == SHA_ABSENT
+            calls["get"] = calls["put"] = 0
+            globals()["requests"] = _fake([_R(200, payload={"content": _b64.b64encode(b'[{"id": "theirs"}]').decode(), "sha": "s9"})], [_R(201)])
+            _r7, _e7 = save_result(_p7, [{"id": "mine"}])
+            assert _e7 and "created in the repo by another writer" in _e7 and calls["put"] == 0, (_e7, calls)
+            calls["get"] = calls["put"] = 0
+            globals()["requests"] = _fake([_R(404)], [_R(201)])
+            _r7, _e7 = save_result(_p7, [{"id": "mine"}])
+            assert _e7 is None and calls["put"] == 1, (_e7, calls)
+            _sha_store().pop("skipped_signals.json", None)
+        print("first create            : a file another writer created since the load is not overwritten")
+        # A REJECTED write never reaches the local fallback copy.
+        with _tmp.TemporaryDirectory() as _d8:
+            _p8 = pathlib.Path(_d8) / "trade_journal.json"
+            _p8.write_text('[{"id": "committed"}]')
+            _sha_store()["trade_journal.json"] = "s1"
+            calls["get"] = calls["put"] = 0
+            globals()["requests"] = _fake([_R(200, payload={"content": _b64.b64encode(b"[]").decode(), "sha": "s1"})], [_R(401, "Bad credentials")])
+            _r8, _e8 = save_result(_p8, [{"id": "committed"}, {"id": "rejected"}])
+            assert _e8 and _json.loads(_p8.read_text()) == [{"id": "committed"}], (
+                _e8, _p8.read_text(), "a write the repo rejected must not enter the fallback copy")
+            calls["get"] = calls["put"] = 0
+            globals()["requests"] = _fake([_R(200, payload={"content": _b64.b64encode(b"[]").decode(), "sha": "s1"})], [_R(201)])
+            _r8, _e8 = save_result(_p8, [{"id": "committed"}, {"id": "accepted"}])
+            assert _e8 is None and [x["id"] for x in _json.loads(_p8.read_text())] == ["committed", "accepted"]
+            _sha_store().pop("trade_journal.json", None)
+        print("fallback copy           : written on a successful durable write only")
+        # remote_ids reads the repo copy's ids; unreadable -> None, never empty.
+        calls["get"] = calls["put"] = 0
+        globals()["requests"] = _fake([_R(200, payload={"content": _b64.b64encode(b'[{"id": "R1"}, {"id": "R2"}]').decode(), "sha": "s3"})], [])
+        assert remote_ids(pathlib.Path("trade_journal.json")) == {"R1", "R2"}
+        globals()["requests"] = _fake([_R(500, "down")], [])
+        assert remote_ids(pathlib.Path("trade_journal.json")) is None, "an unreadable remote is unknown, not empty"
+        print("remote ids              : the repo journal's ids are readable; unreadable is None")
 
         # ── GITHUB OFF: a failed local write is a failure ──
         globals()["_gh_token"] = lambda: None

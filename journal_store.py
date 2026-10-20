@@ -152,14 +152,34 @@ def save_positions(d: list) -> str | None:
     # closed_ids: the journal's ids are the tombstones. A remote-only id in
     # the journal was closed here; any other remote-only id was added by
     # another app session and must survive this write (BACKLOG 35 group 4).
-    st.session_state[_SS_POSITIONS] = d
-    closed = {j.get("id") for j in load_journal() if j.get("id")}
-    data, err = gh_sync.save_result(POSITIONS_FILE, d, merge=True, closed_ids=closed)
-    st.session_state[_SS_POSITIONS] = data
+    prev = list(st.session_state.get(_SS_POSITIONS) or [])
+    data, err = gh_sync.save_result(POSITIONS_FILE, d, merge=True,
+                                    closed_ids=journal_closed_ids())
     st.session_state["_gh_last_error"] = err
     if err:
+        # THE SESSION KEEPS WHAT WAS PERSISTED, not what was attempted (third
+        # review 2026-10-20): hiding a position whose removal failed made the
+        # retry answer "position not found".
+        st.session_state[_SS_POSITIONS] = prev
         st.error(f"⚠️ **Could not save open positions** — {err}")
+    else:
+        st.session_state[_SS_POSITIONS] = data
     return err
+
+
+def journal_closed_ids() -> set:
+    """
+    The ids the journal says are closed: this session's copy UNIONED with
+    the repo copy's ids right now (third review 2026-10-20). A stale session
+    knew only its own closes, so a position another session had closed
+    looked like an addition to its merge and came back. The repo journal is
+    every session's durable closes, so its ids complete the markers.
+    """
+    ids = {j.get("id") for j in load_journal() if j.get("id")}
+    remote = gh_sync.remote_ids(JOURNAL_FILE)
+    if remote:
+        ids |= remote
+    return ids
 
 
 def load_skipped() -> list:
@@ -925,6 +945,30 @@ def selftest() -> int:
         gh_sync.save_result = _real_sr
         st.session_state.pop(_SS_JOURNAL, None)
     print("journal session copy    : updated on durable success only")
+
+    # ── THIRD REVIEW 2026-10-20: a failed removal leaves the position retryable;
+    # closed ids are completed by the repo journal ──
+    _real_sr2, _real_rids = gh_sync.save_result, gh_sync.remote_ids
+    _g2 = globals(); _saved2 = {k: _g2[k] for k in ("load_journal",)}
+    try:
+        st.session_state[_SS_POSITIONS] = [{"id": "P1", "status": "OPEN"}]
+        _g2["load_journal"] = lambda: [{"id": "L1"}]
+        gh_sync.remote_ids = lambda path: {"R1", "L1"}
+        assert journal_closed_ids() == {"L1", "R1"}, "session ids UNION remote ids"
+        gh_sync.remote_ids = lambda path: None
+        assert journal_closed_ids() == {"L1"}, "an unreadable remote adds nothing and removes nothing"
+        gh_sync.save_result = lambda path, data, **kw: (data, "GitHub PUT 500: boom")
+        assert save_positions([]) is not None
+        assert [p["id"] for p in st.session_state[_SS_POSITIONS]] == ["P1"], \
+            "a failed removal must leave the position in the session so the close can be retried"
+        gh_sync.save_result = lambda path, data, **kw: (data, None)
+        assert save_positions([]) is None and st.session_state[_SS_POSITIONS] == []
+    finally:
+        gh_sync.save_result, gh_sync.remote_ids = _real_sr2, _real_rids
+        _g2.update(_saved2)
+        st.session_state.pop(_SS_POSITIONS, None)
+    print("retryable close         : a failed removal keeps the session's position; closed ids "
+          "are the session's union the repo journal's")
     print("signal key              : stored on the position, carried to the "
           "journal row, None when not given")
 
