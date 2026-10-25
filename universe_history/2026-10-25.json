@@ -1,0 +1,76 @@
+{
+  "as_of": "2026-10-25",
+  "taken_at": "2026-10-25T16:43:02",
+  "tickers": [
+    "ACN",
+    "NOW",
+    "MPC",
+    "PSX",
+    "PFE",
+    "TMO",
+    "CME",
+    "ABNB"
+  ],
+  "passed_gates": 54,
+  "pool_size": 83,
+  "sector_mix": {
+    "Tech": 2,
+    "Energy": 2,
+    "Health": 2,
+    "Financials": 1,
+    "ConsDisc": 1
+  },
+  "rs_lookback": 63,
+  "top_n": 8,
+  "max_per_sector": 2,
+  "detail": [
+    {
+      "ticker": "ACN",
+      "rs": 59.04,
+      "price": 249.37,
+      "dollar_vol_m": 1783.8
+    },
+    {
+      "ticker": "NOW",
+      "rs": 47.76,
+      "price": 158.96,
+      "dollar_vol_m": 1604.4
+    },
+    {
+      "ticker": "MPC",
+      "rs": 43.56,
+      "price": 457.22,
+      "dollar_vol_m": 885.1
+    },
+    {
+      "ticker": "PSX",
+      "rs": 33.44,
+      "price": 283.18,
+      "dollar_vol_m": 645.6
+    },
+    {
+      "ticker": "PFE",
+      "rs": 18.9,
+      "price": 30.03,
+      "dollar_vol_m": 856.0
+    },
+    {
+      "ticker": "TMO",
+      "rs": 17.6,
+      "price": 673.82,
+      "dollar_vol_m": 1647.2
+    },
+    {
+      "ticker": "CME",
+      "rs": 16.89,
+      "price": 305.71,
+      "dollar_vol_m": 587.2
+    },
+    {
+      "ticker": "ABNB",
+      "rs": 14.3,
+      "price": 172.01,
+      "dollar_vol_m": 594.4
+    }
+  ]
+}
