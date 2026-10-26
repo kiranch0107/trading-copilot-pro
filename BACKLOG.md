@@ -21,35 +21,13 @@ Dated notes the owner asked to be read on the next pull. Append; never
 rewrite an earlier note. Remove a note only when the thing it waits on has
 landed in the repo and the removal says so in the commit.
 
-- **2026-10-13, owner:** AAPL has been closed. NVDA and PFE will be logged
-  (closed in the app) on **2026-10-16**. Until then, all three may still
-  read `EXIT_SIGNALLED` in `open_positions.json`; that is not a defect and
-  not a reason to touch the state. *Session note, same day:* at the time of
-  writing, `open_positions.json` on `main` still carries AAPL as
-  `EXIT_SIGNALLED` and `trade_journal.json` has no AAPL close after
-  2026-09-23, so the AAPL close has not yet reached the repo from the app
-  (or was done at the broker only). Check both files on the next pull; if
-  AAPL is still open there after the 16th, ask the owner which it was
-  before anything else is read from the journal. *Root cause, found the
-  same day:* the app's sidebar, once rerun, read "GitHub sync FAILING —
-  GitHub GET 401: Bad credentials". The app's fine-grained PAT (Streamlit
-  secret `GITHUB_TOKEN`) is dead, so since 2026-09-30 every app write has
-  failed and every read has fallen back to the container's disk; the
-  scanner and the exit monitor use the Actions token and are unaffected.
-  The owner is replacing the token (Contents: read and write on this repo
-  only) and will close AAPL again. Until an "update trade_journal.json from
-  app" commit appears on `main`, the journal in the repo is MISSING the
-  AAPL 2026-10-09 355C close (expired worthless, −1.0 R, 2026-10-13 13:03
-  ET) and `open_positions.json` still carries AAPL. *Resolved the same
-  day, 13:27 ET:* the owner replaced the token and closed AAPL again; the
-  commits "update trade_journal.json from app" (2a0a6bc) and "update
-  open_positions.json from app" (9cfa226) landed, the journal carries AAPL
-  2026-10-09 355C as LOSS −1.0 R / −$111 (expired worthless), and the open
-  positions are NVDA and PFE only. **The app's new token expires
-  2027-01-05** (owner, same day). That is one day before the cron-job.org
-  dispatch token (2027-01-06): both are rotated in the last week of
-  December 2026, in one sitting; the forcing-function paragraph under the
-  scheduler item carries both.
+- *(none open as of 2026-10-26.)* The 2026-10-13 note (AAPL closed outside
+  the repo; NVDA and PFE to be closed 10-16; the app's dead PAT) was retired
+  on 2026-10-26: the AAPL close, the replacement token and the NVDA and PFE
+  closes have all landed in the repo (`results/progress_review_2026-10-26.md`).
+  The token expiry dates it carried (app PAT 2027-01-05, dispatch token
+  2027-01-06, both rotated in the last week of December 2026) live on in the
+  scheduler item's "FORCING FUNCTION — TWO PATs" paragraph.
 
 ---
 
@@ -1963,6 +1941,44 @@ before their first row. The three policy items (dry-run rows, next-open
 R:R, opening-target precedence) stay policy.
 
 ---
+
+---
+
+## 37. Progress review 2026-10-26: the live bucket cannot reach its gate (~2.3 years) and the pool can (~4.5 months); the 4-ATR target is now reached 8 of 57 times; a dead name is never settled — ASSESSED 2026-10-26, DECISIONS OPEN
+
+**Owner's request 2026-10-26** ("review again thoroughly, improvements and
+pending items"), answered in `results/progress_review_2026-10-26.md`.
+Improved in the week: PRs #138–#145 merged (all three external reviews),
+24 scanner runs and every exit-monitor run green, hand-off resolved (NVDA
+−1.0 R expired, PFE +0.09 R manual close, no open positions), record at
+579 rows / 121 outcomes. Readings (stop distance, NOT results): live 17
+episodes, 12 settled, +0.007 R by episodes (−0.115 by rows); pool 37 / 22,
+−0.272; pullback 7 / 4, −0.517. The 10-19 "4-ATR target never reached"
+finding is out of date: 8 of 57 settled full-target rows reached it (CME,
+KO, PG, CVX), booked at 1.64–2.80 R under the declared risk-as-filled
+denominator. Still 0 HQ rows and 0 alerts ever.
+
+**Findings.** (F1) Arrival rates: live 0.61 episodes a bar → 349 in ~2.3
+years; pool 3.7 a bar → ~94 bars ≈ 4.5 months. The pool is the only
+population whose gate arrives; and the live population rotates 3–4 of 8
+names a week under the dynamic snapshot, which the pre-registration never
+names. BACKLOG 34 amendment C is the decision that matters most. (F2)
+`report()` still counts rows and prints `+nan` for the empty HQ tier. (F3)
+`resolve_signal` never settles a name that stops trading inside its
+20-bar window with some bars after the signal: `no_bars` applies only when
+there are none; the row stays open and is re-fetched for ever. Not biting
+now. (F4) Journal: 15 rows, 15 without `signal_key`, 14 with stop 0; the
+premium basis has zero rows (BACKLOG 32). (F5) First IV premium rows due
+2026-11-09; five departed names will exercise the group-2 fetch path for
+the first time. (F6) Both PATs expire 2027-01-05/06 with no consistency
+check enforcing the rotation, unlike the calendar. (F7) `universe-snapshot.yml`
+comment says Monday, cron is Sunday.
+
+**Pending, in blocking order:** BACKLOG 34 decisions (C, episodes reading,
+D); BACKLOG 36 group A and the unrounded-gate declaration; F3, F6, F2 as
+small code; group B and the option re-runs (owner's laptop); group C and
+journal hygiene; BACKLOG 33 and 23 decisions; read the 11-09/11-10
+post-close logs.
 
 ---
 
