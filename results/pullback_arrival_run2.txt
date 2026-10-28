@@ -1,0 +1,102 @@
+PULLBACK ARRIVAL, RUN 2 (BACKLOG 36 group B). Run by the owner 2026-10-28,
+`python pullback_arrival.py`, branch claude/trading-code-review-wt48q8 @ c1de652, after
+pullback_signal began refusing a history with duplicate, unsorted or NaN sessions
+(bad_history) and a non-finite ATR (bad_atr). IDENTICAL to run 1 in every count
+(823 signal bars, 203 episodes, 83 names, fingerprint v2-e2805739bd13777d, no bad_history
+or bad_atr refusal): no name in the pool carried a bad history. The validators are live
+and found nothing to refuse, which is the expected reading on Yahoo daily bars.
+
+  AAPL: 20 signal bars
+  ABBV: 9 signal bars
+  ABNB: 6 signal bars
+  ABT: 0 signal bars
+  ACN: 0 signal bars
+  ADBE: 0 signal bars
+  ADI: 35 signal bars
+  AMD: 20 signal bars
+  AMGN: 13 signal bars
+  AMZN: 23 signal bars
+  ANET: 17 signal bars
+  AVGO: 20 signal bars
+  AXP: 12 signal bars
+  BA: 5 signal bars
+  BAC: 16 signal bars
+  BLK: 12 signal bars
+  BMY: 26 signal bars
+  C: 22 signal bars
+  CAT: 10 signal bars
+  CMCSA: 0 signal bars
+  CME: 10 signal bars
+  CMG: 0 signal bars
+  COP: 13 signal bars
+  CRM: 0 signal bars
+  CRWD: 7 signal bars
+  CSX: 14 signal bars
+  CVS: 22 signal bars
+  CVX: 23 signal bars
+  DE: 9 signal bars
+  FDX: 7 signal bars
+  FTNT: 0 signal bars
+  GE: 12 signal bars
+  GOOGL: 27 signal bars
+  GS: 12 signal bars
+  HON: 14 signal bars
+  JNJ: 15 signal bars
+  JPM: 18 signal bars
+  KO: 0 signal bars
+  LLY: 22 signal bars
+  LMT: 4 signal bars
+  LRCX: 16 signal bars
+  MA: 6 signal bars
+  MDLZ: 5 signal bars
+  META: 3 signal bars
+  MO: 9 signal bars
+  MPC: 2 signal bars
+  MRK: 7 signal bars
+  MS: 18 signal bars
+  MSFT: 14 signal bars
+  MU: 0 signal bars
+  NFLX: 1 signal bars
+  NOW: 0 signal bars
+  NVDA: 27 signal bars
+  ON: 15 signal bars
+  ORCL: 11 signal bars
+  OXY: 9 signal bars
+  PANW: 1 signal bars
+  PEP: 6 signal bars
+  PFE: 9 signal bars
+  PG: 0 signal bars
+  PM: 0 signal bars
+  PSX: 2 signal bars
+  QCOM: 4 signal bars
+  ROST: 13 signal bars
+  RTX: 7 signal bars
+  SCHW: 14 signal bars
+  SLB: 7 signal bars
+  SPGI: 0 signal bars
+  SYK: 0 signal bars
+  T: 0 signal bars
+  TGT: 0 signal bars
+  TJX: 8 signal bars
+  TMO: 4 signal bars
+  TMUS: 0 signal bars
+  TSLA: 16 signal bars
+  UNH: 18 signal bars
+  UNP: 14 signal bars
+  UPS: 17 signal bars
+  V: 0 signal bars
+  VZ: 12 signal bars
+  WFC: 6 signal bars
+  WMT: 7 signal bars
+  XOM: 20 signal bars
+==============================================================================
+PULLBACK ARRIVAL — counts only; no result, no R, nothing read after a signal bar
+==============================================================================
+  names 83   sessions in window 252   fingerprint v2-e2805739bd13777d
+  refusals: {'signals': 823, 'below_sma200': 2456, 'zero_risk': 8}
+  signal bars 823   episodes 203   = 3.27 bars/day, 0.81 episodes/day
+  episodes by SPY regime: Bear 10, Bull 193
+  episodes by month: 2025-10 11, 2025-11 13, 2025-12 12, 2026-01 15, 2026-02 19, 2026-03 21, 2026-04 9, 2026-05 15, 2026-06 18, 2026-07 25, 2026-08 13, 2026-09 28, 2026-10 4
+  most frequent names: AVGO 8, CVX 8, ADI 6, AMZN 6, BLK 6, NVDA 6, ON 6, ANET 5, CVS 5, GOOGL 5
+  at this rate 349 episodes take about 433 sessions (20.6 months)
+==============================================================================

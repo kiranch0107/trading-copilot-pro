@@ -1,0 +1,28 @@
+==============================================================================
+OPTION-LEG BACKTEST
+==============================================================================
+Tickers   : TSLA, NVDA, AAPL, MSFT, AMZN, META, ROKU
+History   : 5y   Entry DTE: 30   IV: 1.0x realised
+Costs     : 5.0% round-trip spread
+Option prices are MODELLED (Black-Scholes on the real underlying path),
+not historical quotes. IV is assumed, not observed — see the header.
+==============================================================================
+
+PAYOFF STRUCTURE SWEEP — the question the defaults depend on
+
+TP / SL         Trades  Win%    Avg win    Avg loss    Expectancy      PF
+------------  --------  ------  ---------  ----------  ------------  ----
++50% / -50%        395  40.0%   +81.3%     -55.1%      -0.53%        0.98
++75% / -50%        395  34.2%   +99.2%     -54.7%      -2.12%        0.94
++100% / -50%       395  30.6%   +122.7%    -54.5%      -0.19%        0.99
++150% / -50%       395  28.1%   +146.5%    -54.1%      +2.24%        1.06
++200% / -50%       395  27.1%   +162.6%    -54.0%      +4.66%        1.12
++300% / -50%       395  25.8%   +167.8%    -53.8%      +3.45%        1.09
+
+Expectancy is % of premium risked per trade. The COMPARISON between
+rows is far more reliable than any single absolute number, because
+the IV assumption shifts every row in the same direction.
+  data: v2-78390259672cedbe  (7 series, 7 cached / 0 fetched, oldest 48d)
+
+DATA COVERAGE: 7 of 7 ticker(s) supplied usable bars — compare this across runs BEFORE comparing any number above
+  used    : TSLA, NVDA, AAPL, MSFT, AMZN, META, ROKU

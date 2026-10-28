@@ -97,8 +97,16 @@ def simulate(trades: list[dict], *, account: float, risk_pct: float,
     per_year: dict = defaultdict(lambda: {"pnl": 0.0, "n": 0})
     wins = 0
 
+    # CHRONOLOGY (external review 2026-10-20, group B; 2026-10-28): entries
+    # in date order whatever the caller passed; a position's proceeds reach
+    # the account only for entries on LATER days (an exit during day D cannot
+    # fund an entry at day D's open); exits are realised in exit order so the
+    # curve is the path the account took; the span is the observed one.
+    trades = sorted(trades, key=lambda t: str(t.get("entry_date")))
+    first_entry = last_exit = None
     for t in trades:
         ed = str(t.get("entry_date"))
+        first_entry = first_entry or ed
         # ── REALISE THE P&L OF EVERYTHING THAT CLOSED BEFORE THIS ENTRY ──
         #
         # THE BUG THIS FIXES. `equity += pnl` used to run in the iteration that
@@ -122,13 +130,13 @@ def simulate(trades: list[dict], *, account: float, risk_pct: float,
         #
         # Closing first also means the equity a trade is sized on includes every
         # result that was actually known on its entry date, and nothing else.
-        for p in [p for p in open_pos if p["exit_date"] <= ed]:
+        for p in sorted([p for p in open_pos if p["exit_date"] < ed], key=lambda x: x["exit_date"]):
             equity += p["pnl"]
             wins += int(p["pnl"] > 0)
             curve.append(equity)
             per_year[p["exit_date"][:4]]["pnl"] += p["pnl"]
             per_year[p["exit_date"][:4]]["n"] += 1
-        open_pos = [p for p in open_pos if p["exit_date"] > ed]
+        open_pos = [p for p in open_pos if p["exit_date"] >= ed]
         deployed = sum(p["value"] for p in open_pos)
 
         risk_dollars = equity * risk_pct / 100.0
@@ -166,8 +174,9 @@ def simulate(trades: list[dict], *, account: float, risk_pct: float,
         # would describe different trades.
         pnl = float(t["r"]) * risk_dollars * scale
         taken += 1
-        open_pos.append({"exit_date": max(str(t.get("exit_date", ed)), ed),
-                         "value": value, "pnl": pnl})
+        _xd = max(str(t.get("exit_date", ed)), ed)
+        last_exit = _xd if last_exit is None else max(last_exit, _xd)
+        open_pos.append({"exit_date": _xd, "value": value, "pnl": pnl})
         deployed_now = sum(p["value"] for p in open_pos)
         peak_deployed = max(peak_deployed, 100.0 * deployed_now / equity)
         peak_concurrent = max(peak_concurrent, len(open_pos))
@@ -185,7 +194,7 @@ def simulate(trades: list[dict], *, account: float, risk_pct: float,
     arr = np.array(curve, dtype=float)
     peak = np.maximum.accumulate(arr)
     dd = (peak - arr) / peak
-    years = max(len(per_year), 1)
+    years = observed_years(first_entry, last_exit) if first_entry and last_exit else 1.0
     total = equity / account - 1.0
     cagr = (equity / account) ** (1.0 / years) - 1.0 if equity > 0 else -1.0
     return {"equity": equity, "curve": arr, "total_pct": 100.0 * total,
@@ -198,21 +207,38 @@ def simulate(trades: list[dict], *, account: float, risk_pct: float,
             "per_year": dict(per_year), "years": years}
 
 
+def observed_years(first: str, last: str) -> float:
+    """
+    The span a return is annualised over: the calendar time between the
+    first and last dates, in years, floored at one trading day. CAGR used to
+    divide by the COUNT of calendar years that held a close (nine trades
+    spread over two Januaries were "two years"); the benchmark divided by the
+    requested window whatever the data covered.
+    """
+    import datetime as _dt
+    a = _dt.date.fromisoformat(str(first)[:10])
+    b = _dt.date.fromisoformat(str(last)[:10])
+    return max((b - a).days, 1) / 365.25
+
+
 def benchmark(ticker: str, years: int, account: float) -> dict | None:
     """The whole account in the index over the same span. No trading."""
     df = bt.download(ticker, years)
     if df is None or df.empty:
         return None
-    c = df.dropna(subset=["Close"])["Close"].astype(float).to_numpy()
+    d = df.dropna(subset=["Close"])
+    c = d["Close"].astype(float).to_numpy()
     if len(c) < 2:
         return None
     curve = account * c / c[0]
     peak = np.maximum.accumulate(curve)
     dd = (peak - curve) / peak
     total = curve[-1] / account - 1.0
+    span = (observed_years(str(d["Date"].iloc[0]), str(d["Date"].iloc[-1]))
+            if "Date" in d.columns else float(years))
     return {"total_pct": 100.0 * total,
-            "cagr_pct": 100.0 * ((1 + total) ** (1.0 / years) - 1.0),
-            "max_dd_pct": 100.0 * float(dd.max())}
+            "cagr_pct": 100.0 * ((1 + total) ** (1.0 / span) - 1.0),
+            "max_dd_pct": 100.0 * float(dd.max()), "years": span}
 
 
 def long_edge(longs: list[dict]) -> dict:
@@ -340,6 +366,36 @@ def selftest() -> int:
     assert abs(s2["equity"] - 5050.0 * 1.01) < 1e-6, (
         f"the second trade must risk 1% of 5050, not of 5000: {s2['equity']}")
     print(f"compounding      : 1R then 1R -> ${s2['equity']:.2f}, risk follows equity")
+
+    # ── CHRONOLOGY (group B, 2026-10-28) ──
+    # Proceeds of a trade that exits on day D do not size an entry at day
+    # D's open: the second trade here risks 1% of 5000, not of 5050.
+    s3 = simulate([mk("2020-01-01", 1.0, hold_to="2020-01-03"),
+                   mk("2020-01-03", 1.0, hold_to="2020-01-04")],
+                  account=acct, risk_pct=1.0, constrained=False)
+    assert abs(s3["equity"] - 5100.0) < 1e-6, (s3["equity"], "same-day proceeds funded the entry")
+    # Entry order is the date order, whatever order the caller passed.
+    _fwd = [mk("2020-01-01", 1.0, hold_to="2020-01-02"), mk("2020-01-03", 1.0, hold_to="2020-01-04")]
+    assert abs(simulate(list(reversed(_fwd)), account=acct, risk_pct=1.0, constrained=False)["equity"]
+               - s2["equity"]) < 1e-9, "a reversed list must replay identically"
+    # Exits are realised in exit order: the loss that closes first hits the
+    # curve first, so the drawdown is the path the account took.
+    s4 = simulate([mk("2020-01-01", 5.0, hold_to="2020-01-20"),
+                   mk("2020-01-02", -1.0, hold_to="2020-01-05"),
+                   mk("2020-02-01", 0.0, hold_to="2020-02-02")],
+                  account=acct, risk_pct=1.0, constrained=False)
+    assert s4["curve"][1] < acct < s4["curve"][2], (list(s4["curve"]), "the 01-05 loss must land before the 01-20 win")
+    assert s4["max_dd_pct"] > 0.9, s4["max_dd_pct"]
+    # The span is the observed one: first entry to last exit, not a count
+    # of calendar years that held a close.
+    s5 = simulate([mk("2020-12-30", 1.0, hold_to="2020-12-31"),
+                   mk("2021-01-04", 1.0, hold_to="2021-01-05")],
+                  account=acct, risk_pct=1.0, constrained=False)
+    assert abs(s5["years"] - 6 / 365.25) < 1e-12, (s5["years"], "two Januaries are six days, not two years")
+    assert abs(s5["cagr_pct"] - 100.0 * ((s5["equity"] / acct) ** (365.25 / 6) - 1.0)) < 1e-6
+    assert abs(observed_years("2020-01-01", "2021-01-01") - 366 / 365.25) < 1e-12
+    assert observed_years("2020-01-01", "2020-01-01") == 1 / 365.25
+    print("chronology       : no same-day funding; exits realised in exit order; CAGR over the observed span")
 
     # ── THE POINT: 1% risk behind a 2% stop is a 50% POSITION ──
     # entry 100, stop 98 -> risk $50 buys 25 shares = $2,500 = 50% of a $5,000

@@ -62,17 +62,23 @@ import option_backtest as ob
 import risk_params as rp
 
 REQUIRED = ("spot0", "spot_exit", "strike", "iv", "right", "dte0",
-            "held", "entry_prem", "exit_prem", "pnl_pct")
+            "held", "dte_left", "entry_prem", "exit_prem", "pnl_pct")
 
 
 def decompose(t: dict, spread_pct: float) -> dict | None:
     """One trade's P&L split into carry, direction and spread. Percent of premium."""
     if any(t.get(k) is None for k in REQUIRED):
         return None
+    if t.get("reason") == ob.OPEN:
+        return None                 # censored at the sample's end: nothing realised to split
     S0, Se = float(t["spot0"]), float(t["spot_exit"])
     K, iv, right = float(t["strike"]), float(t["iv"]), t["right"]
-    t0 = float(t["dte0"]) / ob.TRADING_DAYS
-    t1 = max(float(t["dte0"]) - float(t["held"]), 0.0) / ob.TRADING_DAYS
+    # The engine's clock is the calendar (group B, 2026-10-28): dte0 and
+    # dte_left are calendar days, priced over 365, exactly as the engine
+    # priced the entry and the exit. Repricing over 252 sessions here would
+    # split a P&L the engine never produced.
+    t0 = float(t["dte0"]) / ob.CALENDAR_DAYS
+    t1 = max(float(t["dte_left"]), 0.0) / ob.CALENDAR_DAYS
 
     mid0 = ob.bs_price(S0, K, t0, iv, right)          # pre-spread entry mid
     if mid0 <= 0:
@@ -174,7 +180,7 @@ def report(rows: list[dict]) -> int:
     print(f"\n  BY EXIT REASON")
     hdr = f"  {'reason':<10}{'n':>6}{'share':>8}{'total':>9}{'carry':>9}{'direction':>11}{'spread':>9}"
     print(hdr); print("  " + "-" * (len(hdr) - 2))
-    for reason in ("TARGET", "STOP", "TIME", "THESIS", "EXPIRY"):
+    for reason in ("TARGET", "STOP", "TIME", "THESIS", "EXPIRY", ob.OPEN):
         sub = [r for r in rows if r["reason"] == reason]
         if not sub:
             continue
@@ -222,7 +228,8 @@ def selftest() -> int:
         it stands in for is not a fixture. Route it through _result so any
         transform applied to real records is applied here too.
         """
-        t0, t1 = dte0 / ob.TRADING_DAYS, (dte0 - held) / ob.TRADING_DAYS
+        # the engine's clock: calendar days over 365 (group B, 2026-10-28)
+        t0, t1 = dte0 / ob.CALENDAR_DAYS, (dte0 - held) / ob.CALENDAR_DAYS
         mid0 = ob.bs_price(S0, K, t0, iv, right)
         entry = mid0 * (1 + sp / 200)
         exitp = ob.bs_price(Se, K, t1, iv, right) * (1 - sp / 200)
@@ -311,6 +318,19 @@ def selftest() -> int:
         "a trade recorded before the entry state was carried cannot be "
         "decomposed and must be dropped, not defaulted to zero")
     print("missing state    : dropped, never defaulted")
+    # An OPEN trade (expiry past the sample's end) is censored, not split.
+    _open = ob._result(ob.OPEN, 3.0, 2.0, 4, 26, -33.3, spot0=100.0, spot_exit=101.0,
+                       strike=100.0, iv=0.2, right="CALL", dte0=30)
+    assert decompose(_open, sp) is None, "a censored trade has no realised P&L to decompose"
+    # The split reprices on the engine's calendar clock: a TIME exit with 26
+    # of 30 days left is priced at 26/365, never (30 - held)/252.
+    _rec = ob._result("TIME", 3.0, 2.0, 4, 26, -33.3, spot0=100.0, spot_exit=101.0,
+                      strike=100.0, iv=0.2, right="CALL", dte0=30)
+    _d = decompose(_rec, sp)
+    _frozen = ob.bs_price(100.0, 100.0, 26 / ob.CALENDAR_DAYS, 0.2, "CALL")
+    _mid0 = ob.bs_price(100.0, 100.0, 30 / ob.CALENDAR_DAYS, 0.2, "CALL")
+    assert abs(_d["carry_pct"] - 100.0 * (_frozen - _mid0) / 3.0) < 1e-9, (_d, "carry must be priced on the calendar clock")
+    print("calendar clock   : OPEN rows are censored; carry priced over dte_left/365")
 
     # ── WIRING: CALL the upstream builder and read the dict it returns ──
     # The first version of this guard grepped inspect.getsource(ob._result) for
@@ -413,7 +433,9 @@ def main() -> int:
         print("NOTHING MEASURED — no decomposable trades.")
         return 2
     if dropped:
-        print(f"  {dropped} of {len(trades)} trades lacked entry state and were dropped")
+        n_open = sum(1 for t in trades if t.get("reason") == ob.OPEN)
+        print(f"  {dropped} of {len(trades)} trades were dropped: {n_open} left OPEN at the "
+              f"sample's end (censored), {dropped - n_open} lacked entry state")
     return report(rows)
 
 

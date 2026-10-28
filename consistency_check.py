@@ -1508,24 +1508,24 @@ def check_modules_import() -> None:
 def check_compute_preserves_alignment() -> None:
     """
     Every bar's Open and Date must still belong to the bar whose indicators sit
-    beside them after compute().
+    beside them after compute(), the execution timeline must be complete, and
+    the warm-up must be a fixed head.
 
-    THE BUG THIS PINS. backtest.run(), option_backtest and universe_backtest all
-    re-attached Open/Date with `raw.tail(len(df))`, which assumes compute() drops
-    rows only from the FRONT. It does not: dropna() removes a row wherever any
-    indicator is NaN, and VOL_AVG20 is a 20-bar rolling mean, so ONE missing
-    Volume anywhere deletes 20 INTERIOR rows. Tail-alignment then paired earlier
-    indicator rows with an Open and Date from 20 sessions later.
+    THE BUGS THIS PINS. (1) backtest.run(), option_backtest and
+    universe_backtest re-attached Open/Date with `raw.tail(len(df))`, which
+    assumed compute() drops rows only from the FRONT; it dropped interior rows
+    too, so earlier indicator rows were paired with an Open and Date from 20
+    sessions later. (2) Those interior rows were DROPPED: one missing Volume
+    deleted twenty sessions from the execution timeline, and a stop touched in
+    one of them was never seen (group B, 2026-10-28). (3) The warm-up was
+    discarded only when more than WARMUP_BARS + MIN_BARS_AFTER rows survived,
+    so 189 raw rows kept 140 and 190 kept 41 (group B).
 
-    That reached the numbers, not just the reporting: simulate_trade() takes the
-    fill from df["Open"], and the SPY-regime join keys on df["Date"]. It was
-    silent, and option_backtest is where OPT_WIN_RATE is measured — the input the
-    option spread ceiling is derived from.
-
-    The fixture injects an interior NaN deliberately, and asserts that the old
-    method would have DISAGREED. Without that second assertion this test passes
-    on a clean frame where both methods happen to agree — a dead fixture of
-    exactly the kind the falsification pass keeps finding here.
+    compute() now keeps every session from the first complete-indicator row
+    plus WARMUP_BARS, carries SIGNAL_OK per row, and reads no signal where it
+    is False. The fixture injects an interior NaN deliberately and asserts
+    that the discarded dropna filter would have DISAGREED, so the check
+    cannot pass on a clean frame.
     """
     import numpy as np
     import pandas as pd
@@ -1540,12 +1540,13 @@ def check_compute_preserves_alignment() -> None:
         "Low": close.values - 1, "Close": close.values,
         "Volume": np.full(n, 1_000_000.0),
     })
-    raw.loc[n // 2, "Volume"] = np.nan      # one bad bar, 20 interior rows lost
+    raw.loc[n // 2, "Volume"] = np.nan      # one bad bar: 20 signal bars blank, 0 sessions lost
 
     out = bt.compute(raw)
     assert len(out) > 50, f"fixture degenerate: compute() kept only {len(out)} rows"
+    assert "SIGNAL_OK" in out.columns, "compute() must carry SIGNAL_OK"
 
-    # Ground truth: re-run compute()'s own row filter while KEEPING the index.
+    # Ground truth: the indicators on the raw frame, index kept.
     probe = raw.copy()
     c, h, l = probe["Close"], probe["High"], probe["Low"]
     import ta
@@ -1557,15 +1558,18 @@ def check_compute_preserves_alignment() -> None:
     probe["ATR"] = ta.volatility.average_true_range(h, l, c, window=14)
     probe["ADX"] = ta.trend.adx(h, l, c, window=14)
     probe["VOL_AVG20"] = probe["Volume"].rolling(20).mean()
-    probe = probe.dropna(subset=["EMA20", "EMA50", "MACD", "Signal", "RSI",
-                                 "ATR", "ADX", "VOL_AVG20"])
-    if len(probe) > bt.WARMUP_BARS + bt.MIN_BARS_AFTER:
-        probe = probe.iloc[bt.WARMUP_BARS:]
+    ok = probe[bt.INDICATOR_COLUMNS].notna().all(axis=1)
+    first = int(np.flatnonzero(ok.to_numpy())[0])
+    probe = probe.iloc[first + bt.WARMUP_BARS:]
     truth = raw.loc[probe.index, ["Date", "Open"]].reset_index(drop=True)
 
     assert len(truth) == len(out), (
         f"compute() kept {len(out)} rows, the reference filter kept {len(truth)} "
         f"— compute()'s row filter changed; update this check deliberately.")
+    assert out["SIGNAL_OK"].tolist() == ok.iloc[first + bt.WARMUP_BARS:].tolist(), \
+        "SIGNAL_OK must be exactly 'every indicator present on this row'"
+    n_blank = int((~out["SIGNAL_OK"]).sum())
+    assert n_blank == 20, (n_blank, "one missing Volume blanks exactly twenty signal bars")
 
     bad_dates = int((pd.to_datetime(out["Date"]).values != truth["Date"].values).sum())
     assert bad_dates == 0, (
@@ -1576,16 +1580,25 @@ def check_compute_preserves_alignment() -> None:
         "Open is misaligned with its indicator row — simulate_trade() would "
         "fill at a price from the wrong bar.")
 
-    # LIVENESS: the discarded method must actually differ on this fixture, or
-    # the two assertions above prove nothing.
-    stale = raw.tail(len(out)).reset_index(drop=True)
-    drift = int((pd.to_datetime(stale["Date"]).values != truth["Date"].values).sum())
-    assert drift > 0, (
-        "fixture is DEAD: raw.tail(len(df)) agrees with the truth here, so this "
-        "check would pass even with the bug restored. The interior NaN is not "
-        "dropping rows — re-derive the fixture.")
+    # LIVENESS: the discarded dropna filter must actually differ on this
+    # fixture, or the assertions above prove nothing about interior rows.
+    dropped = probe.dropna(subset=bt.INDICATOR_COLUMNS)
+    assert len(probe) - len(dropped) == 20, (
+        "fixture is DEAD: the interior NaN is not blanking rows, so this check "
+        "would pass with the old dropna filter restored. Re-derive the fixture.")
+    # The gap sessions are ON the timeline, dated and priced.
+    gap_dates = pd.to_datetime(out.loc[~out["SIGNAL_OK"], "Date"])
+    assert gap_dates.iloc[0] == raw["Date"].iloc[n // 2], "the gap starts at the bad bar itself"
+    assert np.isfinite(out.loc[~out["SIGNAL_OK"], ["Open", "High", "Low", "Close"]].to_numpy()).all()
 
-    # And no module may reintroduce it.
+    # The warm-up is a FIXED head: one more raw bar is one more retained row.
+    lens = [len(bt.compute(raw.iloc[:k])) for k in (first + bt.WARMUP_BARS + 38,
+                                                     first + bt.WARMUP_BARS + 39,
+                                                     first + bt.WARMUP_BARS + 40,
+                                                     first + bt.WARMUP_BARS + 41)]
+    assert lens == [38, 39, 40, 41], (lens, "a conditional warm-up slice is back")
+
+    # And no module may reintroduce tail-alignment.
     for path in ("backtest.py", "option_backtest.py", "universe_backtest.py"):
         txt = Path(path).read_text()
         for i, line in enumerate(txt.splitlines(), 1):
@@ -1596,8 +1609,8 @@ def check_compute_preserves_alignment() -> None:
                     f"{line.strip()!r}. compute() already carries Open/Date on "
                     f"the correct row; tail-alignment silently corrupts both "
                     f"whenever an interior row is dropped.")
-    print(f"  compute() keeps Open/Date on their own row "
-          f"({len(out)} rows; tail-alignment would have broken {drift})")
+    print(f"  compute() keeps Open/Date on their own row, every session on the timeline "
+          f"({len(out)} rows, {n_blank} signal-blank), warm-up a fixed head")
     print("  no module re-attaches Open/Date by tail position")
 
 
@@ -2464,9 +2477,9 @@ def check_option_iv_single_source() -> None:
         f = Path(rp.OPT_SWEEP_SOURCE.format(mult=mult))
         assert f.exists(), f"risk_params lists {mult} but {f.name} is not on file"
         txt = f.read_text(encoding="utf-8")
-        assert "look-ahead" not in txt[:600], (
-            f"{f.name} carries the look-ahead caveat; the table must be read from a "
-            f"re-run on the fixed code, never from a caveated file")
+        assert "look-ahead" not in txt[:600] and "SUPERSEDED" not in txt[:600], (
+            f"{f.name} carries a caveat (look-ahead or SUPERSEDED); the table must be "
+            f"read from a re-run on the fixed code, never from a caveated file")
         m = re.search(r"^\+100% / -50%\s+\d+\s+([0-9.]+)%", txt, re.M)
         assert m, f"{f.name}: no +100%/-50% row"
         assert abs(float(m.group(1)) - wr) < 1e-9, (
@@ -2687,6 +2700,79 @@ def check_app_paths_group_c() -> None:
     assert (bt.build_regime_series(long_) == "Neutral").sum() == mc.REGIME_MIN_BARS - 1, \
         "the record's no-view prefix must be exactly the live minimum"
     print("  batch retries only missing names and reports gaps; regime minimum shared; four regime states rendered")
+
+
+def check_research_clocks_group_b() -> None:
+    """
+    Group B (external review 2026-10-20, built 2026-10-28): the research
+    engines keep one clock each and the consumers read the same one.
+
+    - option_backtest: dte is calendar days, priced over CALENDAR_DAYS, the
+      entry session's close is marked, and a trade whose expiry lies past
+      the sample's end is OPEN. option_decompose reprices on the SAME clock
+      (dte_left/365), so its split reconciles to the engine's P&L; it and
+      thesis_test censor OPEN rows instead of scoring them.
+    - spread_backtest: a cycle is priced for the calendar days it lives and
+      settles on the first session on or after entry + dte days.
+    - longs_only: an exit on day D never funds an entry on day D; the span
+      annualised over is the observed one.
+    - pullback_signal: the raw history passes signal_core.validate_bars.
+    - backtest.compute: pinned by check_compute_preserves_alignment.
+    """
+    import numpy as np
+    import pandas as pd
+    import option_backtest as ob
+    import option_decompose as od
+    import spread_backtest as sb
+    import longs_only as lo
+    import signal_core as sc
+
+    rng = np.random.default_rng(11)
+    closes = 100.0 * np.exp(np.cumsum(rng.normal(0, 0.015, 90)))
+    frame = pd.DataFrame({"Date": pd.bdate_range("2025-03-03", periods=90).astype(str),
+                          "Open": closes, "High": closes * 1.01, "Low": closes * 0.99, "Close": closes})
+    cfg = {"iv_mult": 1.15, "dte": 30, "spread_pct": 8.0, "sl": 10**9, "tp": 10**9,
+           "dte_exit": 0, "use_thesis": False}
+    rec = ob.simulate_option_trade(frame, 30, "Bullish", cfg)
+    assert rec["reason"] == "EXPIRY" and 20 <= rec["held"] <= 23, (rec["reason"], rec["held"],
+        "a 30-DTE option must expire ~21 sessions after entry, not 30")
+    exp = pd.Timestamp(frame["Date"].iloc[31]) + pd.Timedelta(days=30)
+    assert pd.Timestamp(frame["Date"].iloc[31 + rec["held"]]) >= exp > pd.Timestamp(frame["Date"].iloc[30 + rec["held"]])
+    timed = ob.simulate_option_trade(frame, 30, "Bullish", dict(cfg, dte_exit=7))
+    assert timed["reason"] == "TIME" and timed["dte_left"] <= 7 < timed["dte_left"] + 4
+    d = od.decompose(timed, cfg["spread_pct"])
+    assert d is not None and abs(d["recon_pct"] - timed["pnl_pct"]) < 1e-6, (
+        d and d["recon_pct"], timed["pnl_pct"], "option_decompose reprices on a different clock from the engine")
+    left = ob.simulate_option_trade(frame, 80, "Bullish", cfg)
+    assert left["reason"] == ob.OPEN and od.decompose(left, cfg["spread_pct"]) is None
+    assert ob.summarise([rec, left]) ["n"] == 1 and ob.summarise([rec, left])["open"] == 1
+    tt = Path("thesis_test.py").read_text()
+    assert 'if t.get("reason") == ob.OPEN:' in tt, "thesis_test must censor OPEN trades before pairing"
+
+    idx = pd.bdate_range("2020-01-02", periods=200)
+    flat = pd.DataFrame({"Date": idx, "Close": np.full(len(idx), 400.0)})
+    vols = pd.Series(np.full(len(idx), 20.0), index=idx)
+    r = sb.run("SPY", structure=sb.PUT_SPREAD, width=10, otm_pct=5.0, dte=30, skew=0.0, years=1,
+               cost_frac=0.0, account=5000.0, vol_series=vols, bars=flat)
+    assert r is not None and all(30 <= c["days"] <= 32 for c in r["rows"]), [c["days"] for c in r["rows"]]
+    for c in r["rows"]:
+        want = sb.build(sb.PUT_SPREAD, 400.0, 0.20, c["days"] / 365.0, 10, 5.0, 0.0)["credit"]
+        assert abs(c["credit"] - want) < 1e-12, "a spread cycle must be priced for the days it lives"
+
+    def mk(date, r_, hold_to):
+        return {"trend": "Bullish", "r": r_, "entry": 100.0, "stop": 98.0,
+                "entry_date": date, "exit_date": hold_to, "ticker": "A"}
+    s3 = lo.simulate([mk("2020-01-01", 1.0, "2020-01-03"), mk("2020-01-03", 1.0, "2020-01-04")],
+                     account=5000.0, risk_pct=1.0, constrained=False)
+    assert abs(s3["equity"] - 5100.0) < 1e-6, (s3["equity"], "same-day proceeds funded an entry")
+    assert abs(s3["years"] - lo.observed_years("2020-01-01", "2020-01-04")) < 1e-12
+
+    assert sc.validate_bars(pd.concat([frame, frame.iloc[[-1]]]), "Date") == "duplicate bar dates"
+    src = Path("pullback_signal.py").read_text()
+    assert src.count("sc.validate_bars(raw_df)") == 2, "pullback_signal must validate the raw history (both entry points)"
+    assert "math.isfinite(atr) and atr > 0" in src, "pullback ATR must be finite and positive"
+    print("  option clock calendar (engine, decompose, thesis); spread cycles priced for their span; "
+          "no same-day funding; pullback history validated")
 
 
 def check_intraday_rules_match_preregistration() -> None:
@@ -3029,6 +3115,7 @@ CHECKS = [
     ("duplicated constants agree",                 check_duplicated_constants_agree),
     ("every production module imports",            check_modules_import),
     ("bar validator runs on every live frame",    check_bar_validator_wired),
+    ("research clocks: group B",                  check_research_clocks_group_b),
 ]
 
 

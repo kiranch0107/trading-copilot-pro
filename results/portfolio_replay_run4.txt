@@ -1,0 +1,64 @@
+LONGS-ONLY REPLAY ON THE GROUP B ENGINE (BACKLOG 36). Run by the owner 2026-10-28 on
+the laptop, `python longs_only.py`, branch claude/trading-code-review-wt48q8 @ c1de652,
+the same cache and OOS twelve as portfolio_replay_run3.txt (10y relative to the run date).
+Two things changed under it: longs_only.simulate() no longer lets an exit on day D fund an
+entry at day D's open, realises exits in exit order, and annualises over the observed span
+(the SPY benchmark over its own data's span); and backtest.compute() keeps every session
+on the execution timeline behind a fixed warm-up head.
+
+  run 3 (2026-10-28, before group B) -> run 4 (group B):
+    idealised    +0.3%/yr, 55.7% DD, 883 trades  ->  +0.4%/yr, 55.6% DD, 884 trades
+    constrained  +1.7%/yr, 21.8% DD, 692 trades  ->  +2.6%/yr, 17.2% DD, 645 trades
+    skipped, no room          191               ->  239 (the stricter same-day rule)
+    long side    +0.042 R, CI [-0.093, +0.177]  ->  +0.042 R, CI [-0.090, +0.174]
+    SPY          +13.7%/yr (requested window)   ->  +13.4%/yr (observed span), 34.1% DD
+
+The constrained curve is better on both axes because the account it replays could never
+spend same-day proceeds, so it took fewer, smaller positions through the worst stretch.
+The reading is unchanged: the index was better on both axes, with no signals to follow.
+
+====================================================================================
+LONGS ONLY, IN SHARES — what it would actually have been
+====================================================================================
+  $5,000 account, 1.0% risk per trade, position ceiling 25%
+  A MEASUREMENT, not a test. No bar, nothing searched over.
+====================================================================================
+                   total %   CAGR %  max DD %  trades   win %
+  -----------------------------------------------------------
+  idealised           +4.0     +0.4      55.6     884    35.9
+  constrained        +27.1     +2.6      17.2     645    37.1
+  SPY buy-hold      +252.4    +13.4      34.1       —       —
+
+  WHAT THE CONSTRAINT COST
+    signals skipped, no room    239
+    positions sized down        738
+    peak concurrent positions   5
+    peak capital deployed       100% of equity
+    -> 239 of 884 signals (27%) were not takeable at this account size
+
+  BY YEAR (constrained)
+    year      trades       P&L $
+    2017          49        -201
+    2018          61        +494
+    2019          58        +108
+    2020          80        +300
+    2021          85        +367
+    2022          27        -738
+    2023          80        +351
+    2024          91        -414
+    2025          63        +925
+    2026          51        +165
+
+====================================================================================
+  READING IT
+  The long side is +0.042 R on 884 trades, 95% CI [-0.090, +0.174] — it SPANS ZERO.
+  (The record was +0.085 R, and decayed +0.268 -> +0.106 -> +0.085
+  as the sample grew; results/longshort_split.md.)
+  Dropping shorts removes a measured loss; it does not add a measured
+  gain. Expectancy above has a confidence interval. The DRAWDOWN does
+  not — that is what the path did.
+
+  This returned +2.6%/yr against SPY at +13.4%/yr,
+  at 17% drawdown against 34%. Owning the index was
+  better on both axes, with no signals to follow.
+====================================================================================

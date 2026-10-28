@@ -1,3 +1,8 @@
+!! SUPERSEDED BY GROUP B (BACKLOG 36, built 2026-10-28): backtest.compute() now keeps
+!! every session on the execution timeline and discards a fixed warm-up head; the
+!! held-out trade set moves with it. RE-RUN LANDED 2026-10-28 (run 4, same frozen hash):
+!! results/oos_validate_run4.md -- IDENTICAL to this run in every number (579 trades,
+!! -0.112 R, PF 0.85, same fingerprint, same fills). Group B did not touch the held-out cut.
 Running: /workspaces/trading-copilot-pro/trading-copilot-pro/.venv/bin/python backtest.py --tickers GOOGL,AVGO,AMD,NFLX,CRM,ADBE,QCOM,MU,ORCL,NOW,PANW,LRCX --years 15 --adx-min 35.0 --atr-stop 1.25 --atr-tgt 4.0 --max-hold 30 --slippage-bps 2.0 --use-regime
 
 ==========================================================================

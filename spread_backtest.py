@@ -204,19 +204,30 @@ def run(ticker: str, *, structure: str, width: float, otm_pct: float,
 
     closes = df["Close"]
     vols = vol_series.reindex(closes.index).ffill() / 100.0
-    t = dte / 365.0
 
+    # ONE CALENDAR (external review 2026-10-20, group B; 2026-10-28). `dte`
+    # is calendar days to expiry: the cycle is priced for exactly the days it
+    # lives and settles on the first session on or after entry + dte days.
+    # It used to price dte/365 of time value and then hold dte SESSIONS (30
+    # sessions is six weeks), so the priced maturity and the elapsed holding
+    # period disagreed on every cycle.
     cycles = []
     i = 0
-    while i + dte < len(closes):
+    idx = closes.index
+    while True:
+        expiry = idx[i] + pd.Timedelta(days=dte)
+        j = int(idx.searchsorted(expiry))         # first session >= expiry
+        if j >= len(idx):
+            break
+        t = (idx[j] - idx[i]).days / 365.0
         spot = float(closes.iloc[i])
         base_vol = float(vols.iloc[i]) if not pd.isna(vols.iloc[i]) else float("nan")
         if not np.isfinite(base_vol) or base_vol <= 0:
-            i += dte
+            i = j
             continue
 
         pos = build(structure, spot, base_vol, t, width, otm_pct, skew)
-        exit_spot = float(closes.iloc[i + dte])
+        exit_spot = float(closes.iloc[j])
         owed = settle(pos["legs"], exit_spot)
 
         # CROSSING COST, charged per LEG against that leg's own price.
@@ -245,17 +256,40 @@ def run(ticker: str, *, structure: str, width: float, otm_pct: float,
         pnl = (pos["credit"] - owed - cost) * 100.0     # one contract, 100 shares
 
         cycles.append({
-            "entry": closes.index[i], "exit": closes.index[i + dte],
+            "entry": idx[i], "exit": idx[j], "days": int((idx[j] - idx[i]).days),
             "spot": spot, "exit_spot": exit_spot, "iv": base_vol * 100.0,
             "credit": pos["credit"], "owed": owed, "pnl": pnl,
             "max_loss": pos["max_loss"] * 100.0,
         })
-        i += dte
+        i = j
 
     if not cycles:
         return None
     return summarise(cycles, account=account, ticker=ticker,
                      structure=structure, width=width)
+
+
+def print_fingerprint() -> str | None:
+    """
+    The bars this run read, as the one line the share and option engines
+    print (`data: v2-...`, series, cached/fetched, age). Added after run 3
+    (2026-10-28, BACKLOG 36 group B): runs 2 and 3 were seven weeks apart on
+    "10 years relative to today" and nothing recorded whether they read the
+    same bars. Returns the line, or None when nothing was read.
+    """
+    _bc = getattr(bt, "bar_cache", None)
+    _log = getattr(bt, "_CACHE_LOG", None)
+    if _bc is None or not _log:
+        return None
+    seen, metas, stats = set(), [], []
+    for m, st in _log:                       # one entry per series, first read
+        k = (m or {}).get("key") or (m or {}).get("ticker")
+        if k in seen:
+            continue
+        seen.add(k); metas.append(m); stats.append(st)
+    line = _bc.summarise(metas, stats)
+    print(f"  {line}")
+    return line
 
 
 def benchmark(cycles: list[dict], *, account: float) -> dict:
@@ -500,6 +534,29 @@ def selftest() -> int:
     print(f"engine           : flat path -> {r['cycles']} cycles, "
           f"{r['win_rate']:.0f}% win, {r['mean_pct']:+.2f}%/cycle")
 
+    # ── ONE CALENDAR (group B, 2026-10-28) ──
+    # A 30-DTE cycle lives 30 calendar days (32 at most, when the expiry falls
+    # on a weekend and settles on the Monday), never 30 SESSIONS; the priced
+    # maturity equals the elapsed span; and 300 sessions (~14 months) hold
+    # about fourteen such cycles, not ten.
+    _rows = r["rows"]
+    assert all(30 <= c["days"] <= 32 for c in _rows), [c["days"] for c in _rows]
+    assert all((c["exit"] - c["entry"]).days == c["days"] for c in _rows)
+    assert all(c["exit"] - pd.Timedelta(days=30) >= c["entry"] for c in _rows)
+    assert all(_rows[k + 1]["entry"] == _rows[k]["exit"] for k in range(len(_rows) - 1)), \
+        "the next cycle opens on the session the last one settled"
+    assert 13 <= r["cycles"] <= 15, (r["cycles"], "300 sessions must hold ~14 thirty-day cycles")
+    # and the credit of each cycle is the one priced for ITS span, so a
+    # cycle that settles on a Monday (31-32 days) is priced for 31-32 days
+    _long = [c for c in _rows if c["days"] > 30]
+    assert _long, "fixture dead: no cycle's expiry fell on a weekend"
+    for c in _rows:
+        _want = build(PUT_SPREAD, 400.0, 0.20, c["days"] / 365.0, 10, 5.0, 0.0)["credit"]
+        assert abs(c["credit"] - _want) < 1e-12, (c["days"], c["credit"], _want)
+    print(f"calendar         : {r['cycles']} cycles of "
+          f"{min(c['days'] for c in _rows)}-{max(c['days'] for c in _rows)} calendar days, "
+          f"priced for the days they live")
+
     # A crash path must produce a full-width loss, and the sizing clause must see it.
     crash = np.full(len(idx), 400.0)
     crash[40:] = 250.0
@@ -546,9 +603,14 @@ def selftest() -> int:
     # Every cycle on the flat path builds an identical position, so the expected
     # charge is exact rather than approximate. A stray factor of two for a
     # round trip the model does not take would fail here.
-    expect_usd = (rp.MAX_OPTION_SPREAD_PCT / 100.0 * CROSS_FRAC
-                * build(PUT_SPREAD, 400.0, 0.20, 30 / 365, 10, 5.0, 0.0)["gross"]
-                * 100.0)
+    # Each cycle is priced for the calendar days it actually lives (30, or
+    # 31-32 when the expiry lands on a weekend), so the formula is averaged
+    # over the cycles' own spans -- group B, 2026-10-28.
+    _spans = [c["days"] for c in free["rows"]]
+    expect_usd = float(np.mean([
+        rp.MAX_OPTION_SPREAD_PCT / 100.0 * CROSS_FRAC
+        * build(PUT_SPREAD, 400.0, 0.20, d / 365, 10, 5.0, 0.0)["gross"] * 100.0
+        for d in _spans]))
     observed_usd = (free["mean_pct"] - paid["mean_pct"]) / 100.0 * 5000.0
     assert abs(observed_usd - expect_usd) < 0.01, (
         f"engine charged ${observed_usd:.4f}/cycle, formula says ${expect_usd:.4f} — "
@@ -592,6 +654,26 @@ def selftest() -> int:
           f"condor w10 {_old(ic10):.3f}->{_new(ic10):.3f}")
 
     print("=" * 70)
+    # ── the run says what bars it read (group B follow-up, 2026-10-28) ──
+    import contextlib as _ctx, io as _io, inspect as _insp
+    _saved_log = list(getattr(bt, "_CACHE_LOG", []))
+    try:
+        _meta = lambda tk: {"key": f"{tk}_1d_10y", "ticker": tk, "interval": "1d", "years": 10,
+                            "variant": "raw", "hash": "cd" * 16, "fetched_at": "2026-10-01T00:00:00Z"}
+        bt._CACHE_LOG[:] = [(_meta("SPY"), "hit"), (_meta("SPY"), "hit"), (_meta("^VIX"), "stored")]
+        _buf = _io.StringIO()
+        with _ctx.redirect_stdout(_buf):
+            _line = print_fingerprint()
+        assert _line and "data: v2-" in _buf.getvalue() and "2 series, 1 cached / 1 fetched" in _buf.getvalue(), (
+            _buf.getvalue(), "every spread run must print the bar-cache fingerprint, one entry per series")
+        bt._CACHE_LOG[:] = []
+        assert print_fingerprint() is None, "nothing read, nothing claimed"
+    finally:
+        bt._CACHE_LOG[:] = _saved_log
+    _main_src = _insp.getsource(main)
+    assert "print_fingerprint()" in _main_src and "_CACHE_LOG.clear()" in _main_src, \
+        "main() must clear the cache log before its reads and print the fingerprint after the report"
+    print("fingerprint      : printed once per run, this run's reads only")
     print("All self-tests passed.")
     return 0
 
@@ -684,6 +766,8 @@ def main() -> int:
     widths = [float(w) for w in a.widths.split(",") if w.strip()]
     structures = [s.strip() for s in a.structures.split(",") if s.strip()]
     skews = [0.0, 10.0, REALISTIC_SKEW, 30.0] if a.skew_sweep else [a.skew]
+    if hasattr(bt, "_CACHE_LOG"):
+        bt._CACHE_LOG.clear()               # the fingerprint is THIS run's reads
 
     by_arm: dict = {}
     for skew in skews:
@@ -702,7 +786,9 @@ def main() -> int:
         print("NOTHING MEASURED — do not read anything into this run.",
               file=sys.stderr)
         return 2
-    return report(by_arm, a.account, skews)
+    rc = report(by_arm, a.account, skews)
+    print_fingerprint()
+    return rc
 
 
 if __name__ == "__main__":

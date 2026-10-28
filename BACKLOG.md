@@ -1164,10 +1164,12 @@ Historical single-name IV is not available from this data source, which is
 why B is forward. A path-dependent IV model is explicitly out of scope.
 
 **Part A run 2026-10-08 by the owner (`results/option_iv_sensitivity_run1.md`);
-re-run 2026-10-28 on the no-look-ahead code (`option_iv_sensitivity_run2.md`),
-every finding below held, constants moved to run 2.**
+re-run 2026-10-28 on the no-look-ahead code (`option_iv_sensitivity_run2.md`)
+and again the same day on the calendar-clock engine
+(`option_iv_sensitivity_run3.md`, item 36 group B); every finding below
+held, constants moved to run 3 (the sign line sits at TP ≥ +150 on run 3).**
 Ordering of take-profit levels by win rate: invariant across 1.00–1.50.
-Sign of expectancy at TP ≥ +100: **not** invariant — positive at 1.00, negative
+Sign of expectancy at TP ≥ +100 (run 3: ≥ +150): **not** invariant — positive at 1.00, negative
 at 1.15 and up. So the verdict on the live TP+200 / SL−50 structure is the
 constant's, not the data's, and is UNMEASURED until Part B reads. +50 and +75
 stay refuted at every multiplier. `OPT_WIN_RATE` at TP+100 / SL−50 spans
@@ -1829,6 +1831,19 @@ base-signal question; (D) re-pose H1, since a tier that fired 0 times in
 decisions:** which of A to D to pre-register; whether to build the episode
 reading now (recommended: yes, it is a reading change).
 
+**(E) added 2026-10-28, OPEN:** `results/spread_backtest_run3.md`. On the
+group B engine (item 36) five of the eight always-on defined-risk arms
+clear the bar `spread_backtest.py` declares, at every skew: all four SPY
+arms and QQQ put_spread w10, 120 cycles each. Run 2 said no arm cleared,
+because it charged each cycle 42 days of risk for 30 days of premium. The
+file lists why it is not yet a result (no data fingerprint printed on that
+run; a third look at the same ten years; modelled prices; no
+pre-registration saying what a PASS commits anyone to). Recommended: do
+nothing with it until a pre-registration exists that names the mechanism,
+the bar, and a forward arm (the same shape as the forward record), then
+re-run with the fingerprint printed. Not recommended: trading an arm on
+this file.
+
 ---
 
 ## 35. External review of 2026-10-19: twenty claims verified, none wrong; the record reads the forming bar, IV grading will censor departed names from ~11-07, close durability is P0 — ALL FIVE GROUPS DONE 2026-10-19; OPTION RE-RUNS DONE 2026-10-28
@@ -1916,7 +1931,8 @@ into its own list and returns it only whole (N08). Guards falsified.
 `results/option_iv_sensitivity_run2.md` and `thesis_exit_run2.md`. Every
 finding held; `OPT_WIN_RATE` 0.249 → 0.251 and both sweep tables are run
 2's, pinned to the run-2 files by `check_option_iv_single_source`; the
-seven caveated files now point at run 2; `option_backtest.py` prints the
+seven caveated files now point at run 2 (and run 2 at run 3 since group B,
+item 36: `OPT_WIN_RATE` 0.281); `option_backtest.py` prints the
 bar-cache fingerprint from now on. The 393-vs-398 question was settled by
 the cache manifest the same day: run 2 read the frozen 2026-09-10 bars (as
 the 09-10 sweep did), run 1 of 10-08 was a live fetch a month later at both
@@ -1974,10 +1990,78 @@ positive prices, sorted unique sessions; finite R before `record_outcome`;
 finite spot/strike before an IV row; finite OHLC in the paper grader's
 `session_coverage`; `0 < bid <= ask` and integer contracts in
 `risk_params.check_option_cost`; drop bars dated after today whatever the
-clock; UUID-sized id suffix. **Open, group B (research engines, re-runs
-owed):** backtest warm-up discontinuity, execution bar dropped on missing
-volume, option clock by calendar dates and end-of-sample trades marked
-open, spread maturity, portfolio chronology. **Group C DONE 2026-10-28 (owner: "go with group C as well").**
+clock; UUID-sized id suffix. **Group B BUILT 2026-10-28 (owner: "go with
+group B as well"), RE-RUNS OWED — fix and re-runs merge as ONE change.**
+~~Open, group B (research engines, re-runs owed):~~ backtest warm-up
+discontinuity, execution bar dropped on missing volume, option clock by
+calendar dates and end-of-sample trades marked open, spread maturity,
+portfolio chronology, pullback history validation. What changed:
+`backtest.compute()` discards a FIXED head (first complete-indicator row +
+`WARMUP_BARS`) instead of a conditional one (189 raw rows kept 140, 190
+kept 41), keeps every session on the execution timeline and carries
+`SIGNAL_OK` (a missing Volume blanks twenty signal bars instead of
+deleting twenty sessions; `evaluate_signal` reads no signal from a blank
+row, tally "indicator gap"; `simulate_trade` sees a stop crossed in one).
+The live `scanner.compute()` keeps its conditional slice: it reads only
+the latest bar and fetches a year, so the cliff cannot reach it; aligning
+it is a live-path change and was not made here. `option_backtest` runs on
+the calendar: expiry = entry date + `dte` days, time value over
+`CALENDAR_DAYS` (365, not 252), the entry session's close is the first
+mark (a day-one stop fills), the TIME exit counts calendar days, expiry
+settles on the first session on or after the date, and a trade whose
+expiry lies past the sample's end is `OPEN` — counted by `summarise()`,
+never a win or a loss; `option_decompose` reprices on the same clock
+(`dte_left`/365, so the split reconciles to the engine's P&L) and it and
+`thesis_test` censor `OPEN` rows. `spread_backtest` settles a cycle on the
+first session on or after entry + `dte` calendar days and prices it for
+the days it lives (it priced 30/365 and held 30 SESSIONS); 300 sessions
+hold ~14 thirty-day cycles, not 10. `longs_only.simulate()` sorts entries
+by date, realises exits strictly BEFORE the entry day (an exit on day D no
+longer funds an entry at day D's open), realises them in exit order, and
+annualises over the observed span (`observed_years`: first entry to last
+exit; the benchmark over its own data's span, not the requested window).
+`pullback_signal` refuses a raw history that fails
+`signal_core.validate_bars` (duplicate, unsorted, NaN: tally
+"bad_history") and a non-finite ATR ("bad_atr"). Every guard falsified
+(30 mutants); `check_compute_preserves_alignment` re-derived for the
+complete timeline and fixed head; one check added (55,
+`check_research_clocks_group_b`); `check_option_iv_single_source` now
+also refuses a SUPERSEDED source file. **Superseded in place, re-runs
+owed from the branch on the laptop (frozen bars):** option sweep ×4 +
+default + thesis (→ run 3; `risk_params` constants and `OPT_SWEEP_SOURCE`
+move with them, so that check is RED until they land, which is the gate),
+`spread_backtest_run3.md`, `portfolio_replay_run4.txt`,
+`pullback_arrival_run2.txt`, `record_recheck_groupb_run1.txt` (CODE MOVED
+against the 10-08 data baseline is the expected verdict),
+`oos_validate_run4.md` (same frozen hash). The older research files
+(feature_sweep, exit_ab, conditional_test, drift_null, inverted_arm,
+universe_backtest) are readings of the engine of their day and are not
+re-run. **RE-RUNS DONE 2026-10-28** (owner's laptop, branch @ c1de652,
+frozen bars), merged with the fix as one change:
+`option_iv_sensitivity_run3.md` (win rate at TP+100 25.1 % → 28.1 %, every
+average loss larger by the same mechanism, no OPEN trade; every finding
+held except the sign line at 1.00x, which moved from TP ≥ +100 to ≥ +150;
+`OPT_WIN_RATE` 0.251 → 0.281, both sweep tables and `OPT_SWEEP_SOURCE` are
+run 3's; the 0 % breakeven of 33.3 % is still cleared by nothing);
+`thesis_exit_run3.md` (KEEP; the rule now touches 298 trades, not 590,
+because the calendar TIME exit pre-empts it; delta −0.34 %, detectable
+1.95 %); **`spread_backtest_run3.md`: FIVE of eight arms clear the
+pre-registered bar at every skew** (all four SPY arms and QQQ put_spread
+w10; 120 cycles per arm instead of 83; drawdowns a third to a tenth of run
+2's), because run 2 charged each cycle 42 days of risk for 30 days of
+premium. The engine printed no data fingerprint (added now, for run 4),
+the ten years have been read three times, and no pre-registration says
+what a PASS commits anyone to: **what follows is the owner's decision
+(see 34)**; nothing is traded or amended by the file.
+`portfolio_replay_run4.txt` (constrained +1.7 %/yr at 21.8 % DD → +2.6 %
+at 17.2 %, 239 signals skipped under the strict same-day rule; the long
+edge +0.042 R unchanged; SPY +13.4 %/yr over its observed span);
+`pullback_arrival_run2.txt` identical to run 1 (no bad history in the
+pool); `record_recheck_groupb_run1.txt` reproduced the RECORD's own
+fingerprints (the cache holds the 09-10 bars) and read CODE MOVED on all
+three cuts, 418 → 415, 684 → 681, 1386 → 1377 trades, the sum of every
+engine change since the record; `oos_validate_run4.md` IDENTICAL to run 3
+in every number (the held-out cut had no gap row to lose). **Group C DONE 2026-10-28 (owner: "go with group C as well").**
 `app.batch_get_data` retries exactly the names a partial batch left out
 and reports the ones still missing (`BATCH_GAPS`), which the scan lists
 beside its results as "no data after batch retry". The scanner's alert
@@ -2101,9 +2185,10 @@ FAIL unchanged, −0.112 R on 579 trades; the raw output
 (13 cached / 0 fetched) and 92 of 579 trades gapped through a level (61
 stops filled at the open), the mechanism behind the move from run 2.
 
-**Still pending, in blocking order:** the rest of BACKLOG 36 group B (research engines: warm-up discontinuity,
-execution bar on missing volume, option clock by calendar dates, spread
-maturity, portfolio chronology), each a re-run of a committed result;
+**Still pending, in blocking order:** the owner's reading of
+`results/spread_backtest_run3.md` (five arms clear the bar on the fixed
+engine; BACKLOG 34, decision E); `python bar_cache.py --info` on the laptop
+to say which bars spread run 3 read (the engine now prints it);
 journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
 the 11-09/11-10 post-close logs (F5).
 
@@ -2111,8 +2196,8 @@ the 11-09/11-10 post-close logs (F5).
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 54 cross-module
-  invariants (54 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 55 cross-module
+  invariants (55 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip

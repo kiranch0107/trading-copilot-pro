@@ -1,3 +1,10 @@
+!! SUPERSEDED BY GROUP B (BACKLOG 36, built 2026-10-28). The option engine in this
+!! file counted DTE in SESSIONS (priced dte/252, held dte rows), skipped the entry
+!! session's close, and settled a trade cut off by the sample's end as if it had
+!! expired. The engine now runs on the calendar (expiry = entry + dte days, time
+!! value over 365), marks the entry session, and leaves sample-end trades OPEN.
+!! RE-RUN LANDED the same day on the same frozen bars: results/thesis_exit_run3.md
+!! (thesis_exit_run3.txt). KEEP unchanged; delta +0.25% -> -0.34%, detectable 2.94% -> 1.95%.
 # Thesis-exit test — run 2 (the no-look-ahead code)
 
 **Run by the owner 2026-10-28, `python thesis_test.py --years 10` on the
