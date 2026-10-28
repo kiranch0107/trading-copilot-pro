@@ -1991,8 +1991,14 @@ and still refuses a hard one). `backtest.build_regime_series` reads
 `market_context.REGIME_MIN_BARS` (200) instead of `min_periods=50`, so the
 record has no regime view where the live paths have none; a `--use-regime`
 result can move only in the first 150 SPY bars of its window, and the
-15-year OOS reproduction (`python oos_validate.py`, same frozen hash) is
-OWED on the laptop to show whether any of the 591 trades did. The app's
+15-year OOS reproduction (`python oos_validate.py`, same frozen hash) was
+RUN by the owner the same day (`results/oos_validate_run3.md`): 585 → 579
+trades, −0.021 → −0.112 R, PF 0.97 → 0.85, FAIL unchanged; the movement is
+the gapped-stop fill fix of 10-08 (expectancy), the unrounded gates (the
+six trades) and the regime minimum (can only add trades in the first 150
+SPY bars), not separated because a fourth run would spend more of the
+held-out set's independence. The harness now prints the bar-cache
+fingerprint and the fill tally and records both in the ledger. The app's
 regime banner renders `market_context.regime_status()`: off by setting,
 unavailable (on, no verdict: nothing filtered, not by choice), stale (a
 verdict from a bar older than 4 days; the verdict now carries `asof`) and
@@ -2089,9 +2095,12 @@ basket record, both forward from the next post-close pass.
 **Group C done 2026-10-28** (item 36): batch gaps, one contract
 selector, shared regime minimum, four regime states.
 
-**Still pending, in blocking order:** the OOS reproduction owed by the
-shared regime minimum (`python oos_validate.py` on the laptop; item 36);
-the rest of BACKLOG 36 group B (research engines: warm-up discontinuity,
+**OOS reproduction run 2026-10-28** (item 36, `results/oos_validate_run3.md`):
+FAIL unchanged, −0.112 R on 579 trades; the owner's `oos_raw_output.txt`
+(fingerprint and fill tally) is still to be pushed as
+`results/oos_validate_run3_raw.txt`.
+
+**Still pending, in blocking order:** the rest of BACKLOG 36 group B (research engines: warm-up discontinuity,
 execution bar on missing volume, option clock by calendar dates, spread
 maturity, portfolio chronology), each a re-run of a committed result;
 journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
