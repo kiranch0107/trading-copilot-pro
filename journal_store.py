@@ -271,6 +271,17 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
     case. With it the match is exact. Stored as given, None when the owner
     did not say; never inferred from the source field.
     """
+    _mode = "paper" if str(mode).lower().startswith("p") else "live"
+    if str(source) != "signal" and _mode == "live":
+        # NO DISCRETIONARY OPTION ENTRY LIVE (BACKLOG 32, decision 3, owner
+        # 2026-10-28). The journal is the record of the SIGNAL's trades; the
+        # owner's three discretionary trades (-$111) were being averaged into
+        # it. An idea of your own is followed on paper, where it is graded,
+        # or not at all.
+        raise ValueError(
+            "a discretionary option entry is not logged as live money (BACKLOG "
+            "32, decision 3): log it as a paper trade, or as a system signal "
+            "with its signal bar.")
     if str(source) == "signal" and not signal_key:
         # A SIGNAL TRADE NAMES ITS SIGNAL (progress review 2026-10-26, F4).
         # Every one of the 15 journal rows lacked a key, so attach_outcomes()
@@ -282,6 +293,17 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
             "(signal_key); without it the outcome can never attach to the "
             "forward record. Enter the 'Signal bar:' date from the alert, or "
             "log the trade as discretionary.")
+    if str(source) == "signal":
+        # ONLY THE MEASURED STRUCTURE (BACKLOG 32, decision 1). A signal trade
+        # outside 21-45 DTE or off the +200/-50/7 rules is a different
+        # strategy from the one tested, and its outcome would be read as if
+        # it were the tested one.
+        import risk_params as _rp
+        _as_of = (str(traded_at)[:10] if traded_at
+                  else datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d"))
+        _why = _rp.option_structure_violation(expiry, _as_of, rules)
+        if _why:
+            raise ValueError(f"not the measured structure ({_why}); {_rp.STRUCTURE_REASON}")
     positions = load_positions()
     now_epoch = time.time()
     pos = {
@@ -299,7 +321,7 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
         "notes":            notes,
         "opened":           datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d %H:%M ET"),
         "opened_epoch":     now_epoch,
-        "mode":             "paper" if str(mode).lower().startswith("p") else "live",
+        "mode":             _mode,
         "source":           source,
         "signal_key":       signal_key or None,
         "traded_at":        traded_at or datetime.now(
@@ -883,7 +905,29 @@ def selftest() -> int:
             assert "signal_key" in str(_e), _e
         assert not _mem["pos"] or all(p["ticker"] != "PFE" for p in _mem["pos"]), "refused = not written"
         _pn = open_option_position("PFE", "CALL", 29.0, "2026-10-16", 1, 0.5,
-                                   _rules, source="discretionary")
+                                   _rules, source="discretionary", mode="paper")
+        # BACKLOG 32 (decided 2026-10-28): no discretionary entry LIVE; a
+        # signal entry only in the measured structure (21-45 DTE at the
+        # trade date; +200 / -50 / out at 7).
+        for _kw, _needle in (
+                (dict(source="discretionary", mode="live"), "discretionary"),
+                (dict(source="signal", signal_key="PFE|Bullish|2026-10-07", traded_at="2026-10-07 10:00 ET"),
+                 "9 DTE"),                                             # 2026-10-16 is 9 days out
+                (dict(source="signal", signal_key="PFE|Bullish|2026-10-07", traded_at="2026-10-07 10:00 ET",
+                      expiry="2026-11-20", rules=dict(_rules, tp_pct=100)), "take profit 100")):
+            _args = dict(ticker="PFE", right="CALL", strike=29.0, expiry="2026-10-16", contracts=1,
+                         entry_premium=0.5, rules=_rules)
+            _args.update(_kw)
+            try:
+                open_option_position(**_args)
+                raise AssertionError(f"must refuse: {_kw}")
+            except ValueError as _e:
+                assert _needle in str(_e), (_needle, str(_e))
+        assert sum(1 for p in _mem["pos"] if p["ticker"] == "PFE") == 1, "refused = not written (only _pn is PFE)"
+        _pp = open_option_position("PFE", "CALL", 29.0, "2026-10-16", 1, 0.5, dict(_rules, tp_pct=100),
+                                   source="discretionary", mode="paper")
+        assert _pp["mode"] == "paper", "a discretionary PAPER entry is allowed, on any rules"
+        close_position(_pp["id"], 0.4, "LOSS")
         assert _pk["signal_key"] == "NVDA|Bullish|2026-10-07"
         assert _pn["signal_key"] is None, "no key given -> None, never inferred"
         close_position(_pk["id"], 4.5, "WIN", closed_at="2026-10-09 15:40 ET")
@@ -900,7 +944,7 @@ def selftest() -> int:
         assert not _mem["pos"], "both positions closed"
         # ── ACKNOWLEDGED CLOSE (group 4): a failed journal write keeps the
         # position and reports; a later successful close removes it. ──
-        _pf = open_option_position("AMD", "CALL", 100.0, "2026-11-20", 1, 1.0, _rules)
+        _pf = open_option_position("AMD", "CALL", 100.0, "2026-11-20", 1, 1.0, _rules, mode="paper")
         _g["save_journal"] = lambda d: "GitHub PUT 401: Bad credentials"
         _res = close_position(_pf["id"], 1.5, "WIN")
         assert _res["ok"] is False and "401" in _res["error"], _res
@@ -912,7 +956,7 @@ def selftest() -> int:
         assert sum(1 for j in _mem["jrn"] if j["id"] == _pf["id"]) == 1, "a retried close writes one row"
         assert close_position("nope", 1.0, "WIN")["ok"] is False
         # journal landed, position removal failed: pending, journaled, kept
-        _pg = open_option_position("PG", "CALL", 150.0, "2026-11-20", 1, 1.0, _rules)
+        _pg = open_option_position("PG", "CALL", 150.0, "2026-11-20", 1, 1.0, _rules, mode="paper")
         _g["save_positions"] = lambda d: "GitHub PUT 500: boom"
         _res3 = close_position(_pg["id"], 1.2, "WIN")
         assert _res3["ok"] is False and _res3["journaled"] is True and "500" in _res3["error"], _res3
@@ -939,9 +983,10 @@ def selftest() -> int:
         finally:
             _g.update(_saved_al)
         # ── IDS DO NOT COLLIDE WITHIN A SECOND ──
-        _a = open_option_position("MSFT", "CALL", 400.0, "2026-11-20", 1, 2.0, _rules)
-        _b = open_option_position("MSFT", "CALL", 400.0, "2026-11-20", 1, 2.0, _rules)
+        _a = open_option_position("MSFT", "CALL", 400.0, "2026-11-20", 1, 2.0, _rules, mode="paper")
+        _b = open_option_position("MSFT", "CALL", 400.0, "2026-11-20", 1, 2.0, _rules, mode="paper")
         assert _a["id"] != _b["id"] and _a["id"].startswith("OPT_MSFT_"), (_a["id"], _b["id"])
+        print("journal hygiene         : no discretionary entry live; a signal entry only in the measured structure")
         print("acknowledged close      : failed journal write keeps the position and reports; "
               "retry closes once; same-second ids differ; a failed removal is a pending close; "
               "share-close bookkeeping runs on success")

@@ -335,6 +335,53 @@ def measured_option_edge(tp_pct: float) -> dict | None:
 # consistency_check.check_direction_gate_is_live_only() pins both halves.
 LONGS_ONLY = True
 
+# THE MEASURED OPTION STRUCTURE, and the only one a SIGNAL trade may be logged
+# under (BACKLOG 32, decision 1, owner 2026-10-28: "trade the measured
+# structure or do not trade"). option_backtest measured 21-45 DTE at entry,
+# +200% / -50% on the premium, out at 7 DTE (the sweep's rows; the live rules
+# the monitor enforces). The journal review of 2026-10-13 found ten of
+# thirteen trades entered under 21 DTE and none run to +200%: the structure
+# that was tested was never the one traded, so its record said nothing
+# about the signal. journal_store.open_option_position() refuses a signal
+# trade outside this, in these words; the scanner's chain window and the
+# app's defaults read it from here. One home.
+MEASURED_OPTION_STRUCTURE = {
+    "min_dte": 21, "max_dte": 45,           # days to expiry at entry
+    "tp_pct": 200.0, "sl_pct": 50.0,        # on the premium paid
+    "dte_exit": 7,                          # out at this many days left
+}
+STRUCTURE_REASON = ("the measured structure is {min_dte}-{max_dte} DTE at entry, "
+                    "+{tp_pct:g}% / -{sl_pct:g}% on the premium, out at {dte_exit} DTE; "
+                    "a name where that is unaffordable at this account size is not "
+                    "tradeable here (BACKLOG 32)").format(**MEASURED_OPTION_STRUCTURE)
+
+
+def option_structure_violation(expiry: str, as_of: str, rules: dict | None) -> str | None:
+    """
+    Why an option entry is NOT the measured structure, or None if it is.
+    `expiry` and `as_of` are YYYY-MM-DD (as_of: the trade date); `rules` is
+    the monitor's block ({tp_pct, sl_pct, dte_exit, ...}). The reason names
+    the leg so the refusal says what to change; the sentence that follows it
+    (STRUCTURE_REASON) is the same every time.
+    """
+    import datetime as _dt
+    m = MEASURED_OPTION_STRUCTURE
+    try:
+        dte = (_dt.date.fromisoformat(str(expiry)[:10]) - _dt.date.fromisoformat(str(as_of)[:10])).days
+    except ValueError:
+        return "expiry or trade date unreadable"
+    if not (m["min_dte"] <= dte <= m["max_dte"]):
+        return f"{dte} DTE at entry is outside {m['min_dte']}-{m['max_dte']}"
+    r = rules or {}
+    for key, label in (("tp_pct", "take profit"), ("sl_pct", "stop loss"), ("dte_exit", "time exit")):
+        try:
+            got = float(r.get(key) or 0)
+        except (TypeError, ValueError):
+            got = 0.0
+        if abs(got - float(m[key])) > 1e-9:
+            return f"{label} {got:g} is not the measured {m[key]:g}"
+    return None
+
 DIRECTION_REASON = (
     "short setups are switched off: measured worse than random entry "
     "(drift_null run 1 — excess -9.5pp vs a -4.6pp random null, all 200 "
@@ -500,6 +547,23 @@ def _selftest_sweep_table() -> None:
     print(f"  sweep table: {len(rows)} expectancy values == measured_option_edge()")
 
 
+def _selftest_structure() -> None:
+    """The measured structure is one dict and the violation reads it."""
+    m = MEASURED_OPTION_STRUCTURE
+    assert (m["min_dte"], m["max_dte"], m["tp_pct"], m["sl_pct"], m["dte_exit"]) == (21, 45, 200.0, 50.0, 7)
+    ok = {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "max_hold_bars": 20}
+    assert option_structure_violation("2026-11-20", "2026-10-28", ok) is None            # 23 DTE
+    assert option_structure_violation("2026-11-18", "2026-10-28", ok) is None            # 21 DTE, the floor
+    assert "20 DTE" in option_structure_violation("2026-11-17", "2026-10-28", ok)        # one day short
+    assert "46 DTE" in option_structure_violation("2026-12-13", "2026-10-28", ok)        # one day long
+    assert "take profit 100" in option_structure_violation("2026-11-20", "2026-10-28", dict(ok, tp_pct=100))
+    assert "stop loss 0" in option_structure_violation("2026-11-20", "2026-10-28", dict(ok, sl_pct=None))
+    assert "time exit 0" in option_structure_violation("2026-11-20", "2026-10-28", dict(ok, dte_exit=0))
+    assert "unreadable" in option_structure_violation("soon", "2026-10-28", ok)
+    assert "21-45 DTE" in STRUCTURE_REASON and "+200% / -50%" in STRUCTURE_REASON
+    print("  measured structure: 21-45 DTE, +200/-50, out at 7; every other leg named in the refusal")
+
+
 def _selftest_direction() -> None:
     """The gate blocks shorts, passes longs, and never blocks silently."""
     assert LONGS_ONLY is True, "the live system is longs-only; see drift_null"
@@ -539,6 +603,7 @@ def selftest() -> int:
           f"{OPT_WIN_RATE_BY_IV_MULT[_ms[0]]}% -> {OPT_WIN_RATE_BY_IV_MULT[_ms[-1]]}% "
           f"across {_ms[0]}-{_ms[-1]}")
     _selftest_sweep_table()
+    _selftest_structure()
     _selftest_direction()
     assert DEFAULT_ACCOUNT_SIZE > 0
     assert 0 < DEFAULT_RISK_PCT <= 10, \
