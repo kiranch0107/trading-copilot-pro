@@ -2442,11 +2442,15 @@ def check_option_iv_single_source() -> None:
             f"{f.name} carries no 'IV: <x>x realised' line; an option result "
             f"must state the assumption it was priced under")
 
-    # The sensitivity table in risk_params is the committed sweep.
+    # The sensitivity table in risk_params is the committed sweep: the files
+    # OPT_SWEEP_SOURCE names (run 2, 2026-10-28, the no-look-ahead code).
     for mult, wr in rp.OPT_WIN_RATE_BY_IV_MULT.items():
-        f = Path(f"results/option_iv_sensitivity_{mult:.2f}.txt")
+        f = Path(rp.OPT_SWEEP_SOURCE.format(mult=mult))
         assert f.exists(), f"risk_params lists {mult} but {f.name} is not on file"
         txt = f.read_text(encoding="utf-8")
+        assert "look-ahead" not in txt[:600], (
+            f"{f.name} carries the look-ahead caveat; the table must be read from a "
+            f"re-run on the fixed code, never from a caveated file")
         m = re.search(r"^\+100% / -50%\s+\d+\s+([0-9.]+)%", txt, re.M)
         assert m, f"{f.name}: no +100%/-50% row"
         assert abs(float(m.group(1)) - wr) < 1e-9, (
@@ -2455,6 +2459,19 @@ def check_option_iv_single_source() -> None:
         hdr = re.search(r"IV: ([0-9.]+)x realised", txt)
         assert hdr and abs(float(hdr.group(1)) - mult) < 1e-9, \
             f"{f.name} was not run at {mult}x"
+    # And the per-TP table is the 1.15x file's rows, digit for digit: win
+    # rate, average win, average loss. OPT_WIN_RATE is that file's +100 row.
+    f115 = Path(rp.OPT_SWEEP_SOURCE.format(mult=rp.OPT_IV_MULT))
+    txt = f115.read_text(encoding="utf-8")
+    for tp, (wr, aw, al) in rp.OPT_SWEEP_BY_TP.items():
+        m = re.search(rf"^\+{tp:g}% / -50%\s+\d+\s+([0-9.]+)%\s+\+([0-9.]+)%\s+-([0-9.]+)%", txt, re.M)
+        assert m, f"{f115.name}: no +{tp:g}%/-50% row"
+        got = tuple(float(x) for x in m.groups())
+        assert got == (wr, aw, al), (
+            f"OPT_SWEEP_BY_TP[{tp}] = {(wr, aw, al)} but {f115.name} measured {got}; "
+            f"the table must be the file")
+    assert abs(rp.OPT_SWEEP_BY_TP[rp.OPT_WIN_RATE_TP_PCT][0] / 100 - rp.OPT_WIN_RATE) < 1e-9, (
+        f"OPT_WIN_RATE {rp.OPT_WIN_RATE} is not the sweep's +{rp.OPT_WIN_RATE_TP_PCT:g} row")
     print(f"  OPT_IV_MULT single-sourced; {len(files)} option result(s) state their "
           f"IV; sensitivity table matches the committed sweep")
 

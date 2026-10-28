@@ -1,7 +1,9 @@
 !! MODELLED OPTION PREMIUMS in this file predate 2026-10-19, when option_backtest
 !! stopped reading the entry bar's own close into the realised-vol window (one bar
-!! of look-ahead; BACKLOG 35). The review measured a 0.24-point change in mean premium
-!! return on its fixture. Every premium here is off by that order; a re-run is owed.
+!! of look-ahead; BACKLOG 35). RE-RUN 2026-10-28 on the fixed code:
+!! results/option_iv_sensitivity_run2.md (run2_1.00/1.15/1.30/1.50.txt). The findings
+!! held; the numbers moved by up to 1.2 win-rate points and 2.3 expectancy points.
+!! risk_params reads run 2. This file is kept as run 1 and is not a source of any constant.
 # Option engine IV sensitivity — run 1 (Part A of `option_iv_preregistration.md`)
 
 **Run by the owner 2026-10-08 on a laptop with Yahoo access**, four

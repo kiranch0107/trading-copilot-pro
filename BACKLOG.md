@@ -1163,7 +1163,9 @@ premium from daily ATM-IV snapshots, first read at six months with its SE.
 Historical single-name IV is not available from this data source, which is
 why B is forward. A path-dependent IV model is explicitly out of scope.
 
-**Part A run 2026-10-08 by the owner (`results/option_iv_sensitivity_run1.md`).**
+**Part A run 2026-10-08 by the owner (`results/option_iv_sensitivity_run1.md`);
+re-run 2026-10-28 on the no-look-ahead code (`option_iv_sensitivity_run2.md`),
+every finding below held, constants moved to run 2.**
 Ordering of take-profit levels by win rate: invariant across 1.00–1.50.
 Sign of expectancy at TP ≥ +100: **not** invariant — positive at 1.00, negative
 at 1.15 and up. So the verdict on the live TP+200 / SL−50 structure is the
@@ -1815,7 +1817,7 @@ reading now (recommended: yes, it is a reading change).
 
 ---
 
-## 35. External review of 2026-10-19: twenty claims verified, none wrong; the record reads the forming bar, IV grading will censor departed names from ~11-07, close durability is P0 — ALL FIVE GROUPS DONE 2026-10-19; OPTION RE-RUNS OWED
+## 35. External review of 2026-10-19: twenty claims verified, none wrong; the record reads the forming bar, IV grading will censor departed names from ~11-07, close durability is P0 — ALL FIVE GROUPS DONE 2026-10-19; OPTION RE-RUNS DONE 2026-10-28
 
 The owner had the repository reviewed outside this project (reviewed SHA
 6095f74 against the 2026-10-08 audit). Verification and response in
@@ -1896,7 +1898,13 @@ a re-run is owed. `app.batch_get_data` passes `auto_adjust=False`, and a
 47th consistency check reads every `yf.download()` in the live paths to
 its closing paren for the flag. `gh_sync.load_jsonl` parses each source
 into its own list and returns it only whole (N08). Guards falsified.
-**Still open:** the option re-runs.
+**Option re-runs DONE 2026-10-28** (owner's laptop, frozen bars):
+`results/option_iv_sensitivity_run2.md` and `thesis_exit_run2.md`. Every
+finding held; `OPT_WIN_RATE` 0.249 → 0.251 and both sweep tables are run
+2's, pinned to the run-2 files by `check_option_iv_single_source`; the
+seven caveated files now point at run 2; `option_backtest.py` prints the
+bar-cache fingerprint from now on (run 1 and run 2 read 393 vs 398 trades
+and cannot prove they read the same bars).
 
 **Group 4 done 2026-10-19.** `journal_store.close_position` removes the
 position only after the journal row's durable write succeeded and returns
@@ -2028,9 +2036,12 @@ settled, −0.196 R; pool 42 / 26, −0.332; pullback 9 / 4, −0.517.
 **Amendment D declared 2026-10-28** (owner: "go with D as well"; item 34):
 H1 re-posed as the rank tier, read at `report()`.
 
+**Option re-runs done 2026-10-28** (item 35): findings held, constants
+moved, caveats replaced with pointers to run 2.
+
 **Still pending, in blocking order:** BACKLOG 34 A/B; the unrounded-gate
 declaration — the owner's, since each moves what the record records;
-group B and the option re-runs (owner's laptop); group C app paths;
+group B (the option re-runs are done); group C app paths;
 journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
 the 11-09/11-10 post-close logs (F5).
 

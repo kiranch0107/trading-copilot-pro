@@ -1,0 +1,28 @@
+==============================================================================
+THESIS EXIT — does the EMA20 break rule earn its place?
+==============================================================================
+  delta is OFF minus ON: positive means REMOVING the rule helped
+  the default action is KEEP — see the pre-registration
+==============================================================================
+  arm                     trades    mean %
+  ----------------------------------------
+  thesis ON (live rule)     1398     -9.09
+  thesis OFF                1398     -8.83
+
+  PAIRED
+    pairs                  1398
+    unmatched              0.00%  (only ON 0, only OFF 0)
+    touched by the rule    590
+    untouched but moved    0  (must be 0)
+    mean delta             +0.25%
+    95% CI                 [-1.80, +2.31]%
+    smallest detectable    2.94%
+    p                      0.8097
+
+==============================================================================
+  PRE-REGISTERED VERDICT: KEEP
+    - clause 3: |delta| 0.25% is under the detectable 2.94% — UNMEASURABLE, not 'no difference'
+
+  exit_monitor.py is unchanged. That is the declared default, not
+  an absence of a result.
+==============================================================================
