@@ -1791,7 +1791,18 @@ gate; the live bucket is the alerting view, recorded and reported in
 full, never gating. `forward_log.HEADLINE_BUCKET = "pool"`; the by-basis
 reading, the gate count and the report's gate line read the pool;
 pinned by selftest and consistency check. The episode reading (finding 1)
-landed the same day (item 37). A, B and D remain undecided.
+landed the same day (item 37). **D decided 2026-10-28 (owner: "go with
+D as well, re-pose H1"):** amendment 2026-10-28 (D) in the same file. H1′:
+the RANK tier — the top `forward_log.RANK_TIER_K` = 5 taken pool rows a
+bar by fewest failed HQ legs, then ADX, then R:R, then ticker; an episode
+is in it by its first row — beats the rest of the pool by ≥ +0.15 R per
+episode. A read-time tag (`forward_log.rank_tier`), chosen for arrival
+rate, not edge; alerts still fire on the HQ threshold. Power stated: at a
+tier share of ~0.21 the +0.15 R bar needs ~2,070 settled pool episodes;
+the MDE at the 349 gate is ~+0.37 R, so a smaller difference reads "not
+established". Known at declaration: tier 9 episodes / 5 settled /
+−0.892 R, rest 33 / 21 / −0.199 R; the record points against H1′.
+`RANK_TIER_K == scanner.POOL_ALERT_CAP` pinned. A and B remain undecided.
 
 **Proposed, as pre-registrations:** (A) a forward random-entry control row
 beside every taken signal, graded by the same resolver, read as signal
@@ -2014,8 +2025,11 @@ settled, −0.196 R; pool 42 / 26, −0.332; pullback 9 / 4, −0.517.
 **Amendment C declared 2026-10-28** (owner: "option 1, pool only"; item
 34): the pool is the population, the live bucket the alerting view.
 
-**Still pending, in blocking order:** BACKLOG 34 D (re-posing H1) and A/B;
-the unrounded-gate declaration — the owner's, since each moves what the record records;
+**Amendment D declared 2026-10-28** (owner: "go with D as well"; item 34):
+H1 re-posed as the rank tier, read at `report()`.
+
+**Still pending, in blocking order:** BACKLOG 34 A/B; the unrounded-gate
+declaration — the owner's, since each moves what the record records;
 group B and the option re-runs (owner's laptop); group C app paths;
 journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
 the 11-09/11-10 post-close logs (F5).

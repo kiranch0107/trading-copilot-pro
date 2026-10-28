@@ -5,6 +5,75 @@ and tagging HQ"). Written and committed BEFORE the first row under the new rule
 is recorded.** Everything below is fixed. Nothing here may be changed after a
 result is seen; the timestamp on this file in git is the point of it.
 
+## Amendment 2026-10-28 (D) — H1 re-posed as a RANK tier that fires by construction (BACKLOG 34 D). READING CHANGE: a tag computed from recorded fields; no alerting, gate, threshold or recording changes
+
+**Owner's decision 2026-10-28 ("go with D as well, re-pose H1"), written
+before the next scan row.** H1 as written below compares the HQ tier with
+base. The HQ tier has fired 0 times in 243 taken rows (0 of 219 on the
+pool), so H1 cannot be read at any sample size: a tier that never fires
+has no mean. This amendment re-poses it as the review of 2026-10-19
+proposed (option ii): a tier defined by RANK, which fires by construction.
+It is chosen for arrival rate, not for edge, and says so.
+
+**The rank tier, fixed here.**
+
+- **Score, from fields every pool row already carries:** fewest failed HQ
+  legs first (`setup.hq_fail`: the legs of the HQ definition the bar
+  failed — `rr<1`, `not Strong`, and every named filter that failed, ADX
+  Trend Strength and Earnings Blackout among them; HQ itself is an empty
+  list), then higher signal-bar ADX (`setup.adx`), then higher R:R
+  (`setup.rr`), then ticker alphabetical. Deterministic; nothing is
+  fetched.
+- **Membership:** on each pool scan bar (`bar_date`), the top
+  `forward_log.RANK_TIER_K = 5` TAKEN pool rows by that score are the rank
+  tier for that bar. Five is `scanner.POOL_ALERT_CAP`, the "at most five a
+  session" of the 2026-10-13 amendment, pinned equal by
+  `consistency_check`: the tier is what the pool would alert each session
+  if the alert gate were this rank instead of the HQ threshold.
+- **An episode is in the tier if and only if its FIRST row is.** The
+  episode unit, the bases, the resolver and the dust floor are unchanged.
+- **It is a tag at read time**, computed by `forward_log.rank_tier()` from
+  the recorded rows; no row is rewritten and no row gains a field. Alerts
+  still fire on the HQ threshold only; nothing about what is sent changes.
+
+**H1′ (replaces H1 for the pool):** the rank tier's mean R per episode
+exceeds the rest of the pool's by **≥ +0.15 R**. The bar is the original
+one: the smallest difference worth the alerts a gate suppresses. H0 is
+unchanged.
+
+**Power, stated honestly.** The tier is about a fifth of pool episodes
+(60 of 219 rows, 9 of 42 episodes at declaration), so this is a
+two-sample comparison with unequal groups, not the one-sample test the
+349 figure was computed for. With per-episode sd ≈ 1.0, 5 % two-sided and
+80 % power, a +0.15 R difference at a tier share of 0.21 needs about
+**2,070 settled pool episodes** (≈ 560 bars ≈ 2.2 years at 3.7 a bar).
+At the pool's 349-episode gate the minimum detectable difference is about
+**+0.37 R**. So: at 349 settled pool episodes H1′ is read, and a
+difference under the MDE is reported as NOT ESTABLISHED, never as
+refuted; a difference at or above +0.37 R is a result; the +0.15 R bar
+itself is reachable at ~2,070 episodes and the record keeps running.
+`forward_log.report()` prints the tier and the rest beside each other,
+with the counts, under the pool's episode line.
+
+**What was known when this was declared, so it cannot be read as
+selection.** At declaration the tier read 9 episodes, 5 settled, mean
+−0.892 R; the rest 33 episodes, 21 settled, mean −0.199 R. The record so
+far points AGAINST H1′, consistent with `adx_retest`, `rvol_confirm` and
+the setup-population table, all of which found the tier's legs
+uninformative; the amendment is made with that known and predicts, as the
+2026-10-19 review did, that H1′ fails. Five settled episodes are not a
+reading of anything.
+
+**What does NOT change.** The HQ tag on every row (`hq`, `hq_fail`) stays
+as recorded and keeps gating alerts; the live bucket is the alerting view
+(amendment above); the pullback bucket is untouched; BACKLOG 33 (ADX 30
+as an intake choice, option i of the review) remains a separate, open
+decision and is NOT taken here.
+
+**Enforcement.** `forward_log.rank_tier()` and its selftest (score order,
+the cap, first-row membership, a live row never in the tier);
+`consistency_check` pins `RANK_TIER_K == scanner.POOL_ALERT_CAP`.
+
 ## Amendment 2026-10-28 — the POOL is the population for the base-signal question (BACKLOG 34 C). READING CHANGE: which bucket the stopping rule reads; no rule, gate, threshold or recording changes
 
 **Owner's decision 2026-10-28 ("go with option 1, pool only"), written
