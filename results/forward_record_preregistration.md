@@ -5,6 +5,70 @@ and tagging HQ"). Written and committed BEFORE the first row under the new rule
 is recorded.** Everything below is fixed. Nothing here may be changed after a
 result is seen; the timestamp on this file in git is the point of it.
 
+## Amendment 2026-10-28 (A) — a random-entry CONTROL row beside every taken signal (BACKLOG 34 A). ADDITIVE: a new row kind and a new reading; no signal, gate, threshold or alerting changes
+
+**Owner's decision 2026-10-28 ("go with A and B as well"), written before
+the next scan row.** "Mean R against zero" cannot separate the entry logic
+from drift in the names the rules pick; `drift_null` could only ask that of
+spent history. This records the null forward, beside every signal, so the
+record can say whether the entry bar contributes anything.
+
+**The control row, fixed here.**
+
+- **When.** One `control` row for every TAKEN signal row, in every bucket,
+  written by the scanner in the same call that writes the signal, from the
+  frame the scan already holds. No extra fetch. A skipped signal has none.
+- **Where.** The same ticker. The control bar is drawn from the
+  `forward_log.CONTROL_LOOKBACK` = 20 settled sessions strictly BEFORE the
+  signal bar: index = sha256(signal key) mod 20 into those 20 bars. Fixed
+  by the row's own key, reproducible by anyone, chosen by nothing that
+  knows an outcome. Fewer than 20 settled bars before the signal (a new
+  listing): no control, and the scan log says so.
+- **What.** The signal's own stop and target DISTANCES, placed around the
+  control bar's close (mirrored for a short). Entry at the next open after
+  the control bar, the same 2 bps, the same stop-first rule, the same
+  20-bar hold, the same dust floor, the same void reasons: `resolve_signal`
+  grades a control exactly as it grades a signal, on the stop-distance
+  basis only. A journal trade can never attach to a control.
+- **The row.** `kind: control`, `ref_seq` (the signal), `ticker`, `trend`,
+  `bar_date` (the control bar), `bucket`, `setup` (price/entry/stop/target,
+  the two distances), `config`, `draw` (lookback, index, seed). A control is
+  never `taken`, never an episode, never alerted, never in the rank tier.
+
+**The reading (new, descriptive until its gate).** By episode: the pair is
+the episode's FIRST row and that row's control, both settled. Signal R
+minus control R, mean and standard error over pairs, per bucket; the
+headline is the pool's (amendment above). `forward_log.summary()
+["by_control"]`, printed by `report()` under the pool's episode line.
+
+**H2 (new): the signal bar's mean R exceeds its control's by ≥ +0.15 R
+per episode.** The bar is the one the record already uses for a difference
+worth gating on. Same gate as H0: 349 settled pool PAIRS. With a paired
+difference of sd ≈ 1.4 (two R's of sd ≈ 1), the MDE at 349 pairs is about
+±0.21 R, so +0.15 R itself needs ~680 pairs; at the gate a smaller
+difference reads "not established", never refuted.
+
+**Prediction, stated now** (as the 2026-10-19 review stated it): signal ≈
+control on the pool within costs. If H2 fails, the entry bar contributes
+nothing the name and the trend do not, and the system's measured value is
+in the record-keeping and the risk discipline, not in the entry.
+
+**What was known when this was declared.** Nothing: no control row exists
+before this amendment, and no control is drawn from a bar whose outcome
+was consulted. Controls drawn from bars up to 20 sessions back will settle
+quickly (some are already settled in the frame at record time); that is a
+property of the null, not a leak, because the draw is fixed by the key.
+
+**What does NOT change.** Which rows are signals, taken or skipped; what is
+alerted; the HQ tag; the pool, live and pullback populations; the rank
+tier; the fingerprint. A control row carries the signal's config
+fingerprint and is read under it.
+
+**Enforcement.** `forward_log` selftest (seeded draw, mirrored geometry,
+one per signal, graded from the signal's own fetch, pairs by episode) and
+`consistency_check.check_control_arm_wired` (both recorders write one;
+the grader offers them; never taken).
+
 ## Amendment 2026-10-28 (D) — H1 re-posed as a RANK tier that fires by construction (BACKLOG 34 D). READING CHANGE: a tag computed from recorded fields; no alerting, gate, threshold or recording changes
 
 **Owner's decision 2026-10-28 ("go with D as well, re-pose H1"), written

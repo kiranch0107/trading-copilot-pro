@@ -1804,7 +1804,21 @@ tier share of ~0.21 the +0.15 R bar needs ~2,070 settled pool episodes;
 the MDE at the 349 gate is ~+0.37 R, so a smaller difference reads "not
 established". Known at declaration: tier 9 episodes / 5 settled /
 −0.892 R, rest 33 / 21 / −0.199 R; the record points against H1′.
-`RANK_TIER_K == scanner.POOL_ALERT_CAP` pinned. A and B remain undecided.
+`RANK_TIER_K == scanner.POOL_ALERT_CAP` pinned. **A and B decided
+2026-10-28 (owner: "go with A and B as well").** A: amendment 2026-10-28
+(A) in the same file — one `control` row beside every taken signal, the
+same ticker, the signal's stop and target distances around a bar drawn
+by sha256(key) mod 20 from the 20 settled sessions before the signal bar,
+graded by the same resolver on the stop-distance basis, read as signal
+minus control by episode (`summary()["by_control"]`); H2: the difference
+is ≥ +0.15 R (MDE ±0.21 R at the 349-pair gate); prediction: signal ≈
+control. B: `results/rs_basket_preregistration.md` and `basket_log.py` —
+one hash-chained row per weekly snapshot (eight names and SPY on the
+anchor session), written by the scanner's post-close pass, graded exactly
+five sessions later as equal-weight basket minus SPY; first reading at 26
+weeks, not a result before 52 (MDE ≈ ±1 %/week); prediction: within ±2 %
+of SPY over a quarter. Both enforced by selftests and two new
+consistency checks (51). Nothing recorded before either declaration.
 
 **Proposed, as pre-registrations:** (A) a forward random-entry control row
 beside every taken signal, graded by the same resolver, read as signal
@@ -2042,7 +2056,10 @@ H1 re-posed as the rank tier, read at `report()`.
 **Option re-runs done 2026-10-28** (item 35): findings held, constants
 moved, caveats replaced with pointers to run 2.
 
-**Still pending, in blocking order:** BACKLOG 34 A/B; the unrounded-gate
+**A and B declared 2026-10-28** (item 34): the control arm and the RS
+basket record, both forward from the next post-close pass.
+
+**Still pending, in blocking order:** the unrounded-gate
 declaration — the owner's, since each moves what the record records;
 group B (the option re-runs are done); group C app paths;
 journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
@@ -2052,8 +2069,8 @@ the 11-09/11-10 post-close logs (F5).
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 49 cross-module
-  invariants (49 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 51 cross-module
+  invariants (51 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip

@@ -2257,7 +2257,7 @@ def check_hq_tier_annotates_record() -> None:
         hq = scanner.analyze(frame, "CKB")
         sc.evaluate = lambda *a, **k: canned("Bearish", True)
         short = scanner.analyze(frame, "CKC")
-        rows = {r["ticker"]: r for r in forward_log.read_all()}
+        rows = {r["ticker"]: r for r in forward_log.read_all() if r.get("kind") == "signal"}
     finally:
         forward_log.LOG, sc.evaluate = real_log, real_eval
         scanner.get_weekly_trend, scanner.check_earnings_blackout = real_wk, real_earn
@@ -2514,6 +2514,73 @@ def check_iv_snapshot_single_writer_and_committed() -> None:
     assert "python iv_snapshot.py --selftest" in Path(".github/workflows/tests.yml").read_text(), \
         "iv_snapshot's selftest is not in CI"
     print("  one writer (scanner.py, post-close only), stdlib reader, committed by scanner.yml")
+
+
+def check_basket_log_single_writer_and_committed() -> None:
+    """
+    The RS basket record (BACKLOG 34 B, results/rs_basket_preregistration.md)
+    has one writer, is stdlib to read, is committed by the workflow, is taken
+    in the post-close pass only, and its selftest runs in CI. Same shape as
+    the IV snapshot's rules, for the same reasons.
+    """
+    writers = []
+    for q in sorted(Path(".").glob("*.py")):
+        if q.name in ("basket_log.py", "consistency_check.py"):
+            continue
+        txt = q.read_text()
+        if any(f"basket_log.{fn}(" in txt for fn in ("record", "grade", "append")):
+            writers.append(q.name)
+    assert writers == ["scanner.py"], (
+        f"basket_log.jsonl must have exactly one writer, scanner.py; found {writers or 'none'}")
+    src = Path("basket_log.py").read_text()
+    for banned in ("import pandas", "import numpy", "import yfinance", "import requests"):
+        assert banned not in src, f"basket_log.py must stay stdlib: found {banned!r}"
+    wf = Path(".github/workflows/scanner.yml").read_text()
+    i = wf.find("git add")
+    assert i > 0 and "basket_log.jsonl" in wf[i:i + 200], \
+        "scanner.yml does not stage basket_log.jsonl; every row would die with the runner"
+    assert Path("basket_log.jsonl").exists(), \
+        "basket_log.jsonl must exist in the repo (even empty) or `git add` fails on the runner"
+    sc_src = Path("scanner.py").read_text()
+    j = sc_src.find("basket_record_pass(_closes_for")
+    k = sc_src.rfind("if record_only:", 0, j)
+    assert j > 0 and k > 0 and j - k < 4000, \
+        "the basket row must be taken inside the record-only (post-close) branch of run()"
+    assert "basket_log.grade(_closes_for" in sc_src, "run() does not grade the baskets"
+    assert "python basket_log.py --selftest" in Path(".github/workflows/tests.yml").read_text(), \
+        "basket_log's selftest is not in CI"
+    # And no fixture ever reaches the committed file (the forward log's rule).
+    import json as _json
+    fixtures = {"ZZ", "AAA", "BBB", "CCC", "XXX", "TEST", "BT"}
+    for i, line in enumerate(Path("basket_log.jsonl").read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        names = set(_json.loads(line).get("names") or [])
+        assert not (names & fixtures), f"basket_log.jsonl row {i} carries fixture names {names & fixtures}"
+    print("  one writer (scanner.py, post-close only), stdlib reader, committed by scanner.yml, no fixtures")
+
+
+def check_control_arm_wired() -> None:
+    """
+    The random-entry control arm (amendment 2026-10-28 A): scanner.analyze()
+    and the pullback recorder each write one control beside a TAKEN row,
+    from the frame in hand; the grader offers controls to the resolver; a
+    control is never taken, never an episode, never a journal match.
+    """
+    import forward_log as fl
+    sc_src = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
+    import re as _re
+    calls = _re.findall(r"forward_log\.record_control\(_p?row, control_bars\(", sc_src)
+    assert len(calls) == 2, (
+        f"scanner.py must record a control beside taken rows in analyze() AND the pullback "
+        f"path, from control_bars(); found {len(calls)} such call(s)")
+    assert "control_bars(" in sc_src, "the control draws from the frame already fetched (control_bars)"
+    assert not fl.counts_as_taken({"kind": "control", "decision": "taken"}), "a control is never taken"
+    src = Path("forward_log.py").read_text()
+    assert 's.get("kind") == "control"' in src[src.find("def open_signals"):src.find("def grade_open_signals")], \
+        "open_signals() must offer control rows to the resolver"
+    assert fl.CONTROL_LOOKBACK == 20, "the lookback is declared as 20 settled sessions"
+    print("  one control per taken row in both recorders; graded with its signal; never taken")
 
 
 def check_intraday_rules_match_preregistration() -> None:
@@ -2823,6 +2890,8 @@ CHECKS = [
     ("signal key rides alert->app->journal->log", check_signal_key_round_trip),
     ("option IV multiplier has one home",          check_option_iv_single_source),
     ("IV snapshot: one writer, committed, post-close", check_iv_snapshot_single_writer_and_committed),
+    ("RS basket: one writer, committed, post-close", check_basket_log_single_writer_and_committed),
+    ("control arm: one per taken row, graded",      check_control_arm_wired),
     ("intraday rules match their pre-registration", check_intraday_rules_match_preregistration),
     ("Phase 2 paper record isolated, one writer",   check_daytrade_paper_isolated),
     ("pool bucket wired, capped, kept apart",       check_pool_bucket_wired),

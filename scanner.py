@@ -59,6 +59,7 @@ import yfinance as yf
 import data_source
 import market_context
 import iv_snapshot
+import basket_log
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(),format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("scanner")
@@ -771,6 +772,20 @@ def get_spy_regime() -> dict | None:
     return r
 
 
+def control_bars(df: pd.DataFrame, bar_date) -> list:
+    """
+    The settled bars strictly BEFORE `bar_date`, ascending, as the plain
+    {"date", "close"} rows forward_log.record_control() draws from (amendment
+    2026-10-28 A). The frame is the one the scan already holds: no fetch.
+    """
+    _dates = sc._bar_dates(df, None)
+    _cut = pd.Timestamp(str(bar_date)[:10])
+    out = [{"date": str(pd.Timestamp(d).date()), "close": float(c)}
+           for d, c in zip(_dates, df["Close"].tolist()) if pd.Timestamp(d) < _cut]
+    out.sort(key=lambda r: r["date"])
+    return out
+
+
 def analyze(df: pd.DataFrame, ticker: str,
             spy_regime: dict | None = None,
             tally: dict | None = None, bucket: str = "live") -> dict | None:
@@ -883,11 +898,19 @@ def analyze(df: pd.DataFrame, ticker: str,
             # per day — in a chain that is append-only and cannot be corrected.
             # record_signal() dedupes on it and returns None for a repeat.
             _bar = sc._bar_dates(df, None).max().date()
-            if forward_log.record_signal(ticker, r["trend"], _setup, decision,
-                                         reason, _cfg, bar_date=_bar,
-                                         hq=_hq, bucket=bucket) is None:
+            _row = forward_log.record_signal(ticker, r["trend"], _setup, decision,
+                                             reason, _cfg, bar_date=_bar,
+                                             hq=_hq, bucket=bucket)
+            if _row is None:
                 logger.debug("%s — %s bar %s already in the forward log",
                              ticker, r["trend"], _bar)
+            elif decision == "taken":
+                # THE CONTROL ROW (amendment 2026-10-28 A): one per taken row,
+                # drawn from the 20 settled bars before the signal bar in the
+                # frame already in hand. Its absence is logged, never fatal.
+                if forward_log.record_control(_row, control_bars(df, _bar)) is None:
+                    logger.info("%s — no control row for bar %s (fewer than %d settled "
+                                "bars before it)", ticker, _bar, forward_log.CONTROL_LOOKBACK)
         except Exception as exc:                       # noqa: BLE001
             logger.warning("%s — forward log write failed: %s", ticker, exc)
 
@@ -942,11 +965,16 @@ def selftest() -> int:
     """
     import tempfile as _tf, pathlib as _pl
     real = forward_log.LOG
+    real_b = basket_log.LOG
     try:
         forward_log.LOG = _pl.Path(_tf.mkdtemp()) / "selftest.jsonl"
+        # basket_log.jsonl has the same exposure: run()'s post-close pass
+        # records a basket for the newest REAL snapshot in universe_history.
+        basket_log.LOG = _pl.Path(_tf.mkdtemp()) / "basket_selftest.jsonl"
         return _selftest_body()
     finally:
         forward_log.LOG = real
+        basket_log.LOG = real_b
 
 
 def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
@@ -1043,16 +1071,55 @@ def _record_pullback(tk: str, raw_df, cdf, spy_regime, bucket_src: str,
         _bar = sc._bar_dates(cdf, None).max().date()
         setup = {k: pb.get(k) for k in pullback_signal.SETUP_KEYS}
         setup["source_bucket"] = bucket_src
-        if forward_log.record_signal(tk, "Bullish", setup, "taken", "", _scan_cfg(),
-                                     bar_date=_bar, bucket="pullback") is None:
+        _prow = forward_log.record_signal(tk, "Bullish", setup, "taken", "", _scan_cfg(),
+                                          bar_date=_bar, bucket="pullback")
+        if _prow is None:
             logger.debug("%s — pullback bar %s already in the forward log", tk, _bar)
         else:
             logger.info("%s — PULLBACK signal recorded (bar %s, regime %s, rr %s); "
                         "never alerted", tk, _bar, pb["regime"], pb["rr"])
+            if forward_log.record_control(_prow, control_bars(cdf, _bar)) is None:
+                logger.info("%s — no control row for pullback bar %s", tk, _bar)
         return True
     except Exception as exc:                           # noqa: BLE001
         logger.warning("%s — pullback record failed: %s", tk, exc)
         return False
+
+
+def basket_record_pass(closes_for, snap: dict | None) -> str:
+    """
+    The RS basket row for the newest universe snapshot, once per snapshot
+    (results/rs_basket_preregistration.md, BACKLOG 34 B). `closes_for(tk)`
+    returns settled [{"date", "close"}] rows or None (deferred / no data).
+    The anchor is the last settled session on or before the snapshot date;
+    every name and the benchmark must share it, or nothing is written.
+    Returns one line for the log. Never raises.
+    """
+    try:
+        if not snap or not snap.get("as_of") or not snap.get("tickers"):
+            return "no snapshot to record"
+        as_of = str(snap["as_of"])[:10]
+        if basket_log.already_recorded(as_of):
+            return f"{as_of} already recorded"
+        names = [str(t).upper() for t in snap["tickers"]]
+        closes, anchors, missing = {}, set(), []
+        for tk in names + [basket_log.BENCH]:
+            pre = [b for b in (closes_for(tk) or []) if str(b["date"])[:10] <= as_of]
+            if not pre:
+                missing.append(tk)
+                continue
+            closes[tk] = float(pre[-1]["close"])
+            anchors.add(str(pre[-1]["date"])[:10])
+        if missing or len(anchors) != 1:
+            return (f"{as_of} not recorded: closes missing for {missing or 'none'}, "
+                    f"anchors {sorted(anchors)}")
+        refused: dict = {}
+        row = basket_log.record(as_of, names, closes, closes[basket_log.BENCH],
+                                next(iter(anchors)), refused=refused)
+        return (f"recorded {as_of}: {len(names)} names on anchor {row['anchor']}" if row
+                else f"{as_of} refused {refused}")
+    except Exception as exc:                               # noqa: BLE001
+        return f"basket record failed: {exc}"
 
 
 def run(args) -> int:
@@ -1420,6 +1487,16 @@ def run(args) -> int:
             # closes must be exactly one session apart (N04).
             _sessions_between = lambda a, b: trading_days_between(
                 date.fromisoformat(a), date.fromisoformat(b))
+            # ── THE RS BASKET ROW (BACKLOG 34 B), before the IV grading spends
+            # the fetch cap: the basket's names are the watchlist, already in
+            # `frames`; the benchmark is one fetch.
+            try:
+                import universe as _u_b
+                _snap_b, _ = _u_b.latest_snapshot()
+            except Exception as _exc:                      # noqa: BLE001
+                _snap_b = None
+                logger.warning("rs basket: snapshot unreadable: %s", _exc)
+            logger.info("rs basket: %s", basket_record_pass(_closes_for, _snap_b))
             _ig = iv_snapshot.grade(_closes_for, sessions_between=_sessions_between)
             if _ig["graded"] or _ig["failed"] or _iv_fetched or _iv_deferred:
                 logger.info("iv snapshot: graded %d, unsettled %d, no data %d, failed %d, "
@@ -1431,6 +1508,14 @@ def run(args) -> int:
                             len(_iv_fetched), len(_iv_deferred))
             for _d in _ig["detail"][:10]:
                 logger.info("iv snapshot: %s", _d)
+            # ── GRADE THE BASKETS whose week has closed (same closes, same calendar) ──
+            _bg = basket_log.grade(_closes_for, sessions_between=_sessions_between)
+            if _bg["graded"] or _bg["void"] or _bg["held"] or _bg["failed"]:
+                logger.info("rs basket: graded %d, void %d, unsettled %d, held %d, no data %d, failed %d",
+                            _bg["graded"], _bg["void"], _bg["unsettled"], _bg["held"],
+                            _bg["no_data"], _bg["failed"])
+            for _d in _bg["detail"][:10]:
+                logger.info("rs basket: %s", _d)
         except Exception as _exc:                          # noqa: BLE001
             logger.warning("iv snapshot failed: %s", _exc)
 
@@ -1679,11 +1764,20 @@ def _selftest_body() -> int:
                                    "Macro Regime": {"pass": True}})
             sc.evaluate = lambda *a, **k: _c
             _ret[_tk] = analyze(_frame, _tk)
-        _rows = forward_log.read_all(_tmp)
+        _all_rows = forward_log.read_all(_tmp)
+        _rows = [x for x in _all_rows if x["kind"] == "signal"]
         assert len(_rows) == 3, (
             f"three signals fired and {len(_rows)} were logged. The ones that "
             f"never became alerts are exactly the ones that make the record "
             f"worth having")
+        # THE CONTROL ARM (amendment 2026-10-28 A): one control row beside
+        # every TAKEN row, drawn from the frame in hand, none for a skip.
+        _ctls = [x for x in _all_rows if x["kind"] == "control"]
+        _taken_seqs = {x["seq"] for x in _rows if x["decision"] == "taken"}
+        assert {c["ref_seq"] for c in _ctls} == _taken_seqs and len(_ctls) == len(_taken_seqs), (
+            _ctls, _taken_seqs, "analyze() must record exactly one control per taken row")
+        assert all(c["bar_date"] < x["bar_date"] for c in _ctls for x in _rows if x["seq"] == c["ref_seq"]), \
+            "a control bar precedes its signal bar"
         # ONE FINGERPRINT FOR EVERY ROW (2026-10-20): the rows the REAL
         # analyze() writes must carry _scan_cfg()'s hash, the same one the
         # scan rows carry. A second config literal in analyze() split the
@@ -1725,7 +1819,7 @@ def _selftest_body() -> int:
         sc.evaluate = lambda *a, **k: _c
         for _ in range(3):                      # three scans, one bar
             analyze(_frame, "ZD")
-        _zd = [x for x in forward_log.read_all(_tmp) if x["ticker"] == "ZD"]
+        _zd = [x for x in forward_log.read_all(_tmp) if x["ticker"] == "ZD" and x["kind"] == "signal"]
         assert len(_zd) == 1, (
             f"three scans of one settled bar wrote {len(_zd)} rows. The log "
             f"would count scans, not signals, and inflate any rate taken from "
@@ -1738,7 +1832,7 @@ def _selftest_body() -> int:
         _next.index = _next.index + _pd.Timedelta(days=1)
         analyze(_next, "ZD")
         assert len([x for x in forward_log.read_all(_tmp)
-                    if x["ticker"] == "ZD"]) == 2, (
+                    if x["ticker"] == "ZD" and x["kind"] == "signal"]) == 2, (
             "the next bar is a new signal; deduping it away would make the log "
             "record one row per setup forever")
         print("forward log, dedupe     : 3 scans of one bar -> 1 row; "
@@ -2000,7 +2094,8 @@ def _selftest_body() -> int:
                                      "get_spy_regime", "save_state", "load_state",
                                      "WATCHLIST", "FETCH_GAP_SEC", "suggest_option",
                                      "is_post_close_window", "fetch_atm_chain",
-                                     "IV_GRADE_FETCH_CAP", "trading_days_between")}
+                                     "IV_GRADE_FETCH_CAP", "trading_days_between",
+                                     "basket_record_pass")}
         _saved_state: dict = {}
         _iv_tmp = _pl2.Path(_tf2.mkdtemp()) / "iv.jsonl"
         _real_iv_log = iv_snapshot.LOG
@@ -2028,6 +2123,9 @@ def _selftest_body() -> int:
         try:
             iv_snapshot.LOG = _iv_tmp
             _g["IV_GRADE_FETCH_CAP"] = 2
+            # The basket pass would spend the cap on the real snapshot's names
+            # and SPY; it has its own test below.
+            _g["basket_record_pass"] = lambda closes_for, snap: "stubbed in this harness"
             _g["trading_days_between"] = lambda a, b: len(_pd3.bdate_range(a, b)) - 1
             _g["fetch_atm_chain"] = _fake_chain
             _g["get_data"] = lambda tk: (_got.append(tk) or (_fr3_holed if tk == "DDE" else _fr3))
@@ -2068,6 +2166,39 @@ def _selftest_body() -> int:
             and len(_p3["closes_hash"]) == 16, _p3
         print("iv departed names       : fetched within the cap, graded on the exact anchor; a missing "
               "midweek session is held by the exchange calendar; the rest deferred")
+
+        # ── THE RS BASKET ROW (BACKLOG 34 B): once per snapshot, anchored on the
+        # last settled session on or before the snapshot date, every name AND
+        # the benchmark on that same session, else nothing is written.
+        import tempfile as _tf_bk, pathlib as _pl_bk
+        _bk_tmp = _pl_bk.Path(_tf_bk.mkdtemp()) / "bk.jsonl"
+        _real_bk = basket_log.LOG
+        try:
+            basket_log.LOG = _bk_tmp
+            _bk_bars = [{"date": str(d.date()), "close": 100.0 + i} for i, d in enumerate(_bars3)]
+            _bk_snap = {"as_of": "2026-06-28", "tickers": ["AAA", "BBB"]}       # a Sunday; last bar 06-26
+            _bk_calls: list = []
+            _bk_closes = lambda tk: (_bk_calls.append(tk) or _bk_bars)
+            _msg = basket_record_pass(_bk_closes, _bk_snap)
+            _bk_rows = basket_log.read_all(_bk_tmp)
+            assert len(_bk_rows) == 1 and _bk_rows[0]["as_of"] == "2026-06-28" \
+                and _bk_rows[0]["anchor"] == "2026-06-26" and _bk_rows[0]["names"] == ["AAA", "BBB"] \
+                and _bk_rows[0]["bench"] == "SPY" and sorted(_bk_calls) == ["AAA", "BBB", "SPY"], (_msg, _bk_rows)
+            assert "already recorded" in basket_record_pass(_bk_closes, _bk_snap), "once per snapshot"
+            _msg2 = basket_record_pass(lambda tk: None if tk == "SPY" else _bk_bars,
+                                       {"as_of": "2026-07-05", "tickers": ["AAA", "BBB"]})
+            assert "not recorded" in _msg2 and len(basket_log.read_all(_bk_tmp)) == 1, \
+                (_msg2, "no benchmark close -> no row, never a basket without its benchmark")
+            _late = _bk_bars + [{"date": "2026-07-01", "close": 1.0}]
+            _msg3 = basket_record_pass(lambda tk: _late if tk == "AAA" else _bk_bars,
+                                       {"as_of": "2026-07-05", "tickers": ["AAA", "BBB"]})
+            assert "not recorded" in _msg3 and "anchors" in _msg3, \
+                (_msg3, "names on different anchor sessions -> no row")
+            assert "no snapshot" in basket_record_pass(_bk_closes, None)
+        finally:
+            basket_log.LOG = _real_bk
+        print("rs basket row           : once per snapshot on one shared anchor; no benchmark or "
+              "mixed anchors -> nothing written")
         # THE IV SNAPSHOT RODE ON THE POST-CLOSE PASS: one row per watchlist
         # name, ATM at 100 with the call/put mean, and only in that pass (the
         # first run above was outside the window and fetched no chain).
@@ -2264,7 +2395,7 @@ def _selftest_body() -> int:
             assert not any(t in _pool7 for t in _fetched) and "SPY" not in _fetched, _fetched
             assert not _sent4 and len([r for r in forward_log.read_all(_tmpl4)
                                        if r["kind"] == "scan"]) == 3, "live heartbeat only"
-            assert len([r for r in forward_log.read_all(_tmpl4) if r.get("bucket") == "pullback"]) == 2, \
+            assert len([r for r in forward_log.read_all(_tmpl4) if r.get("bucket") == "pullback" and r["kind"] == "signal"]) == 2, \
                 "the same bar is not recorded twice (record_signal dedupes on the key)"
             # GRADING FETCH RULE: a pool-only name waits for the pool run or the
             # post-close pass; a live-bucket name that left the watchlist is
