@@ -36,15 +36,16 @@ premium.
 
 ## Read it before acting on it
 
-1. **The engine prints no data fingerprint.** `spread_backtest.run()` reads
-   SPY, QQQ, ^VIX and ^VXN through `backtest.download()` but, unlike the
-   share and option engines, does not print the bar-cache line. Run 2 was
-   dated 2026-09-11 and run 3 2026-10-28, both "10 years relative to today",
-   so the window moved by seven weeks and whether the bars were the cached
-   ones or a refresh is not recorded. The cycle count (83 → 120) is the
-   clock, not the data: 3,650 days / 30.4 days ≈ 120. The owner's
-   `python bar_cache.py --info` can settle the data question after the
-   fact; the print is added in this change so run 4 will say.
+1. **The engine printed no data fingerprint on this run.** *Settled by
+   run 4 (`spread_backtest_run4.md`, same day): the fingerprint is
+   `v2-9c744bd1aa11ecb2`, four series all cached, fetched 2026-09-10, the
+   same frozen cache as the record and the option runs; run 4 reproduces
+   this file's numbers exactly. The cycle count (83 → 120) and the verdict
+   flip are the code, not the data.* The original note: `spread_backtest.run()`
+   read SPY, QQQ, ^VIX and ^VXN through `backtest.download()` but, unlike
+   the share and option engines, did not print the bar-cache line; run 2
+   was dated 2026-09-11 and this run 2026-10-28, both "10 years relative to
+   today".
 2. **Two looks became three.** Nothing was searched over: the arms, skews
    and bar are the ones written down in run 1. But the same ten years have
    now been read three times, and a verdict that flips on an engine fix is

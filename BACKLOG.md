@@ -1852,10 +1852,12 @@ market's bid/ask on those legs (mid and executable credits; an unquoted
 leg keeps the row with the reason). Graded on the expiry close with
 `settle()`, now single-sourced in `spread_log` and imported by the
 backtest with `CROSS_FRAC`, `VOL_INDEX` and the structure names. Selftests,
-the scanner wiring test, one check (56), 18 mutants falsified. **Owed:
-run 4 of the backtest on the laptop with the fingerprint
-(`python spread_backtest.py --skew-sweep --years 10 | tee
-results/spread_backtest_run4.txt`), a reproduction, not a new look.**
+the scanner wiring test, one check (56), 20 mutants falsified. **Run 4
+DONE 2026-10-28** (`results/spread_backtest_run4.md`): identical to run 3
+in every number; fingerprint `v2-9c744bd1aa11ecb2`, four series cached,
+fetched 2026-09-10, the same frozen cache as the record and the option
+runs, so the 83 → 120 cycles and the verdict flip are the code. Nothing
+changes but the file; the forward arm now carries the question.
 The original note, kept: `results/spread_backtest_run3.md`. On the
 group B engine (item 36) five of the eight always-on defined-risk arms
 clear the bar `spread_backtest.py` declares, at every skew: all four SPY
@@ -2210,10 +2212,10 @@ FAIL unchanged, −0.112 R on 579 trades; the raw output
 (13 cached / 0 fetched) and 92 of 579 trades gapped through a level (61
 stops filled at the open), the mechanism behind the move from run 2.
 
-**Still pending, in blocking order:** run 4 of the spread backtest on the
-laptop, fingerprint printed (BACKLOG 34 E, the pre-registration governs
-it); the first forward spread reading at 6 graded cycles per arm (~6
-months) and the result at 12; journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
+**Still pending, in blocking order:** the first forward spread reading at
+6 graded cycles per arm (~6 months, BACKLOG 34 E) and the result at 12;
+the first `spread arms:` lines in the post-close log (eight cycles opened,
+or the reason not); journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
 the 11-09/11-10 post-close logs (F5).
 
 ---
