@@ -1,3 +1,11 @@
+PULLBACK ARRIVAL, RUN 2 (BACKLOG 36 group B). Run by the owner 2026-10-28,
+`python pullback_arrival.py`, branch claude/trading-code-review-wt48q8 @ c1de652, after
+pullback_signal began refusing a history with duplicate, unsorted or NaN sessions
+(bad_history) and a non-finite ATR (bad_atr). IDENTICAL to run 1 in every count
+(823 signal bars, 203 episodes, 83 names, fingerprint v2-e2805739bd13777d, no bad_history
+or bad_atr refusal): no name in the pool carried a bad history. The validators are live
+and found nothing to refuse, which is the expected reading on Yahoo daily bars.
+
   AAPL: 20 signal bars
   ABBV: 9 signal bars
   ABNB: 6 signal bars

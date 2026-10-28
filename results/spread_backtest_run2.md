@@ -2,9 +2,10 @@
 !! priced for dte/365 of time value and then held dte SESSIONS (30 sessions is six
 !! weeks), so the priced maturity and the elapsed holding period disagreed on every
 !! cycle. The engine now settles on the first session on or after entry + dte calendar
-!! days and prices each cycle for the days it lives. RE-RUN OWED on the frozen bars:
-!! results/spread_backtest_run3.md. The verdict here (no arm cleared the bar) stands
-!! as the reading of the engine of its day, not as a current number.
+!! days and prices each cycle for the days it lives. RE-RUN LANDED 2026-10-28:
+!! results/spread_backtest_run3.md -- 120 cycles per arm instead of 83, and FIVE of the
+!! eight arms clear the pre-registered bar at every skew. The verdict here (no arm
+!! cleared) is the reading of the engine of its day, not a current number.
 # Run 2 — the same arms with the cost model corrected
 
 **Run 2026-09-11, `python spread_backtest.py --skew-sweep --years 10`, exit 1.**

@@ -3,8 +3,9 @@
 !! session's close, and settled a trade cut off by the sample's end as if it had
 !! expired. The engine now runs on the calendar (expiry = entry + dte days, time
 !! value over 365), marks the entry session, and leaves sample-end trades OPEN.
-!! RE-RUN OWED on the frozen bars: results/option_iv_sensitivity_run3.md. Until it lands, no constant may
-!! be read from this file (consistency_check refuses a SUPERSEDED source).
+!! RE-RUN LANDED the same day on the same frozen bars: results/option_iv_sensitivity_run3.md.
+!! Win rate at TP+100 25.1% -> 28.1%; every finding held except the sign line at 1.00x,
+!! which moved from +100 to +150. risk_params reads run 3.
 # Option engine IV sensitivity — run 2 (the no-look-ahead code)
 
 **Run by the owner 2026-10-28 on the laptop whose `.bar_cache/` holds the

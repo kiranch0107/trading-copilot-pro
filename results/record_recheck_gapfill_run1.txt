@@ -1,8 +1,9 @@
 !! SUPERSEDED BY GROUP B (BACKLOG 36, built 2026-10-28): backtest.compute() now keeps
 !! every session on the execution timeline and discards a fixed warm-up head, so the
 !! recorded cuts move (a CODE MOVED verdict against the 2026-10-08 data baseline is the
-!! expected reading). RE-RUN OWED: results/record_recheck_groupb_run1.txt. The baseline
-!! file is a DATA baseline and is not superseded.
+!! expected reading). RE-RUN LANDED 2026-10-28: results/record_recheck_groupb_run1.txt,
+!! which reproduced the RECORD's own fingerprints (not this file's 10-08 baseline) and
+!! read CODE MOVED on all three cuts. The baseline file is a DATA baseline and stands.
 THE GAP-FILL TEST (BACKLOG 21). Run by the owner on 2026-10-08 on the laptop
 whose .bar_cache/ produced record_recheck_baseline_2026-10-08.txt, on branch
 claude/trading-code-review-wt48q8 @ 3a473e0 (the fix in). Every fingerprint

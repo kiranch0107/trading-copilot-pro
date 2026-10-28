@@ -1,3 +1,29 @@
+THE GROUP B RE-CHECK (BACKLOG 36). Run by the owner 2026-10-28 on the laptop,
+`python record_recheck.py`, branch claude/trading-code-review-wt48q8 @ c1de652, after
+backtest.compute() began keeping every session on the execution timeline (a missing
+Volume blanks twenty signal bars instead of deleting twenty sessions) behind a fixed
+warm-up head.
+
+READ IT AGAINST THE RECORD, NOT THE 10-08 BASELINE. Every fingerprint below matches the
+RECORD's own (v2-24b0f52e..., v2-6b5c07fe..., v2-e09e31d6...): the laptop's cache holds the
+frozen 2026-09-10 bars the record was built on (the 10-28 bar_cache manifest), so the
+tool judged against the record and CODE MOVED is the sum of EVERY engine change since the
+record -- the 09-10 gapped-fill scoring, the 10-08 gapped-stop rule, and group B. The
+gap-fill run (record_recheck_gapfill_run1.txt) was on the 10-08 bars, so group B's own
+share cannot be isolated by subtraction; what can be read is the trade COUNT, which the
+fill rules never change: 418 -> 415, 684 -> 681, 1386 -> 1377. Three to nine signal bars
+per cut sat inside an indicator gap (or their stop was crossed in one) and are read no
+more. The 15-year OOS cut (oos_validate_run4.txt) did not move by a single trade.
+
+  cut        trades            avg R              long R             short R
+  7t/5y      418 -> 415        +0.012 -> +0.008   +0.268 -> +0.299   -0.409 -> -0.469
+  12t/5y     684 -> 681        -0.012 -> -0.030   +0.106 -> +0.094   -0.210 -> -0.242
+  12t/10y   1386 -> 1377       -0.048 -> -0.086   +0.085 -> +0.042   -0.287 -> -0.315
+
+The record is STALE, as the tool says, and has been since the gap-fill fix: its findings
+are signs and dose-responses that these moves do not undo, and none of its R is on the
+current engine. Nothing new is decided by this file.
+
 ==============================================================================
 RECORD RE-CHECK — do the three recorded cuts still hold on today's code?
 ==============================================================================

@@ -269,6 +269,29 @@ def run(ticker: str, *, structure: str, width: float, otm_pct: float,
                      structure=structure, width=width)
 
 
+def print_fingerprint() -> str | None:
+    """
+    The bars this run read, as the one line the share and option engines
+    print (`data: v2-...`, series, cached/fetched, age). Added after run 3
+    (2026-10-28, BACKLOG 36 group B): runs 2 and 3 were seven weeks apart on
+    "10 years relative to today" and nothing recorded whether they read the
+    same bars. Returns the line, or None when nothing was read.
+    """
+    _bc = getattr(bt, "bar_cache", None)
+    _log = getattr(bt, "_CACHE_LOG", None)
+    if _bc is None or not _log:
+        return None
+    seen, metas, stats = set(), [], []
+    for m, st in _log:                       # one entry per series, first read
+        k = (m or {}).get("key") or (m or {}).get("ticker")
+        if k in seen:
+            continue
+        seen.add(k); metas.append(m); stats.append(st)
+    line = _bc.summarise(metas, stats)
+    print(f"  {line}")
+    return line
+
+
 def benchmark(cycles: list[dict], *, account: float) -> dict:
     """
     The comparison the strategy has to beat: the SAME dollars, in the index.
@@ -631,6 +654,26 @@ def selftest() -> int:
           f"condor w10 {_old(ic10):.3f}->{_new(ic10):.3f}")
 
     print("=" * 70)
+    # ── the run says what bars it read (group B follow-up, 2026-10-28) ──
+    import contextlib as _ctx, io as _io, inspect as _insp
+    _saved_log = list(getattr(bt, "_CACHE_LOG", []))
+    try:
+        _meta = lambda tk: {"key": f"{tk}_1d_10y", "ticker": tk, "interval": "1d", "years": 10,
+                            "variant": "raw", "hash": "cd" * 16, "fetched_at": "2026-10-01T00:00:00Z"}
+        bt._CACHE_LOG[:] = [(_meta("SPY"), "hit"), (_meta("SPY"), "hit"), (_meta("^VIX"), "stored")]
+        _buf = _io.StringIO()
+        with _ctx.redirect_stdout(_buf):
+            _line = print_fingerprint()
+        assert _line and "data: v2-" in _buf.getvalue() and "2 series, 1 cached / 1 fetched" in _buf.getvalue(), (
+            _buf.getvalue(), "every spread run must print the bar-cache fingerprint, one entry per series")
+        bt._CACHE_LOG[:] = []
+        assert print_fingerprint() is None, "nothing read, nothing claimed"
+    finally:
+        bt._CACHE_LOG[:] = _saved_log
+    _main_src = _insp.getsource(main)
+    assert "print_fingerprint()" in _main_src and "_CACHE_LOG.clear()" in _main_src, \
+        "main() must clear the cache log before its reads and print the fingerprint after the report"
+    print("fingerprint      : printed once per run, this run's reads only")
     print("All self-tests passed.")
     return 0
 
@@ -723,6 +766,8 @@ def main() -> int:
     widths = [float(w) for w in a.widths.split(",") if w.strip()]
     structures = [s.strip() for s in a.structures.split(",") if s.strip()]
     skews = [0.0, 10.0, REALISTIC_SKEW, 30.0] if a.skew_sweep else [a.skew]
+    if hasattr(bt, "_CACHE_LOG"):
+        bt._CACHE_LOG.clear()               # the fingerprint is THIS run's reads
 
     by_arm: dict = {}
     for skew in skews:
@@ -741,7 +786,9 @@ def main() -> int:
         print("NOTHING MEASURED — do not read anything into this run.",
               file=sys.stderr)
         return 2
-    return report(by_arm, a.account, skews)
+    rc = report(by_arm, a.account, skews)
+    print_fingerprint()
+    return rc
 
 
 if __name__ == "__main__":

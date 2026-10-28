@@ -1164,10 +1164,12 @@ Historical single-name IV is not available from this data source, which is
 why B is forward. A path-dependent IV model is explicitly out of scope.
 
 **Part A run 2026-10-08 by the owner (`results/option_iv_sensitivity_run1.md`);
-re-run 2026-10-28 on the no-look-ahead code (`option_iv_sensitivity_run2.md`),
-every finding below held, constants moved to run 2.**
+re-run 2026-10-28 on the no-look-ahead code (`option_iv_sensitivity_run2.md`)
+and again the same day on the calendar-clock engine
+(`option_iv_sensitivity_run3.md`, item 36 group B); every finding below
+held, constants moved to run 3 (the sign line sits at TP ≥ +150 on run 3).**
 Ordering of take-profit levels by win rate: invariant across 1.00–1.50.
-Sign of expectancy at TP ≥ +100: **not** invariant — positive at 1.00, negative
+Sign of expectancy at TP ≥ +100 (run 3: ≥ +150): **not** invariant — positive at 1.00, negative
 at 1.15 and up. So the verdict on the live TP+200 / SL−50 structure is the
 constant's, not the data's, and is UNMEASURED until Part B reads. +50 and +75
 stay refuted at every multiplier. `OPT_WIN_RATE` at TP+100 / SL−50 spans
@@ -1829,6 +1831,19 @@ base-signal question; (D) re-pose H1, since a tier that fired 0 times in
 decisions:** which of A to D to pre-register; whether to build the episode
 reading now (recommended: yes, it is a reading change).
 
+**(E) added 2026-10-28, OPEN:** `results/spread_backtest_run3.md`. On the
+group B engine (item 36) five of the eight always-on defined-risk arms
+clear the bar `spread_backtest.py` declares, at every skew: all four SPY
+arms and QQQ put_spread w10, 120 cycles each. Run 2 said no arm cleared,
+because it charged each cycle 42 days of risk for 30 days of premium. The
+file lists why it is not yet a result (no data fingerprint printed on that
+run; a third look at the same ten years; modelled prices; no
+pre-registration saying what a PASS commits anyone to). Recommended: do
+nothing with it until a pre-registration exists that names the mechanism,
+the bar, and a forward arm (the same shape as the forward record), then
+re-run with the fingerprint printed. Not recommended: trading an arm on
+this file.
+
 ---
 
 ## 35. External review of 2026-10-19: twenty claims verified, none wrong; the record reads the forming bar, IV grading will censor departed names from ~11-07, close durability is P0 — ALL FIVE GROUPS DONE 2026-10-19; OPTION RE-RUNS DONE 2026-10-28
@@ -1916,7 +1931,8 @@ into its own list and returns it only whole (N08). Guards falsified.
 `results/option_iv_sensitivity_run2.md` and `thesis_exit_run2.md`. Every
 finding held; `OPT_WIN_RATE` 0.249 → 0.251 and both sweep tables are run
 2's, pinned to the run-2 files by `check_option_iv_single_source`; the
-seven caveated files now point at run 2; `option_backtest.py` prints the
+seven caveated files now point at run 2 (and run 2 at run 3 since group B,
+item 36: `OPT_WIN_RATE` 0.281); `option_backtest.py` prints the
 bar-cache fingerprint from now on. The 393-vs-398 question was settled by
 the cache manifest the same day: run 2 read the frozen 2026-09-10 bars (as
 the 09-10 sweep did), run 1 of 10-08 was a live fetch a month later at both
@@ -2020,7 +2036,32 @@ against the 10-08 data baseline is the expected verdict),
 `oos_validate_run4.md` (same frozen hash). The older research files
 (feature_sweep, exit_ab, conditional_test, drift_null, inverted_arm,
 universe_backtest) are readings of the engine of their day and are not
-re-run. **Group C DONE 2026-10-28 (owner: "go with group C as well").**
+re-run. **RE-RUNS DONE 2026-10-28** (owner's laptop, branch @ c1de652,
+frozen bars), merged with the fix as one change:
+`option_iv_sensitivity_run3.md` (win rate at TP+100 25.1 % → 28.1 %, every
+average loss larger by the same mechanism, no OPEN trade; every finding
+held except the sign line at 1.00x, which moved from TP ≥ +100 to ≥ +150;
+`OPT_WIN_RATE` 0.251 → 0.281, both sweep tables and `OPT_SWEEP_SOURCE` are
+run 3's; the 0 % breakeven of 33.3 % is still cleared by nothing);
+`thesis_exit_run3.md` (KEEP; the rule now touches 298 trades, not 590,
+because the calendar TIME exit pre-empts it; delta −0.34 %, detectable
+1.95 %); **`spread_backtest_run3.md`: FIVE of eight arms clear the
+pre-registered bar at every skew** (all four SPY arms and QQQ put_spread
+w10; 120 cycles per arm instead of 83; drawdowns a third to a tenth of run
+2's), because run 2 charged each cycle 42 days of risk for 30 days of
+premium. The engine printed no data fingerprint (added now, for run 4),
+the ten years have been read three times, and no pre-registration says
+what a PASS commits anyone to: **what follows is the owner's decision
+(see 34)**; nothing is traded or amended by the file.
+`portfolio_replay_run4.txt` (constrained +1.7 %/yr at 21.8 % DD → +2.6 %
+at 17.2 %, 239 signals skipped under the strict same-day rule; the long
+edge +0.042 R unchanged; SPY +13.4 %/yr over its observed span);
+`pullback_arrival_run2.txt` identical to run 1 (no bad history in the
+pool); `record_recheck_groupb_run1.txt` reproduced the RECORD's own
+fingerprints (the cache holds the 09-10 bars) and read CODE MOVED on all
+three cuts, 418 → 415, 684 → 681, 1386 → 1377 trades, the sum of every
+engine change since the record; `oos_validate_run4.md` IDENTICAL to run 3
+in every number (the held-out cut had no gap row to lose). **Group C DONE 2026-10-28 (owner: "go with group C as well").**
 `app.batch_get_data` retries exactly the names a partial batch left out
 and reports the ones still missing (`BATCH_GAPS`), which the scan lists
 beside its results as "no data after batch retry". The scanner's alert
@@ -2144,10 +2185,10 @@ FAIL unchanged, −0.112 R on 579 trades; the raw output
 (13 cached / 0 fetched) and 92 of 579 trades gapped through a level (61
 stops filled at the open), the mechanism behind the move from run 2.
 
-**Still pending, in blocking order:** the group B re-runs on the laptop
-(BACKLOG 36: option sweep ×4 + default + thesis run 3, spread run 3,
-portfolio replay run 4, pullback arrival run 2, record_recheck group B,
-OOS run 4), then fold them in and merge fix + results as one change;
+**Still pending, in blocking order:** the owner's reading of
+`results/spread_backtest_run3.md` (five arms clear the bar on the fixed
+engine; BACKLOG 34, decision E); `python bar_cache.py --info` on the laptop
+to say which bars spread run 3 read (the engine now prints it);
 journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
 the 11-09/11-10 post-close logs (F5).
 
