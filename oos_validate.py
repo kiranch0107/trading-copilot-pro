@@ -230,6 +230,27 @@ AGG_PATTERNS = {
 }
 
 
+def provenance(text: str) -> dict:
+    """
+    What the backtest read and how it filled (2026-10-28, after run 3): the
+    bar-cache fingerprint line backtest.run() prints last (`data: v2-...
+    (13 series, 13 cached / 0 fetched ...)`) and the gapped-level fill
+    tally (`N stops filled at the open, M targets`). Both used to live only
+    in oos_raw_output.txt, which is not committed, so a run's summary could
+    not say which bars it read. None for a line that is absent.
+    """
+    import re as _re
+    data = fills = None
+    for line in text.splitlines():
+        t = line.strip()
+        if t.startswith("data: ") and data is None:
+            data = t
+        m = _re.search(r"\((\d+) stops filled at the open, (\d+) targets\)", t)
+        if m and fills is None:
+            fills = {"stops_at_open": int(m.group(1)), "targets_at_open": int(m.group(2))}
+    return {"data_fingerprint": data, "gapped_fills": fills}
+
+
 def parse_output(text):
     """Extract per-ticker rows and the aggregate block."""
     per_ticker = []
@@ -398,8 +419,9 @@ def append_ledger(entry):
 # Reporting
 # ---------------------------------------------------------------------------
 
-def report(per_ticker, agg, stats, run_number, hash_changed):
+def report(per_ticker, agg, stats, run_number, hash_changed, prov=None):
     W = 74
+    prov = prov or {}
     print("=" * W)
     print("OUT-OF-SAMPLE VALIDATION — TRADING COPILOT ELITE")
     print("=" * W)
@@ -409,6 +431,11 @@ def report(per_ticker, agg, stats, run_number, hash_changed):
     print(f"Params        : ADX>={FROZEN['adx_min']}  stop {FROZEN['atr_stop']}x  "
           f"tgt {FROZEN['atr_tgt']}x  hold {FROZEN['max_hold']}  "
           f"regime {'ON' if FROZEN['use_regime'] else 'OFF'}")
+    print(f"Data          : {prov.get('data_fingerprint') or 'no fingerprint line in the backtest output'}")
+    _gf = prov.get("gapped_fills")
+    print(f"Fills         : "
+          + (f"{_gf['stops_at_open']} stops and {_gf['targets_at_open']} targets filled at the open "
+             f"(gapped through)" if _gf else "no fill tally in the backtest output"))
     print()
 
     if hash_changed:
@@ -533,6 +560,19 @@ def selftest():
     assert abs(agg["profit_factor"] - 1.51) < 1e-9
 
     assert per_ticker[0]["bars"] == 3771, "the Bars column must be captured"
+
+    _prov = provenance(SAMPLE + "\n  data: v2-abcdef0123456789  (13 series, 13 cached / 0 fetched, oldest 56d)\n"
+                       "  Gapped levels: 17 of 149 trades  (15 stops filled at the open, 2 targets)\n")
+    assert _prov["data_fingerprint"].startswith("data: v2-abcdef0123456789") and \
+        _prov["gapped_fills"] == {"stops_at_open": 15, "targets_at_open": 2}, _prov
+    assert provenance(SAMPLE) == {"data_fingerprint": None, "gapped_fills": None}, \
+        "an output without the lines must say so, not invent them"
+    import contextlib as _ctx, io as _io
+    _buf = _io.StringIO()
+    with _ctx.redirect_stdout(_buf):
+        report(per_ticker, agg, pooled_stats(per_ticker, agg), 1, False, _prov)
+    assert "Data          : data: v2-abcdef0123456789" in _buf.getvalue() and \
+        "Fills         : 15 stops and 2 targets" in _buf.getvalue(), _buf.getvalue()
 
     legacy, agg_l = parse_output(SAMPLE_LEGACY)
     assert len(legacy) == 3 and legacy[0]["trades"] == 43, \
@@ -706,9 +746,10 @@ def main():
         "ci": [round(stats["ci_low"], 4), round(stats["ci_high"], 4)],
         "passed": ok,
         "fail_reasons": reasons,
+        **provenance(out),
     })
 
-    report(per_ticker, agg, stats, run_number, hash_changed)
+    report(per_ticker, agg, stats, run_number, hash_changed, provenance(out))
     return 0 if ok else 1
 
 
