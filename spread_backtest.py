@@ -95,10 +95,10 @@ import pandas as pd
 import backtest as bt
 import risk_params as rp
 from option_backtest import bs_price
-
-# ── the structures ──
-PUT_SPREAD = "put_spread"
-IRON_CONDOR = "iron_condor"
+# The forward arm (spread_log.py, results/spread_preregistration.md) and this
+# backtest settle, name and cost the same structures: one copy, kept there
+# because that module must stay stdlib.
+from spread_log import settle, CROSS_FRAC, VOL_INDEX, PUT_SPREAD, IRON_CONDOR  # noqa: F401
 
 # ── pre-registered thresholds ──
 MAX_DRAWDOWN_PCT = 25.0
@@ -109,8 +109,6 @@ REALISTIC_SKEW = 20.0
 
 TRADING_DAYS = 252
 RISK_FREE = 0.04
-
-VOL_INDEX = {"SPY": "^VIX", "QQQ": "^VXN"}
 
 
 def implied_at(base_vol: float, spot: float, strike: float, skew: float) -> float:
@@ -125,11 +123,11 @@ def implied_at(base_vol: float, spot: float, strike: float, skew: float) -> floa
     return max(0.01, base_vol - skew / 100.0 * m)
 
 
-# Filling at mid and crossing to the executable side pays half the quoted width,
-# not all of it. Separate from cost_frac, which says how much of the 8% CEILING
-# a real SPY/QQQ contract's quoted spread actually is. Two different haircuts
-# that happen to share a value; conflating them is how the shape error hid.
-CROSS_FRAC = 0.5
+# CROSS_FRAC (imported above): filling at mid and crossing to the executable
+# side pays half the quoted width, not all of it. Separate from cost_frac,
+# which says how much of the 8% CEILING a real SPY/QQQ contract's quoted
+# spread actually is. Two different haircuts that happen to share a value;
+# conflating them is how the shape error hid.
 
 
 def _leg(spot, strike, t, base_vol, right, skew):
@@ -165,16 +163,6 @@ def build(structure: str, spot: float, base_vol: float, t: float,
     return {"legs": legs, "credit": credit, "gross": gross,
             "max_loss": width - credit if structure == PUT_SPREAD
             else width - credit}
-
-
-def settle(legs, spot_at_exit: float) -> float:
-    """Intrinsic value owed at expiry, per share. Positive = we owe."""
-    owed = 0.0
-    for right, strike, qty in legs:
-        intr = (max(0.0, spot_at_exit - strike) if right == "CALL"
-                else max(0.0, strike - spot_at_exit))
-        owed -= qty * intr
-    return owed
 
 
 def run(ticker: str, *, structure: str, width: float, otm_pct: float,

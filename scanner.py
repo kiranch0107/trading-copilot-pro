@@ -60,6 +60,8 @@ import data_source
 import market_context
 import iv_snapshot
 import basket_log
+import spread_log
+from datetime import date as _date_cls
 import option_chain
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(),format="%(asctime)s %(levelname)s: %(message)s")
@@ -498,12 +500,15 @@ def bars_for_grading(df: pd.DataFrame, now: datetime | None = None) -> list:
     return out
 
 
-def fetch_atm_chain(ticker: str, today=None) -> dict | None:
+def fetch_atm_chain(ticker: str, today=None, min_dte: int | None = None) -> dict | None:
     """
     The nearest expiry inside OPT_MIN_DTE..OPT_MAX_DTE and its calls/puts as
     plain rows for iv_snapshot.atm_iv_from_chain(). One expiries call, one
     chain call, with the same rate-limit backoff suggest_option() uses.
-    Returns {"expiry", "dte", "calls", "puts"} or None.
+    Returns {"expiry", "dte", "calls", "puts"} or None. With `min_dte`, the
+    FIRST listed expiry at least that many calendar days out instead (the
+    spread arm's expiry rule, results/spread_preregistration.md), and the
+    rows carry bid/ask when the chain has them.
     """
     today = today or pd.Timestamp.today().normalize()
     try:
@@ -523,6 +528,10 @@ def fetch_atm_chain(ticker: str, today=None) -> dict | None:
                 dte = (pd.Timestamp(exp) - today).days
             except Exception:                           # noqa: BLE001
                 continue
+            if min_dte is not None:
+                if dte >= min_dte:
+                    pick = (exp, dte); break
+                continue
             if OPT_MIN_DTE <= dte <= OPT_MAX_DTE:
                 pick = (exp, dte); break
         if pick is None:
@@ -541,7 +550,8 @@ def fetch_atm_chain(ticker: str, today=None) -> dict | None:
         def _rows(df):
             if df is None or df.empty or "impliedVolatility" not in df.columns:
                 return []
-            return df[["strike", "impliedVolatility"]].to_dict("records")
+            cols = ["strike", "impliedVolatility"] + [c for c in ("bid", "ask") if c in df.columns]
+            return df[cols].to_dict("records")
         return {"expiry": str(pick[0])[:10], "dte": pick[1],
                 "calls": _rows(chain.calls), "puts": _rows(chain.puts)}
     except Exception as e:                              # noqa: BLE001
@@ -963,15 +973,18 @@ def selftest() -> int:
     import tempfile as _tf, pathlib as _pl
     real = forward_log.LOG
     real_b = basket_log.LOG
+    real_sp = spread_log.LOG
     try:
         forward_log.LOG = _pl.Path(_tf.mkdtemp()) / "selftest.jsonl"
         # basket_log.jsonl has the same exposure: run()'s post-close pass
         # records a basket for the newest REAL snapshot in universe_history.
         basket_log.LOG = _pl.Path(_tf.mkdtemp()) / "basket_selftest.jsonl"
+        spread_log.LOG = _pl.Path(_tf.mkdtemp()) / "spread_selftest.jsonl"
         return _selftest_body()
     finally:
         forward_log.LOG = real
         basket_log.LOG = real_b
+        spread_log.LOG = real_sp
 
 
 def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
@@ -1121,6 +1134,67 @@ def basket_record_pass(closes_for, snap: dict | None) -> str:
                 else f"{as_of} refused {refused}")
     except Exception as exc:                               # noqa: BLE001
         return f"basket record failed: {exc}"
+
+
+def spread_record_pass(closes_for, vol_close_for, chain_for, today=None) -> str:
+    """
+    One forward `cycle` per spread arm without an open cycle
+    (results/spread_preregistration.md, BACKLOG 34 E): the entry is the
+    ticker's last settled close, the vol index must close on the SAME
+    session, the expiry is the first listed one at least spread_log.DTE_DAYS
+    out, the legs and model credit are spread_backtest.build()'s at its
+    REALISTIC_SKEW (flat beside it), and the market's quotes on those legs
+    are read from the same chain. `closes_for(tk)` -> settled [{"date",
+    "close"}] or None; `vol_close_for(name)` -> {"date", "close"} or None;
+    `chain_for(tk, min_dte)` -> {"expiry", "dte", "calls", "puts"} or None.
+    Returns one line for the log. Never raises.
+    """
+    try:
+        import spread_backtest as _sb
+        open_now = spread_log.open_cycles()
+        wrote, skipped, refused = 0, [], {}
+        for tk in spread_log.TICKERS:
+            arms = [a for a in spread_log.ARMS if a["ticker"] == tk
+                    and spread_log.arm_key(a) not in open_now]
+            if not arms:
+                continue
+            bars = closes_for(tk) or []
+            if not bars:
+                skipped.append(f"{tk}: no closes"); continue
+            entry, spot = str(bars[-1]["date"])[:10], float(bars[-1]["close"])
+            vol = vol_close_for(spread_log.VOL_INDEX[tk])
+            if not vol or str(vol.get("date"))[:10] != entry:
+                skipped.append(f"{tk}: {spread_log.VOL_INDEX[tk]} not closed on {entry}"); continue
+            vol_pts = float(vol["close"])
+            ch = chain_for(tk, spread_log.DTE_DAYS)
+            if not ch or not ch.get("expiry"):
+                skipped.append(f"{tk}: no chain at {spread_log.DTE_DAYS}+ days"); continue
+            days = (_date_cls.fromisoformat(str(ch["expiry"])[:10]) - _date_cls.fromisoformat(entry)).days
+            quotes = {}
+            for right, rows in (("CALL", ch.get("calls") or []), ("PUT", ch.get("puts") or [])):
+                for q in rows:
+                    try:
+                        quotes[(right, float(q["strike"]))] = (float(q.get("bid")), float(q.get("ask")))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+            for a in arms:
+                pos = _sb.build(a["structure"], spot, vol_pts / 100.0, days / 365.0,
+                                a["width"], a["otm_pct"], _sb.REALISTIC_SKEW)
+                flat = _sb.build(a["structure"], spot, vol_pts / 100.0, days / 365.0,
+                                 a["width"], a["otm_pct"], 0.0)
+                model = dict(pos, credit_flat=flat["credit"], skew=_sb.REALISTIC_SKEW)
+                market, why = spread_log.market_credit(pos["legs"], quotes)
+                row = spread_log.record(entry, a, spot, vol_pts, ch["expiry"], pos["legs"],
+                                        model, market, why, refused=refused)
+                wrote += 1 if row else 0
+        parts = [f"{wrote} cycle(s) opened"]
+        if skipped:
+            parts.append("skipped " + "; ".join(skipped))
+        if refused:
+            parts.append(f"refused {refused}")
+        return ", ".join(parts)
+    except Exception as exc:                               # noqa: BLE001
+        return f"spread record failed: {exc}"
 
 
 def run(args) -> int:
@@ -1517,6 +1591,26 @@ def run(args) -> int:
                             _bg["no_data"], _bg["failed"])
             for _d in _bg["detail"][:10]:
                 logger.info("rs basket: %s", _d)
+            # ── THE SPREAD ARMS (BACKLOG 34 E): settle the cycles whose expiry
+            # has closed, THEN open the next one on this session's close, the
+            # backtest's own re-entry rule. Two chain fetches at most.
+            _sg = spread_log.grade(_closes_for)
+            if _sg["graded"] or _sg["void"] or _sg["held"] or _sg["failed"]:
+                logger.info("spread arms: graded %d, void %d, unsettled %d, held %d, no data %d, failed %d",
+                            _sg["graded"], _sg["void"], _sg["unsettled"], _sg["held"],
+                            _sg["no_data"], _sg["failed"])
+            for _d in _sg["detail"][:10]:
+                logger.info("spread arms: %s", _d)
+
+            def _vol_close_for(name):
+                time.sleep(FETCH_GAP_SEC)
+                _dv = get_data(name)
+                if _dv is None or len(_dv) == 0:
+                    return None
+                _bv = bars_for_grading(_dv)
+                return {"date": _bv[-1]["date"], "close": _bv[-1]["close"]} if _bv else None
+            logger.info("spread arms: %s", spread_record_pass(
+                _closes_for, _vol_close_for, lambda tk, md: fetch_atm_chain(tk, min_dte=md)))
         except Exception as _exc:                          # noqa: BLE001
             logger.warning("iv snapshot failed: %s", _exc)
 
@@ -2096,7 +2190,7 @@ def _selftest_body() -> int:
                                      "WATCHLIST", "FETCH_GAP_SEC", "suggest_option",
                                      "is_post_close_window", "fetch_atm_chain",
                                      "IV_GRADE_FETCH_CAP", "trading_days_between",
-                                     "basket_record_pass")}
+                                     "basket_record_pass", "spread_record_pass")}
         _saved_state: dict = {}
         _iv_tmp = _pl2.Path(_tf2.mkdtemp()) / "iv.jsonl"
         _real_iv_log = iv_snapshot.LOG
@@ -2127,6 +2221,7 @@ def _selftest_body() -> int:
             # The basket pass would spend the cap on the real snapshot's names
             # and SPY; it has its own test below.
             _g["basket_record_pass"] = lambda closes_for, snap: "stubbed in this harness"
+            _g["spread_record_pass"] = lambda *a, **k: "stubbed in this harness"
             _g["trading_days_between"] = lambda a, b: len(_pd3.bdate_range(a, b)) - 1
             _g["fetch_atm_chain"] = _fake_chain
             _g["get_data"] = lambda tk: (_got.append(tk) or (_fr3_holed if tk == "DDE" else _fr3))
@@ -2200,6 +2295,88 @@ def _selftest_body() -> int:
             basket_log.LOG = _real_bk
         print("rs basket row           : once per snapshot on one shared anchor; no benchmark or "
               "mixed anchors -> nothing written")
+
+        # ── THE SPREAD ARMS (BACKLOG 34 E): one cycle per arm without an open
+        # one, on the ticker's last settled close, the vol index closed on the
+        # same session, the first listed expiry >= DTE_DAYS out, the model's
+        # legs and credit, and the market's quotes on those legs.
+        _sp_tmp = _pl_bk.Path(_tf_bk.mkdtemp()) / "sp.jsonl"
+        _real_sp = spread_log.LOG
+        try:
+            spread_log.LOG = _sp_tmp
+            _sp_bars = {"SPY": [{"date": "2026-06-25", "close": 398.0}, {"date": "2026-06-26", "close": 400.0}],
+                        "QQQ": [{"date": "2026-06-25", "close": 348.0}, {"date": "2026-06-26", "close": 350.0}]}
+            _sp_vol = {"^VIX": {"date": "2026-06-26", "close": 18.0}, "^VXN": {"date": "2026-06-26", "close": 22.0}}
+            _sp_chain_calls: list = []
+            def _sp_chain(tk, md):
+                _sp_chain_calls.append((tk, md))
+                spot = _sp_bars[tk][-1]["close"]
+                strikes = range(int(spot * 0.90), int(spot * 1.10) + 1)
+                return {"expiry": "2026-07-27", "dte": 31,
+                        "calls": [{"strike": float(k), "bid": 1.00, "ask": 1.10} for k in strikes],
+                        "puts": [{"strike": float(k), "bid": 2.00, "ask": 2.20} for k in strikes]}
+            _msg = spread_record_pass(lambda tk: _sp_bars.get(tk), lambda nm: _sp_vol.get(nm), _sp_chain)
+            _sp_rows = spread_log.read_all(_sp_tmp)
+            assert len(_sp_rows) == 8 and "8 cycle(s) opened" in _msg and sorted(_sp_chain_calls) == [("QQQ", 30), ("SPY", 30)], \
+                (_msg, len(_sp_rows), _sp_chain_calls)
+            _r0 = next(r for r in _sp_rows if r["arm"] == "SPY put_spread w10 otm5")
+            import spread_backtest as _sb_t
+            _want = _sb_t.build("put_spread", 400.0, 0.18, 31 / 365, 10.0, 5.0, _sb_t.REALISTIC_SKEW)
+            assert _r0["entry"] == "2026-06-26" and _r0["expiry"] == "2026-07-27" and _r0["days"] == 31 \
+                and _r0["vol_pts"] == 18.0 and abs(_r0["model"]["credit"] - _want["credit"]) < 1e-4 \
+                and _r0["model"]["skew"] == _sb_t.REALISTIC_SKEW and _r0["legs"] == [[lg[0], float(lg[1]), lg[2]] for lg in _want["legs"]] \
+                and _r0["market"]["credit_mid"] == 0.0 and _r0["market"]["credit_fill"] == -0.2, _r0
+            assert "0 cycle(s) opened" in spread_record_pass(lambda tk: _sp_bars.get(tk), lambda nm: _sp_vol.get(nm), _sp_chain), \
+                "an arm with an open cycle is not opened again"
+            # the vol index must close on the entry session, else nothing is written
+            spread_log.LOG = _pl_bk.Path(_tf_bk.mkdtemp()) / "sp2.jsonl"
+            _stale = {"^VIX": {"date": "2026-06-25", "close": 18.0}, "^VXN": {"date": "2026-06-26", "close": 22.0}}
+            _msg3 = spread_record_pass(lambda tk: _sp_bars.get(tk), lambda nm: _stale.get(nm), _sp_chain)
+            assert "4 cycle(s) opened" in _msg3 and "^VIX not closed on 2026-06-26" in _msg3, _msg3
+            # unquoted legs: the row is kept with the reason, the model side still grades
+            spread_log.LOG = _pl_bk.Path(_tf_bk.mkdtemp()) / "sp3.jsonl"
+            _msg4 = spread_record_pass(lambda tk: _sp_bars.get(tk), lambda nm: _sp_vol.get(nm),
+                                       lambda tk, md: dict(_sp_chain(tk, md), puts=[]))
+            _unq = spread_log.read_all(spread_log.LOG)
+            assert "8 cycle(s) opened" in _msg4 and all(r["market"] is None and "unquoted" in r["market_reason"] for r in _unq), _msg4
+            spread_log.LOG = _pl_bk.Path(_tf_bk.mkdtemp()) / "sp4.jsonl"
+            assert "no chain" in spread_record_pass(lambda tk: _sp_bars.get(tk), lambda nm: _sp_vol.get(nm), lambda tk, md: None)
+            assert not spread_log.read_all(spread_log.LOG), "no chain -> nothing written"
+        finally:
+            spread_log.LOG = _real_sp
+        print("spread arms             : eight cycles from two chains on one close; open arms, a stale vol index, "
+              "an unquoted leg and a missing chain handled as declared")
+
+        # ── THE EXPIRY RULE, offline: with min_dte the chain is the FIRST listed
+        # expiry at least that far out (not the 21-45 window), and its rows
+        # carry bid/ask; without it the nearest 21-45 DTE expiry, as before.
+        class _FakeChain:
+            def __init__(self, exp):
+                self.calls = _pd3.DataFrame({"strike": [395.0, 400.0], "impliedVolatility": [0.2, 0.21],
+                                             "bid": [6.0, 3.0], "ask": [6.2, 3.1]})
+                self.puts = _pd3.DataFrame({"strike": [380.0, 390.0], "impliedVolatility": [0.22, 0.21],
+                                            "bid": [2.0, 3.5], "ask": [2.1, 3.6]})
+        class _FakeTicker:
+            def __init__(self, tk):
+                self.options = ["2026-07-02", "2026-07-17", "2026-07-24", "2026-07-27", "2026-08-21"]
+            def option_chain(self, exp):
+                return _FakeChain(exp)
+        _real_yf = _g["yf"]
+        try:
+            _g["yf"] = type("_YF", (), {"Ticker": staticmethod(_FakeTicker)})
+            _t0 = _pd3.Timestamp("2026-06-26")
+            _c30 = fetch_atm_chain("SPY", today=_t0, min_dte=30)
+            assert _c30 and _c30["expiry"] == "2026-07-27" and _c30["dte"] == 31 \
+                and _c30["puts"][0]["bid"] == 2.0 and _c30["puts"][0]["ask"] == 2.1, _c30
+            _c45 = fetch_atm_chain("SPY", today=_t0, min_dte=45)
+            assert _c45 and _c45["expiry"] == "2026-08-21", _c45
+            _cdef = fetch_atm_chain("SPY", today=_t0)
+            assert _cdef and _cdef["expiry"] == "2026-07-17" and _cdef["dte"] == 21, _cdef
+            assert fetch_atm_chain("SPY", today=_t0, min_dte=90) is None, "no listed expiry far enough -> None"
+        finally:
+            _g["yf"] = _real_yf
+        print("expiry rule             : min_dte picks the first listed expiry at least that far out, with bid/ask; "
+              "default picks the nearest 21-45 DTE")
 
         # ── ONE SELECTOR (group C, 2026-10-28): the scanner's contract is the
         # app's on the same chain, strength and ATR; the mapping keeps the

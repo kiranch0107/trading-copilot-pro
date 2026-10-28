@@ -1831,7 +1831,32 @@ base-signal question; (D) re-pose H1, since a tier that fired 0 times in
 decisions:** which of A to D to pre-register; whether to build the episode
 reading now (recommended: yes, it is a reading change).
 
-**(E) added 2026-10-28, OPEN:** `results/spread_backtest_run3.md`. On the
+**(E) DECIDED AND BUILT 2026-10-28 (owner: "go with E as well,
+pre-register the spread arm"):** `results/spread_preregistration.md`,
+written before run 4 and before the first forward cycle. It fixes the
+mechanism (the measured VRP), the bar (the code's, unchanged, every
+constant pinned by `check_spread_arm_preregistered`), what a PASS commits
+anyone to (running the forward arm for 12 graded cycles per arm, nothing
+else), the power (the forward MEAN is unreadable: ~220 cycles to detect
++1 %/cycle; it is read as a path), and the primary forward question that
+IS readable in a year: **the credit ratio, market mid over model**, H0
+mean 1.0, MDE ±0.12 per arm at 12 cycles; predictions stated (put
+spreads 0.85–1.15, condors 0.80–1.00); a 12-cycle CI entirely below 0.85
+VOIDS that arm's backtest verdict. The forward arm: `spread_log.py`
+(stdlib, hash-chained `spread_log.jsonl`, one writer), one `cycle` per
+arm whenever the arm has none open, from the scanner's post-close pass
+AFTER the day's settlements (the backtest's `i = j`): spot, vol index on
+the same session (else no row), the first listed expiry ≥ 30 days, the
+model's legs and credit at skew 20 and flat, the backtest's cost, and the
+market's bid/ask on those legs (mid and executable credits; an unquoted
+leg keeps the row with the reason). Graded on the expiry close with
+`settle()`, now single-sourced in `spread_log` and imported by the
+backtest with `CROSS_FRAC`, `VOL_INDEX` and the structure names. Selftests,
+the scanner wiring test, one check (56), 18 mutants falsified. **Owed:
+run 4 of the backtest on the laptop with the fingerprint
+(`python spread_backtest.py --skew-sweep --years 10 | tee
+results/spread_backtest_run4.txt`), a reproduction, not a new look.**
+The original note, kept: `results/spread_backtest_run3.md`. On the
 group B engine (item 36) five of the eight always-on defined-risk arms
 clear the bar `spread_backtest.py` declares, at every skew: all four SPY
 arms and QQQ put_spread w10, 120 cycles each. Run 2 said no arm cleared,
@@ -2185,19 +2210,18 @@ FAIL unchanged, −0.112 R on 579 trades; the raw output
 (13 cached / 0 fetched) and 92 of 579 trades gapped through a level (61
 stops filled at the open), the mechanism behind the move from run 2.
 
-**Still pending, in blocking order:** the owner's reading of
-`results/spread_backtest_run3.md` (five arms clear the bar on the fixed
-engine; BACKLOG 34, decision E); `python bar_cache.py --info` on the laptop
-to say which bars spread run 3 read (the engine now prints it);
-journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
+**Still pending, in blocking order:** run 4 of the spread backtest on the
+laptop, fingerprint printed (BACKLOG 34 E, the pre-registration governs
+it); the first forward spread reading at 6 graded cycles per arm (~6
+months) and the result at 12; journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
 the 11-09/11-10 post-close logs (F5).
 
 ---
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 55 cross-module
-  invariants (55 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 56 cross-module
+  invariants (56 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip
