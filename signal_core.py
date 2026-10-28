@@ -66,7 +66,7 @@ class SignalParams:
     app.py builds one of these from its sidebar; scanner.py uses DEFAULTS. If
     you change a default, both move together — which is the entire point.
     """
-    adx_min: float = 35.0
+    adx_min: float = 30.0       # 35 until 2026-10-28 (BACKLOG 33, amendment F: an intake choice)
     min_rr: float = 0.5
     hq_min_rr: float = 1.0          # high-quality tier; alerts fire on this
     volume_mult: float = 1.2        # "Strong" needs volume >= avg * this
@@ -75,7 +75,7 @@ class SignalParams:
     atr_tgt_mult: float = 4.0
     # OFF since 2026-09-02, on measurement. Over 15 years x 12 tickers the
     # weekly gate rejected 5 bars out of the 13,748 that reached the filters
-    # (0.04%) — it is checked after ADX >= 35, and a name that trending is
+    # (0.04%) — it is checked after the ADX gate, and a name that trending is
     # essentially never on the wrong side of its 20-week EMA. Against that it
     # FAILS CLOSED: evaluate() treats a missing weekly trend as blocking (see
     # below), so every rate-limited Yahoo call killed live alerts outright.
@@ -778,15 +778,26 @@ def selftest() -> int:
           f"{r['high_quality']}")
 
     # UNROUNDED GATES (amendment 2026-10-28 E): 34.96 is below 35, 0.996 is
-    # below 1.0; the displayed values are still rounded.
-    r = evaluate(_frame(), "TEST", adx_value=34.96, spy_regime={"regime": "Bullish"},
+    # below 1.0; the displayed values are still rounded. The 35 gate is
+    # pinned explicitly here: DEFAULTS moved to 30 (amendment F, below).
+    _g35 = replace(DEFAULTS, adx_min=35.0)
+    r = evaluate(_frame(), "TEST", _g35, adx_value=34.96, spy_regime={"regime": "Bullish"},
                  weekly_trend="Bullish")
     assert r["filters"]["ADX Trend Strength"]["pass"] is False and r["high_quality"] is False \
         and r["adx"] == 35.0 and abs(r["adx_raw"] - 34.96) < 1e-12, (
         r["filters"]["ADX Trend Strength"], r["adx"], "34.96 must fail a 35 gate while displaying 35.0")
-    r = evaluate(_frame(), "TEST", adx_value=35.0, spy_regime={"regime": "Bullish"},
+    r = evaluate(_frame(), "TEST", _g35, adx_value=35.0, spy_regime={"regime": "Bullish"},
                  weekly_trend="Bullish")
     assert r["filters"]["ADX Trend Strength"]["pass"] is True
+    # THE LIVE GATE IS 30 (amendment 2026-10-28 F, BACKLOG 33): an intake
+    # choice, declared; 29.96 fails it and 30.0 passes it, unrounded.
+    assert DEFAULTS.adx_min == 30.0, DEFAULTS.adx_min
+    _r29 = evaluate(_frame(), "TEST", adx_value=29.96, spy_regime={"regime": "Bullish"}, weekly_trend="Bullish")
+    _r30 = evaluate(_frame(), "TEST", adx_value=30.0, spy_regime={"regime": "Bullish"}, weekly_trend="Bullish")
+    assert _r29["filters"]["ADX Trend Strength"]["pass"] is False and _r30["filters"]["ADX Trend Strength"]["pass"] is True, \
+        "the live ADX leg is 30, compared unrounded"
+    _r34 = evaluate(_frame(), "TEST", adx_value=34.0, spy_regime={"regime": "Bullish"}, weekly_trend="Bullish")
+    assert _r34["filters"]["ADX Trend Strength"]["pass"] is True, "the [30, 35) band is admitted"
     assert gate_rr(0.996, 1.0) is False and gate_rr(1.0, 1.0) is True and gate_rr(0.4999, 0.5) is False
     assert gate_adx(34.96, 35) is False and gate_adx(35.0, 35) is True
     assert "rr_raw" in r and abs(round(r["rr_raw"], 2) - r["rr"]) < 1e-9, "rr is the rounded display of rr_raw"

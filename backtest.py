@@ -131,8 +131,8 @@ except ImportError:
 # Two of these lines used to claim they were app.py's defaults. They were
 # stale: app.py derives its sidebar from signal_core.DEFAULTS
 # (check_app_defaults_derived pins that), and signal_core.DEFAULTS is what
-# scanner.py and app.py RUN — ADX 35, 1.25 / 4.0 ATR, volume 1.2, SPY regime
-# on. This dict is the pre-sweep configuration the 1,386-trade record was
+# scanner.py and app.py RUN — ADX 30 (35 until 2026-10-28), 1.25 / 4.0 ATR,
+# volume 1.2, SPY regime on. This dict is the pre-sweep configuration the 1,386-trade record was
 # built from, and every study on top of it (record_recheck, longshort_split,
 # drift_null, exit_ab, atr_stop_test, inverted_arm, longs_only, tranche C)
 # builds `dict(bt.DEFAULTS, ...)`. Changing a value here moves every committed
@@ -143,7 +143,7 @@ except ImportError:
 DEFAULTS = dict(
     tickers       = ["TSLA", "NVDA", "AAPL", "MSFT", "AMZN", "META", "SPY"],
     years         = 5,
-    adx_min       = 25,       # research; live is 35 — see RESEARCH_VS_LIVE
+    adx_min       = 25,       # research; live is 30 — see RESEARCH_VS_LIVE
     atr_stop_mult = 1.0,      # research; live is 1.25
     atr_tgt_mult  = 3.0,      # research; live is 4.0 (updated from 2.5)
     min_rr        = 0.5,      # same as live
@@ -182,9 +182,11 @@ CFG_TO_PARAMS = {
 # that run's pre-registration (BACKLOG 23, 24). This table only makes the
 # question impossible to miss.
 RESEARCH_VS_LIVE = {
-    "adx_min": (25, 35.0,
+    "adx_min": (25, 30.0,
                 "the record was built pre-sweep at 25; the sweep's 35 was "
-                "OOS-tested as FROZEN and failed (-0.014 R, PF 0.98)"),
+                "OOS-tested as FROZEN and failed (-0.014 R, PF 0.98); live "
+                "lowered 35 -> 30 on 2026-10-28 (BACKLOG 33) as an INTAKE "
+                "choice, the [30, 35) band being NOT ESTABLISHED either way"),
     "atr_stop_mult": (1.0, 1.25,
                       "record geometry is 1.0 / 3.0; live is 1.25 / 4.0 "
                       "(same 3.2 R:R, wider stop)"),

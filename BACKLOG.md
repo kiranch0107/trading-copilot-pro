@@ -1090,7 +1090,7 @@ uses.** That is a pre-registration decision (see 24) and belongs to the owner.
 
 | | `adx_min` | stop | target | `volume_mult` | regime |
 |---|---|---|---|---|---|
-| **live** (`signal_core.DEFAULTS`) | 35 | 1.25 | 4.0 | 1.2 | on |
+| **live** (`signal_core.DEFAULTS`) | 30 (35 until 2026-10-28, item 33) | 1.25 | 4.0 | 1.2 | on |
 | **record** (`bt.DEFAULTS`) | 25 | 1.0 | 3.0 | 1.0 | off |
 
 `record_recheck.py:91` builds every recorded cut from `bt.DEFAULTS`. So the
@@ -1717,7 +1717,7 @@ own scan alerts list is unchanged below it. The single-writer check names
 `record_alert`. Still the owner's: delete the ZZZ row, take or note the two
 stops, and enter the signal bar date when logging.
 
-## 33. ADX 30 instead of 35, on the config the scanner runs — RUN 1 DONE 2026-10-14: NOT ESTABLISHED, DECISION OPEN
+## 33. ADX 30 instead of 35, on the config the scanner runs — RUN 1 DONE 2026-10-14: NOT ESTABLISHED; DECIDED 2026-10-28: 30, AS AN INTAKE CHOICE
 
 **Owner's question 2026-10-14** ("backtest on existing parameters but ADX as
 30 instead of 35"). Not already answered: `adx_retest_run1.md` (2026-09-10)
@@ -1762,6 +1762,24 @@ decision:** keep 35, or lower to 30 as an INTAKE choice (about double the
 HQ alerts, graded forward), recorded as an amendment to
 `forward_record_preregistration.md` before the first row under it. Not a
 measured improvement either way.
+
+**DECIDED 2026-10-28 (owner: "go with BACKLOG 33 as well, ADX 30").**
+Amendment 2026-10-28 (F) in `results/forward_record_preregistration.md`,
+written before the first row under it: `signal_core.DEFAULTS.adx_min`
+35 → 30; the fingerprint moves once, `ba6b3b46afa6` → `81fd95d84cfc`,
+declared in `forward_log.KNOWN_CONFIGS`; `backtest.RESEARCH_VS_LIVE`
+declares the new live value (research 25 and the OOS frozen 35 untouched).
+The amendment states what it rests on (run 1: NOT ESTABLISHED, an intake
+choice, no claim) and what it does to the rows so far: of 298 taken rows
+the [30, 35) band holds 39, and only **3** of those fail on ADX alone (PG,
+WMT 10-22; V 10-27, all pool); 22 rows at ADX ≥ 35 all failed another leg,
+"not Strong" on 20. The binding leg of the HQ tier is "Strong", not ADX,
+so the tier stays nearly empty under 30 and H1′ stays starved; said in
+the amendment so the change is not credited or blamed for it later. H1 and
+H1′ are read from the amendment forward (0 HQ rows existed under 35).
+Selftests pin the gate (29.96 fails, 30.0 passes, the unrounded test pins
+35 explicitly), the scanner pins the fingerprint, forward_log reproduces
+it. Item 23's table reads live ADX 30 from here.
 
 ---
 
@@ -2212,10 +2230,12 @@ FAIL unchanged, −0.112 R on 579 trades; the raw output
 (13 cached / 0 fetched) and 92 of 579 trades gapped through a level (61
 stops filled at the open), the mechanism behind the move from run 2.
 
-**Still pending, in blocking order:** the first forward spread reading at
-6 graded cycles per arm (~6 months, BACKLOG 34 E) and the result at 12;
-the first `spread arms:` lines in the post-close log (eight cycles opened,
-or the reason not); journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
+**Still pending, in blocking order:** the first scan under ADX 30
+(fingerprint `81fd95d84cfc` on its scan row; the HQ tag may now fire on a
+[30, 35) row that passes the other legs, ~1 % of taken rows so far); the
+first forward spread reading at 6 graded cycles per arm (~6 months,
+BACKLOG 34 E) and the result at 12; the first `spread arms:` lines in the
+post-close log (eight cycles opened, or the reason not); journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
 the 11-09/11-10 post-close logs (F5).
 
 ---

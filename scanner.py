@@ -861,7 +861,7 @@ def analyze(df: pd.DataFrame, ticker: str,
 
     # THE HQ TIER IS A TAG ON THE RECORD, NOT A GATE ON IT. Owner decision
     # 2026-10-08, pre-registered in results/forward_record_preregistration.md:
-    # two of the tier's legs (ADX >= 35, volume >= 1.2x) were tested here and
+    # two of the tier's legs (ADX, volume >= 1.2x) were tested here and
     # found non-predictive, and gating the record's `taken` set on them left
     # it at 0 taken in three weeks. The row now says what the rules produced
     # AND what the gate would have selected. Alerts still fire on the tier.
@@ -2452,7 +2452,7 @@ def _selftest_body() -> int:
     # fails until the new hash is declared there and in the pre-registration,
     # which is the order the record requires.
     _fp_now = forward_log.config_fingerprint(_scan_cfg())
-    assert _fp_now == "ba6b3b46afa6" and _fp_now in forward_log.KNOWN_CONFIGS, (
+    assert _fp_now == "81fd95d84cfc" and _fp_now in forward_log.KNOWN_CONFIGS, (
         _fp_now, _scan_cfg(), "undeclared config fingerprint: declare it before the first row")
     print(f"config fingerprint      : {_fp_now}, declared in forward_log.KNOWN_CONFIGS")
 

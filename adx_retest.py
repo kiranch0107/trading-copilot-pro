@@ -477,12 +477,14 @@ def selftest() -> int:
     # every shared key, the params it yields ARE the scanner's. A missed key
     # (regime, volume) would quietly test a config nobody runs — BACKLOG 23.
     import signal_core as _sc
-    _lc = live_cfg(["AAPL"], 10, 35.0)
+    _live_adx = float(_sc.DEFAULTS.adx_min)          # 30 since 2026-10-28 (BACKLOG 33); 35 before
+    _lc = live_cfg(["AAPL"], 10, _live_adx)
     assert _bt.build_signal_params(_lc) == _sc.DEFAULTS, (
-        _bt.build_signal_params(_lc), "live_cfg(35) must build the scanner's params exactly")
-    assert _bt.build_signal_params(live_cfg(["AAPL"], 10, 30.0)) == \
-        _sc.DEFAULTS.__class__(**{**_sc.DEFAULTS.__dict__, "adx_min": 30.0}), \
-        "live_cfg(30) differs from the scanner in adx_min and nothing else"
+        _bt.build_signal_params(_lc), f"live_cfg({_live_adx:g}) must build the scanner's params exactly")
+    _other = 35.0 if _live_adx != 35.0 else 30.0
+    assert _bt.build_signal_params(live_cfg(["AAPL"], 10, _other)) == \
+        _sc.DEFAULTS.__class__(**{**_sc.DEFAULTS.__dict__, "adx_min": _other}), \
+        f"live_cfg({_other:g}) differs from the scanner in adx_min and nothing else"
     assert _bt.build_signal_params(dict(_bt.DEFAULTS, tickers=["AAPL"], years=10)) \
         != _sc.DEFAULTS, "the record config is NOT the live config (or this test is vacuous)"
     assert _lc["max_hold"] == _bt.DEFAULTS["max_hold"] and _lc["years"] == 10
