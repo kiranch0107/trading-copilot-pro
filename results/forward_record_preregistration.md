@@ -5,6 +5,53 @@ and tagging HQ"). Written and committed BEFORE the first row under the new rule
 is recorded.** Everything below is fixed. Nothing here may be changed after a
 result is seen; the timestamp on this file in git is the point of it.
 
+## Amendment 2026-10-28 (E) — the ADX and R:R gates compare UNROUNDED values (BACKLOG 36, owner's decision). RULE CHANGE at rounding distance of a threshold; the fingerprint moves once and is declared
+
+**Owner's decision 2026-10-28 ("go with the unrounded-gate declaration as
+well"), written before the first row under the new hash.** The external
+review of 2026-10-20 found that `signal_core.evaluate()` rounded ADX to one
+decimal and R:R to two BEFORE comparing them with their thresholds, so an
+ADX of 34.96 passed the 35 gate and an R:R of 0.996 passed the 1.0 leg.
+Comparing rounded values is a rule in its own right; changing it moves what
+the record records, so it is declared here like any threshold change.
+
+**What changes, from the next scan row.**
+
+- `signal_core.gate_adx(adx_raw, adx_min)` and `gate_rr(rr_raw, rr_min)`
+  compare the UNROUNDED values: the ADX Trend Strength filter (an HQ leg),
+  the minimum R:R gate (`min_rr` 0.5, which blocks a signal) and the HQ R:R
+  leg (`hq_min_rr` 1.0). The entry, stop and target stay cent-rounded, as
+  prices are; the ratio between them is no longer rounded before the gate.
+- The recorded fields `adx` (one decimal) and `rr` (two) are display; the
+  row now also carries `rr_raw` and `adx_raw` where `evaluate()` is the
+  writer. The scanner's `hq_fail` leg reads `rr_raw`.
+- `scanner._scan_cfg()` names `gate_precision: "unrounded"`, so the
+  fingerprint moves once, from `c357a0d01ff5` to **`ba6b3b46afa6`**.
+  `forward_log.KNOWN_CONFIGS` declares it with this note, and `report()`
+  reads the three hashes as one dataset.
+
+**Why one dataset, with the magnitude stated.** The thresholds are the
+same; membership can move only for a bar whose ADX is within 0.05 of 35
+or whose R:R is within 0.005 of 0.5 or 1.0. In the 469 signal rows so far,
+5 recorded a value exactly on a threshold (1 at ADX 35.0, 4 at R:R 1.00),
+and about half of those would have read differently under this rule. That
+is 1 % of rows, all in the HQ leg (none at the min-R:R gate), on a tier
+that has fired 0 times. The pool's gate, the episode unit and every
+reading are unaffected beyond that. A later reader who wants the two
+halves apart can split on the fingerprint; the rows carry it.
+
+**What does NOT change.** The thresholds, the buckets, the alerting rule,
+the resolver, the control arm, the rank tier (it ranks on recorded fields),
+the research engines (they share `evaluate()`, so a re-run would move by
+the same 1 % at most; committed results are not re-run for this and say
+nothing that this contradicts).
+
+**Enforcement.** `signal_core` selftest (34.96 fails 35; 0.996 fails
+1.0; display stays rounded); `consistency_check.check_gates_compare_unrounded`
+(every gate reads the raw value through the two functions; the scan config
+names the precision; the app's own ADX gate compares raw); the
+fingerprint reproduces in `forward_log`'s selftest.
+
 ## Amendment 2026-10-28 (A) — a random-entry CONTROL row beside every taken signal (BACKLOG 34 A). ADDITIVE: a new row kind and a new reading; no signal, gate, threshold or alerting changes
 
 **Owner's decision 2026-10-28 ("go with A and B as well"), written before
@@ -201,7 +248,8 @@ first row they touch.
    An outcome that forms intraday is written on the next run after the bar
    settles (the post-close pass at the latest). The resolver, its stop-first
    rule, costs, hold and void reasons are unchanged.
-2. **The config fingerprint now names every rule in force.** It hashed six
+2. **The config fingerprint now names every rule in force** (and, from
+   amendment E of 2026-10-28, the gate precision). It hashed six
    fields; `hq_min_rr` 1.0, `volume_mult` 1.2, `volume_soft_mult` 0.7 and
    `spy_regime_on` True were in force throughout but not named, so a change
    to any of them would not have moved it. Naming them moves the hash once,

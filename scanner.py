@@ -859,7 +859,7 @@ def analyze(df: pd.DataFrame, ticker: str,
     # it at 0 taken in three weeks. The row now says what the rules produced
     # AND what the gate would have selected. Alerts still fire on the tier.
     _hq_fail = []
-    if float(r.get("rr") or 0) < PARAMS.hq_min_rr:
+    if not sc.gate_rr(r.get("rr_raw", r.get("rr") or 0), PARAMS.hq_min_rr):
         _hq_fail.append(f"rr<{PARAMS.hq_min_rr:g}")
     if r.get("strength") != "Strong":
         _hq_fail.append("not Strong")
@@ -1035,7 +1035,11 @@ def _scan_cfg() -> dict:
             "volume_soft_mult": PARAMS.volume_soft_mult,
             "weekly_confirm": PARAMS.weekly_confirm,
             "spy_regime_on": PARAMS.spy_regime_on,
-            "longs_only": risk_params.LONGS_ONLY}
+            "longs_only": risk_params.LONGS_ONLY,
+            # Amendment 2026-10-28 E: the ADX and R:R gates compare unrounded
+            # values. Named here so the fingerprint moved once, declared in
+            # forward_log.KNOWN_CONFIGS with the magnitude of the change.
+            "gate_precision": "unrounded"}
 
 
 def _record_alert(tk: str, r: dict, bucket: str, delivered: bool, header: str,
@@ -2254,7 +2258,7 @@ def _selftest_body() -> int:
     # fails until the new hash is declared there and in the pre-registration,
     # which is the order the record requires.
     _fp_now = forward_log.config_fingerprint(_scan_cfg())
-    assert _fp_now == "c357a0d01ff5" and _fp_now in forward_log.KNOWN_CONFIGS, (
+    assert _fp_now == "ba6b3b46afa6" and _fp_now in forward_log.KNOWN_CONFIGS, (
         _fp_now, _scan_cfg(), "undeclared config fingerprint: declare it before the first row")
     print(f"config fingerprint      : {_fp_now}, declared in forward_log.KNOWN_CONFIGS")
 

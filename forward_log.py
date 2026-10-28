@@ -108,8 +108,11 @@ def _digest(prev: str, body: dict) -> str:
 KNOWN_CONFIGS = {
     "e7d75b855a51": "2026-10-08 to 2026-10-19: adx_min 35, min_rr 0.5, stop 1.25 / "
                     "target 4.0 ATR, weekly off, longs only",
-    "c357a0d01ff5": "from 2026-10-19: the SAME rules; hq_min_rr 1.0, volume 1.2x, "
+    "c357a0d01ff5": "2026-10-19 to 2026-10-28: the SAME rules; hq_min_rr 1.0, volume 1.2x, "
                     "volume floor 0.7x and regime on are now named in the hash",
+    "ba6b3b46afa6": "from 2026-10-28 (amendment E): the SAME thresholds compared UNROUNDED "
+                    "(ADX >= 35, R:R >= 0.5 / 1.0 on the exact ratio); membership moves only "
+                    "for a bar within rounding distance of a threshold, 5 of 469 rows so far",
 }
 
 
@@ -1496,7 +1499,9 @@ def selftest() -> int:
                     spy_regime_on=True)
     assert config_fingerprint(_old_cfg) == "e7d75b855a51", config_fingerprint(_old_cfg)
     assert config_fingerprint(_new_cfg) == "c357a0d01ff5", config_fingerprint(_new_cfg)
-    assert set(KNOWN_CONFIGS) == {"e7d75b855a51", "c357a0d01ff5"}, KNOWN_CONFIGS
+    assert set(KNOWN_CONFIGS) == {"e7d75b855a51", "c357a0d01ff5", "ba6b3b46afa6"}, KNOWN_CONFIGS
+    assert config_fingerprint(dict(_new_cfg, gate_precision="unrounded")) == "ba6b3b46afa6", \
+        "the unrounded-gate fingerprint (amendment 2026-10-28 E) must reproduce"
     import contextlib as _ctx, io as _io
     _kp = Path(tempfile.mkdtemp()) / "known.jsonl"
     _ks = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0}
