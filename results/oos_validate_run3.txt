@@ -1,0 +1,58 @@
+Running: /workspaces/trading-copilot-pro/trading-copilot-pro/.venv/bin/python backtest.py --tickers GOOGL,AVGO,AMD,NFLX,CRM,ADBE,QCOM,MU,ORCL,NOW,PANW,LRCX --years 15 --adx-min 35.0 --atr-stop 1.25 --atr-tgt 4.0 --max-hold 30 --slippage-bps 2.0 --use-regime
+
+==========================================================================
+OUT-OF-SAMPLE VALIDATION — TRADING COPILOT ELITE
+==========================================================================
+Config hash   : a3c94a897f4d6f11
+Run number    : 3
+Held-out      : GOOGL, AVGO, AMD, NFLX, CRM, ADBE, QCOM, MU, ORCL, NOW, PANW, LRCX
+Params        : ADX>=35.0  stop 1.25x  tgt 4.0x  hold 30  regime ON
+
+NOTE: this is run #3 against the same held-out set.
+      Each repeat spends some of the set's independence.
+
+PER-TICKER
+  Ticker   Trades   Win%    Avg R  Total R     PF
+  MU           66    38%    0.250     16.5   1.40
+  QCOM         36    44%    0.153      5.5   1.26
+  AMD          57    40%    0.149      8.5   1.24
+  PANW         40    40%   -0.019     -0.7   0.98
+  NOW          37    35%   -0.030     -1.1   0.96
+  GOOGL        49    31%   -0.101     -5.0   0.88
+  ADBE         53    26%   -0.129     -6.8   0.83
+  ORCL         40    38%   -0.220     -8.8   0.68
+  NFLX         63    32%   -0.224    -14.1   0.69
+  CRM          45    31%   -0.302    -13.6   0.58
+  AVGO         45    36%   -0.455    -20.5   0.65
+  LRCX         48    19%   -0.518    -24.8   0.41
+
+AGGREGATE
+  Trades        : 579
+  Win rate      : 33.9%
+  Expectancy    : -0.112 R per trade
+  Profit factor : 0.85
+  Total return  : -64.9 R
+
+SIGNIFICANCE  (sigma estimated from summary stats — approximate)
+  Est. per-trade sigma : 1.53 R
+  Standard error       : 0.064 R
+  t-statistic          : -1.76
+  p-value (two-sided)  : 0.0787
+  95% CI on expectancy : [-0.237, +0.013] R
+
+==========================================================================
+RESULT: FAIL — the edge did not carry to untouched tickers.
+
+  - expectancy -0.112 R < +0.20 R
+  - profit factor 0.85 < 1.30
+  - 95% CI lower bound -0.237 R does not clear 0
+
+The most likely reading: the August result was curve-fit to the
+specific tickers and window it was searched over. That is the
+expected outcome of a ~60-cell sweep, and finding it now is worth
+far more than finding it later with real money.
+==========================================================================
+
+Whatever this says, do not re-run with adjusted parameters and treat
+the new number as out-of-sample. That is the trap this file exists
+to prevent.
