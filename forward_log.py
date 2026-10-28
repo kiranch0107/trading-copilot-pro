@@ -77,6 +77,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 from datetime import datetime, timezone
@@ -113,6 +114,10 @@ KNOWN_CONFIGS = {
     "ba6b3b46afa6": "from 2026-10-28 (amendment E): the SAME thresholds compared UNROUNDED "
                     "(ADX >= 35, R:R >= 0.5 / 1.0 on the exact ratio); membership moves only "
                     "for a bar within rounding distance of a threshold, 5 of 469 rows so far",
+    "81fd95d84cfc": "from 2026-10-28 (amendment F, BACKLOG 33): adx_min 30 instead of 35 on the HQ "
+                    "tier, an INTAKE choice, not a measured improvement (adx_live_run1: the [30, 35) "
+                    "band is NOT ESTABLISHED); the base rules, buckets, resolver and readings are the "
+                    "same; 3 of the 298 taken rows so far would have been HQ under it",
 }
 
 
@@ -1499,9 +1504,11 @@ def selftest() -> int:
                     spy_regime_on=True)
     assert config_fingerprint(_old_cfg) == "e7d75b855a51", config_fingerprint(_old_cfg)
     assert config_fingerprint(_new_cfg) == "c357a0d01ff5", config_fingerprint(_new_cfg)
-    assert set(KNOWN_CONFIGS) == {"e7d75b855a51", "c357a0d01ff5", "ba6b3b46afa6"}, KNOWN_CONFIGS
+    assert set(KNOWN_CONFIGS) == {"e7d75b855a51", "c357a0d01ff5", "ba6b3b46afa6", "81fd95d84cfc"}, KNOWN_CONFIGS
     assert config_fingerprint(dict(_new_cfg, gate_precision="unrounded")) == "ba6b3b46afa6", \
         "the unrounded-gate fingerprint (amendment 2026-10-28 E) must reproduce"
+    assert config_fingerprint(dict(_new_cfg, gate_precision="unrounded", adx_min=30.0)) == "81fd95d84cfc", \
+        "the ADX-30 fingerprint (amendment 2026-10-28 F, BACKLOG 33) must reproduce"
     import contextlib as _ctx, io as _io
     _kp = Path(tempfile.mkdtemp()) / "known.jsonl"
     _ks = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0}
@@ -1857,6 +1864,16 @@ def selftest() -> int:
     with _ctx.redirect_stdout(_buf):
         report(_ca)
     assert "A: signal - control" in _buf.getvalue() and "pairs 1" in _buf.getvalue(), _buf.getvalue()
+    # A SECOND SETTLED PAIR puts the SE on the path (the n > 1 branch called
+    # math.sqrt with no import for 10 days; found 2026-10-28, falsified).
+    record_outcome(_s2["seq"], "loss", -1.0, "stop_distance", path=_ca)
+    record_outcome(_c2["seq"], "win", 0.5, "stop_distance", path=_ca)
+    _bc2 = summary(_ca)["by_control"]["pool"]
+    assert _bc2["pairs"] == 2 and _bc2["settled"] == 2 and math.isfinite(_bc2["se_delta"]) and _bc2["se_delta"] > 0, _bc2
+    _buf2 = _io.StringIO()
+    with _ctx.redirect_stdout(_buf2):
+        assert report(_ca) in (0, 1)
+    assert "pairs 2" in _buf2.getvalue(), _buf2.getvalue()
     print("control arm      : one seeded control per taken row, mirrored for shorts, graded from "
           "the signal's fetch, never taken or an episode; summary pairs by episode")
 

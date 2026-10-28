@@ -2128,8 +2128,8 @@ def check_research_config_divergence_declared() -> None:
 
     THE FINDING (BACKLOG 23, review H1). The 1,386-trade record and every study
     built on it use `dict(bt.DEFAULTS, ...)`: ADX 25, 1.0 / 3.0 ATR, volume 1.0,
-    regime off. The scanner runs signal_core.DEFAULTS: ADX 35, 1.25 / 4.0,
-    volume 1.2, regime on. For a year the research dict's comments said
+    regime off. The scanner runs signal_core.DEFAULTS: ADX 30 (35 until
+    2026-10-28), 1.25 / 4.0, volume 1.2, regime on. For a year the research dict's comments said
     "app.py default" — false, and nothing read them. check_duplicated_constants
     matches `NAME = value` at module level and cannot see inside a dict literal,
     so this is the check that can.

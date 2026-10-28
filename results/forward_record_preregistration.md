@@ -5,6 +5,72 @@ and tagging HQ"). Written and committed BEFORE the first row under the new rule
 is recorded.** Everything below is fixed. Nothing here may be changed after a
 result is seen; the timestamp on this file in git is the point of it.
 
+## Amendment 2026-10-28 (F) — the HQ tier's ADX leg is 30, not 35 (BACKLOG 33, owner's decision). THRESHOLD CHANGE on the tag and the alert tier, declared as an INTAKE choice; the fingerprint moves once and is declared
+
+**Owner's decision 2026-10-28 ("go with BACKLOG 33 as well, ADX 30"),
+written before the first row under the new hash.** `signal_core.DEFAULTS.adx_min`
+is 30.0 from the next scan. The ADX-30 set is the ADX-35 set plus exactly
+the signals whose signal-bar ADX lies in [30, 35), so this admits that band
+to the HQ tag and to the alert tier and changes nothing else.
+
+**What it rests on, stated so it cannot be mistaken for a finding.**
+`results/adx_live_preregistration.md` § Result (run 1, 2026-10-14, the
+live config, longs only, 12 names, 10 years): the band [30, 35) holds 199
+longs at +0.104 R, 95 % CI [−0.159, +0.367], p 0.44, under a 0.376 R
+detectable effect: NOT ESTABLISHED on both pre-registered bars, and the
+ladder shows no dose-response. The trades this change admits carry nothing
+the data can see, in either direction. **This is an intake choice about
+alert volume from a tier with no measured edge, not a measured
+improvement**, exactly as that pre-registration said such a change would
+be; it pre-committed to nothing and this amendment claims nothing.
+
+**What it does to the record, measured on the rows so far.** Of the 298
+taken rows, 0 are HQ. 22 carry ADX ≥ 35 and every one failed another leg
+("not Strong" on 20 of them). 39 carry ADX in [30, 35) (28 pool, 11
+live), and only **3** of those fail on ADX alone (PG and WMT on
+2026-10-22, V on 2026-10-27, all pool): under this amendment the record
+would hold 3 HQ rows instead of 0. The binding leg of the tier is "Strong"
+(RSI > 60 and volume ≥ 1.2×), not ADX. The backtest's "about double the
+HQ intake" (544 longs at ADX 30 against 329 at 35) is the ungated
+population; on the recorded rows the tier stays nearly empty. Stated now
+so a later reader does not credit this change with HQ rows it did not
+produce, or blame it for an H1′ reading that stays starved.
+
+**What changes.**
+
+- The HQ tag (`hq`, `setup.hq_fail`: the "ADX Trend Strength" leg) and the
+  alert tier read ADX ≥ 30, unrounded (amendment E). The base signal, the
+  buckets, the resolver, the control arm, the rank tier (it ranks on
+  recorded fields; a lower ADX leg changes which rows have zero `hq_fail`
+  legs and nothing about the ranking rule) and the stopping rule are
+  unchanged. `backtest.RESEARCH_VS_LIVE` declares the new live value; the
+  research config (ADX 25) and the OOS frozen config (ADX 35) are not
+  touched.
+- The fingerprint moves once, from `ba6b3b46afa6` to **`81fd95d84cfc`**,
+  because `adx_min` is in the hash. `forward_log.KNOWN_CONFIGS` declares
+  it with this note.
+
+**How the rows are read across the change.** The base-signal question
+(H0, the pool, 349 settled episodes) is unaffected: the base rules did
+not move, and rows pool across the two hashes as one dataset. The HQ
+questions (H1, H1′) are read **from this amendment forward**: the tier
+fired 0 times under 35, so there is no HQ arm before this date to
+contaminate or to pool with, and an HQ row's hash says which gate tagged
+it. A later reader who wants the 35-gate HQ set can reconstruct it from
+`setup.adx_raw` on any row; nothing is lost.
+
+**What does NOT change.** Every threshold other than `adx_min`; the
+direction gate; the pullback bucket (its own rule, no ADX leg); the
+research engines' committed results (built on ADX 25 or the frozen 35;
+none is re-run for this, and `RESEARCH_VS_LIVE` says why they differ).
+
+**Enforcement.** `signal_core` selftest (DEFAULTS.adx_min is 30; 29.96
+fails and 30.0 passes under DEFAULTS; the unrounded-gate test pins 35
+explicitly); `scanner.py --selftest` pins the fingerprint in force to
+`81fd95d84cfc`; `forward_log` selftest reproduces it from the exact dict;
+`consistency_check.check_research_config_divergence_declared` holds the
+live value to the declaration.
+
 ## Amendment 2026-10-28 (E) — the ADX and R:R gates compare UNROUNDED values (BACKLOG 36, owner's decision). RULE CHANGE at rounding distance of a threshold; the fingerprint moves once and is declared
 
 **Owner's decision 2026-10-28 ("go with the unrounded-gate declaration as
