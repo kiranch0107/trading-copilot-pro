@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import sys
 
+import math
 import pandas as pd
 
 import signal_core as sc
@@ -62,6 +63,12 @@ def sma_at_signal_bar(raw_df, cdf, sessions: int = SMA_SESSIONS) -> float | None
     """
     if raw_df is None or cdf is None or len(cdf) == 0 or len(raw_df) == 0:
         return None
+    # The history must be distinct, chronological sessions with finite
+    # closes (external review 2026-10-20, group B; 2026-10-28): a duplicated
+    # or unsorted date, or a NaN close, used to pass straight into the
+    # 200-session mean. One validator, the live paths' (signal_core).
+    if sc.validate_bars(raw_df) is not None:
+        return None
     last = sc._bar_dates(cdf, None).max()
     dates = sc._bar_dates(raw_df, None)
     closes = pd.Series(raw_df["Close"].to_numpy(dtype=float), index=dates)
@@ -83,6 +90,9 @@ def evaluate_pullback(raw_df, cdf, params, spy_regime: dict | None = None,
     latest = cdf.iloc[-1]
     if sc.base_trend(latest, params) != "Bearish":
         return None
+    if sc.validate_bars(raw_df) is not None:
+        _tally(tally, "bad_history")
+        return None
     sma = sma_at_signal_bar(raw_df, cdf)
     if sma is None:
         _tally(tally, "insufficient_history")
@@ -92,7 +102,10 @@ def evaluate_pullback(raw_df, cdf, params, spy_regime: dict | None = None,
     if not price > sma:
         _tally(tally, "below_sma200")
         return None
-    if not atr > 0:
+    # Finite AND positive: an infinite ATR passed `atr > 0` and would have
+    # placed the stop at minus infinity (group B).
+    if not (math.isfinite(atr) and atr > 0):
+        _tally(tally, "bad_atr")
         return None
     entry, stop, target = sc.long_levels(cdf, price, atr, params)
     # The base signal's risk-sanity gate, verbatim (signal_core.evaluate):
@@ -199,6 +212,27 @@ def selftest() -> int:
     strict = dataclasses.replace(params, min_rr=50.0)
     t6: dict = {}
     assert evaluate_pullback(raw, cdf, strict, None, t6) is None and t6 == {"rr_below_min": 1}, t6
+
+    # ── HISTORY VALIDATION (group B, 2026-10-28) ──
+    # A duplicated session, an unsorted one, or a missing close is refused
+    # before the 200-session mean, with the live validator's reason; an
+    # infinite ATR is refused as such.
+    _dup = pd.concat([raw, raw.iloc[[-1]]])
+    t7: dict = {}
+    assert evaluate_pullback(_dup, cdf, params, None, t7) is None and t7 == {"bad_history": 1}, t7
+    assert sma_at_signal_bar(_dup, cdf) is None
+    _rev = raw.iloc[::-1]
+    t8: dict = {}
+    assert evaluate_pullback(_rev, cdf, params, None, t8) is None and t8 == {"bad_history": 1}, t8
+    _nan = raw.copy()
+    _nan.iloc[-50, _nan.columns.get_loc("Close")] = float("nan")
+    t9: dict = {}
+    assert evaluate_pullback(_nan, cdf, params, None, t9) is None and t9 == {"bad_history": 1}, t9
+    _inf = cdf.copy()
+    _inf.iloc[-1, _inf.columns.get_loc("ATR")] = float("inf")
+    t10: dict = {}
+    assert evaluate_pullback(raw, _inf, params, None, t10) is None and t10 == {"bad_atr": 1}, t10
+    print("history          : duplicate, unsorted or NaN sessions refused as bad_history; infinite ATR as bad_atr")
     print("refuses          : below SMA200, bullish base setup, <200 sessions, R:R below min; "
           "partial bar ignored")
     print("=" * 72)

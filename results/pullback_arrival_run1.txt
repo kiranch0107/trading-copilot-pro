@@ -1,3 +1,7 @@
+!! SUPERSEDED BY GROUP B (BACKLOG 36, built 2026-10-28): pullback_signal now refuses a
+!! history with duplicate, unsorted or NaN sessions (bad_history) and a non-finite ATR
+!! (bad_atr) before the 200-session mean. The counts here can only fall, and only on a
+!! name whose history was bad. RE-RUN OWED: results/pullback_arrival_run2.txt.
   · SPY: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
   · AAPL: dropped 1 bar(s) dated 2026-10-13 or later — still forming, and unusable by a next-bar-open fill
   AAPL: 20 signal bars

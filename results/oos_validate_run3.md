@@ -1,3 +1,8 @@
+!! SUPERSEDED BY GROUP B (BACKLOG 36, built 2026-10-28): backtest.compute() now keeps
+!! every session on the execution timeline and discards a fixed warm-up head; the
+!! held-out trade set moves with it. RE-RUN OWED (run 4, same frozen hash):
+!! results/oos_validate_run4.md. Run 3's FAIL stands as the reading of the engine of
+!! its day.
 # Out-of-sample validation — run 3 (2026-10-28), the reproduction owed by the shared regime minimum
 
 **Run by the owner 2026-10-28 on the laptop, `python oos_validate.py`,

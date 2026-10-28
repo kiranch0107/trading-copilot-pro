@@ -1,3 +1,10 @@
+!! SUPERSEDED BY GROUP B (BACKLOG 36, built 2026-10-28). The option engine in this
+!! file counted DTE in SESSIONS (priced dte/252, held dte rows), skipped the entry
+!! session's close, and settled a trade cut off by the sample's end as if it had
+!! expired. The engine now runs on the calendar (expiry = entry + dte days, time
+!! value over 365), marks the entry session, and leaves sample-end trades OPEN.
+!! RE-RUN OWED on the frozen bars: results/option_iv_sensitivity_run3.md. Until it lands, no constant may
+!! be read from this file (consistency_check refuses a SUPERSEDED source).
 # Option engine IV sensitivity — run 2 (the no-look-ahead code)
 
 **Run by the owner 2026-10-28 on the laptop whose `.bar_cache/` holds the

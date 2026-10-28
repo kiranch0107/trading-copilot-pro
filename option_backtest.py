@@ -69,6 +69,8 @@ except ImportError:
 
 RISK_FREE = 0.04
 TRADING_DAYS = 252
+CALENDAR_DAYS = 365          # the option clock: dte and time value are calendar days
+OPEN = "OPEN"                # censored at the sample's end, never a win or a loss
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -139,7 +141,22 @@ def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
 
     strike = round(spot0)                       # ATM
     dte0 = cfg["dte"]
-    prem0 = bs_price(spot0, strike, dte0 / TRADING_DAYS, iv, right)
+    # THE CLOCK IS THE CALENDAR (external review 2026-10-20, group B;
+    # 2026-10-28). `dte` is days to expiry, as on a real contract and as the
+    # live monitor reads it: the expiry is entry_date + dte calendar days,
+    # time to expiry on any session is the calendar days left over 365, and
+    # the TIME exit fires at dte_exit calendar days. This used to count ROWS
+    # and price with dte/252, so a "30-DTE" option carried 30 sessions of
+    # time value (six weeks) and expired after 30 sessions. A frame with no
+    # Date column (fixtures) counts rows as calendar days and says so.
+    has_date = "Date" in df.columns
+    if has_date:
+        _d0 = pd.Timestamp(df["Date"].iloc[entry_i]).normalize()
+        _expiry = _d0 + pd.Timedelta(days=dte0)
+        _days_left = lambda j: int((_expiry - pd.Timestamp(df["Date"].iloc[j]).normalize()).days)  # noqa: E731
+    else:
+        _days_left = lambda j: dte0 - (j - entry_i)  # noqa: E731
+    prem0 = bs_price(spot0, strike, dte0 / CALENDAR_DAYS, iv, right)
     if prem0 <= 0.05:                           # unpriceable / negligible
         return None
 
@@ -148,11 +165,16 @@ def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
     feats = entry_features(df, signal_i, rv=rv, prem0=prem0, spot0=spot0,
                            right=right)
 
-    for j in range(entry_i + 1, min(entry_i + dte0 + 1, n)):
+    # THE ENTRY SESSION'S CLOSE IS EVALUATED (group B): the fill is at its
+    # open, so its close is the first mark the position has. The walk used
+    # to start one session later and could not see a stop hit on day one.
+    for j in range(entry_i, n):
         held = j - entry_i
-        dte_left = dte0 - held
+        dte_left = _days_left(j)
+        if dte_left <= 0:
+            break                                # expiry reached: settle below
         spot = float(df["Close"].iloc[j])
-        t_left = max(dte_left, 0) / TRADING_DAYS
+        t_left = dte_left / CALENDAR_DAYS
         raw = bs_price(spot, strike, t_left, iv, right)
         # Exit fill: give up half the spread
         mid = raw * (1 - cfg["spread_pct"] / 200)
@@ -182,8 +204,21 @@ def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
                                spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
                                right=right, dte0=dte0, entry_date=entry_date, features=feats)
 
-    # Ran out of data or reached expiry — mark to intrinsic
-    j = min(entry_i + dte0, n - 1)
+    # EXPIRY, or the END OF THE SAMPLE before it (group B): a trade whose
+    # expiry lies past the last bar is OPEN -- censored at its last mark, not
+    # settled at intrinsic as if it had expired. summarise() keeps OPEN
+    # trades out of the win/loss statistics and counts them.
+    j = n - 1
+    if _days_left(j) > 0:
+        spot = float(df["Close"].iloc[j])
+        raw = bs_price(spot, strike, _days_left(j) / CALENDAR_DAYS, iv, right)
+        mid = raw * (1 - cfg["spread_pct"] / 200)
+        pnl_pct = (mid - entry_prem) / entry_prem * 100
+        return _result("OPEN", entry_prem, mid, j - entry_i, _days_left(j), pnl_pct,
+                       spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
+                       right=right, dte0=dte0, entry_date=entry_date, features=feats)
+    # the first session on or after the expiry date settles at intrinsic
+    j = next(k for k in range(entry_i, n) if _days_left(k) <= 0)
     spot = float(df["Close"].iloc[j])
     mid = max(0.0, (spot - strike) if right == "CALL" else (strike - spot))
     pnl_pct = (mid - entry_prem) / entry_prem * 100
@@ -317,8 +352,11 @@ def run_ticker(tk: str, cfg: dict, sig_cfg: dict, coverage: dict | None = None) 
 
 
 def summarise(trades: list[dict]) -> dict:
+    # OPEN trades (expiry past the sample's end) are counted, never scored.
+    n_open = sum(1 for t in trades if t.get("reason") == OPEN)
+    trades = [t for t in trades if t.get("reason") != OPEN]
     if not trades:
-        return {"n": 0}
+        return {"n": 0, "open": n_open}
     p = np.array([t["pnl_pct"] for t in trades])
     wins, losses = p[p > 0], p[p < 0]
     gp, gl = wins.sum(), abs(losses.sum())
@@ -331,6 +369,7 @@ def summarise(trades: list[dict]) -> dict:
         "pf": (gp / gl) if gl > 0 else float("inf"),
         "avg_held": float(np.mean([t["held"] for t in trades])),
         "reasons": pd.Series([t["reason"] for t in trades]).value_counts().to_dict(),
+        "open": n_open,
     }
 
 
@@ -473,6 +512,39 @@ def selftest() -> int:
     assert abs(simulate_option_trade(before, 40, "Bullish", cfg)["entry_prem"] - base["entry_prem"]) > 1e-9, \
         "closes up to the signal bar DO price the entry (or the test is vacuous)"
     print("no look-ahead     : entry premium ignores the entry bar's close and after")
+
+    # ── THE CLOCK IS THE CALENDAR (group B, 2026-10-28) ──
+    _hold = dict(cfg, sl=10**9, tp=10**9, dte_exit=0)        # nothing exits but the calendar
+    _e = simulate_option_trade(frame, 40, "Bullish", _hold)
+    _d0 = pd.Timestamp(frame["Date"].iloc[41])
+    _exp = _d0 + pd.Timedelta(days=30)
+    _first_on_or_after = next(k for k in range(41, 80) if pd.Timestamp(frame["Date"].iloc[k]) >= _exp)
+    assert _e["reason"] == "EXPIRY" and _e["held"] == _first_on_or_after - 41, (_e["reason"], _e["held"])
+    assert 20 <= _e["held"] <= 23, (_e["held"], "30 calendar days is ~21 sessions, never 30 sessions")
+    _spot0 = float(frame["Open"].iloc[41])
+    _rv = realised_vol(frame["Close"].iloc[:41])
+    _iv = _rv * cfg["iv_mult"]
+    _want = bs_price(_spot0, round(_spot0), 30 / CALENDAR_DAYS, _iv, "CALL") * (1 + cfg["spread_pct"] / 200)
+    assert abs(_e["entry_prem"] - _want) < 1e-9, (_e["entry_prem"], _want, "priced with dte/365, not dte/252")
+    # the TIME exit counts calendar days left, so dte_exit=7 fires ~16 sessions in
+    _t = simulate_option_trade(frame, 40, "Bullish", dict(cfg, sl=10**9, tp=10**9, dte_exit=7))
+    assert _t["reason"] == "TIME" and _t["dte_left"] <= 7 and 14 <= _t["held"] <= 18, (_t["reason"], _t["held"], _t["dte_left"])
+    # the entry session's close is the first mark: a crash on that close is a STOP held 0
+    _crash = frame.copy()
+    _crash.loc[41, "Close"] = float(_crash.loc[41, "Close"]) * 0.60
+    _c = simulate_option_trade(_crash, 40, "Bullish", cfg)
+    assert _c["reason"] == "STOP" and _c["held"] == 0, (_c["reason"], _c["held"])
+    # a sample that ends before expiry leaves the trade OPEN, never "expired"
+    _o = simulate_option_trade(frame, 70, "Bullish", _hold)
+    assert _o["reason"] == OPEN and _o["held"] == 79 - 71 and _o["dte_left"] > 0, (_o["reason"], _o["held"], _o["dte_left"])
+    _sm = summarise([_e, _o])
+    assert _sm["n"] == 1 and _sm["open"] == 1 and OPEN not in _sm["reasons"], _sm
+    assert summarise([_o]) == {"n": 0, "open": 1}
+    # without a Date column, rows count as calendar days and the walk still starts at the entry session
+    _nodate = frame.drop(columns=["Date"])
+    _nd = simulate_option_trade(_nodate, 40, "Bullish", _hold)
+    assert _nd["reason"] == "EXPIRY" and _nd["held"] == 30, (_nd["reason"], _nd["held"])
+    print("calendar clock    : 30 DTE expires in ~21 sessions priced at 30/365; entry close marked; sample end -> OPEN")
     # ── the run says what bars it read: one fingerprint line, one entry per series ──
     import contextlib as _ctx, io as _io
     _saved_log = list(getattr(bt, "_CACHE_LOG", []))
@@ -599,6 +671,8 @@ def main() -> int:
     print(f"  Profit factor: {s['pf']:.2f}")
     print(f"  Avg held     : {s['avg_held']:.1f} sessions")
     print(f"  Exit reasons : {s['reasons']}")
+    if s.get("open"):
+        print(f"  Left OPEN    : {s['open']} (expiry past the sample's end; not scored)")
 
     print("\nINTERPRETATION")
     be = a.sl / (a.tp + a.sl) * 100

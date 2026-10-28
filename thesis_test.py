@@ -89,6 +89,8 @@ def arm(tickers: list[str], years: int, use_thesis: bool,
         for t in trades:
             if t.get("pnl_pct") is None:
                 continue
+            if t.get("reason") == ob.OPEN:
+                continue            # censored at the sample's end: no realised outcome to pair
             # Key on the SIGNAL's identity. This used to be
             #     t.get("entry_date", t.get("spot0"))
             # and option_backtest had no entry_date at all, so the fallback ran

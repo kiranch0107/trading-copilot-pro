@@ -204,19 +204,30 @@ def run(ticker: str, *, structure: str, width: float, otm_pct: float,
 
     closes = df["Close"]
     vols = vol_series.reindex(closes.index).ffill() / 100.0
-    t = dte / 365.0
 
+    # ONE CALENDAR (external review 2026-10-20, group B; 2026-10-28). `dte`
+    # is calendar days to expiry: the cycle is priced for exactly the days it
+    # lives and settles on the first session on or after entry + dte days.
+    # It used to price dte/365 of time value and then hold dte SESSIONS (30
+    # sessions is six weeks), so the priced maturity and the elapsed holding
+    # period disagreed on every cycle.
     cycles = []
     i = 0
-    while i + dte < len(closes):
+    idx = closes.index
+    while True:
+        expiry = idx[i] + pd.Timedelta(days=dte)
+        j = int(idx.searchsorted(expiry))         # first session >= expiry
+        if j >= len(idx):
+            break
+        t = (idx[j] - idx[i]).days / 365.0
         spot = float(closes.iloc[i])
         base_vol = float(vols.iloc[i]) if not pd.isna(vols.iloc[i]) else float("nan")
         if not np.isfinite(base_vol) or base_vol <= 0:
-            i += dte
+            i = j
             continue
 
         pos = build(structure, spot, base_vol, t, width, otm_pct, skew)
-        exit_spot = float(closes.iloc[i + dte])
+        exit_spot = float(closes.iloc[j])
         owed = settle(pos["legs"], exit_spot)
 
         # CROSSING COST, charged per LEG against that leg's own price.
@@ -245,12 +256,12 @@ def run(ticker: str, *, structure: str, width: float, otm_pct: float,
         pnl = (pos["credit"] - owed - cost) * 100.0     # one contract, 100 shares
 
         cycles.append({
-            "entry": closes.index[i], "exit": closes.index[i + dte],
+            "entry": idx[i], "exit": idx[j], "days": int((idx[j] - idx[i]).days),
             "spot": spot, "exit_spot": exit_spot, "iv": base_vol * 100.0,
             "credit": pos["credit"], "owed": owed, "pnl": pnl,
             "max_loss": pos["max_loss"] * 100.0,
         })
-        i += dte
+        i = j
 
     if not cycles:
         return None
@@ -500,6 +511,29 @@ def selftest() -> int:
     print(f"engine           : flat path -> {r['cycles']} cycles, "
           f"{r['win_rate']:.0f}% win, {r['mean_pct']:+.2f}%/cycle")
 
+    # ── ONE CALENDAR (group B, 2026-10-28) ──
+    # A 30-DTE cycle lives 30 calendar days (32 at most, when the expiry falls
+    # on a weekend and settles on the Monday), never 30 SESSIONS; the priced
+    # maturity equals the elapsed span; and 300 sessions (~14 months) hold
+    # about fourteen such cycles, not ten.
+    _rows = r["rows"]
+    assert all(30 <= c["days"] <= 32 for c in _rows), [c["days"] for c in _rows]
+    assert all((c["exit"] - c["entry"]).days == c["days"] for c in _rows)
+    assert all(c["exit"] - pd.Timedelta(days=30) >= c["entry"] for c in _rows)
+    assert all(_rows[k + 1]["entry"] == _rows[k]["exit"] for k in range(len(_rows) - 1)), \
+        "the next cycle opens on the session the last one settled"
+    assert 13 <= r["cycles"] <= 15, (r["cycles"], "300 sessions must hold ~14 thirty-day cycles")
+    # and the credit of each cycle is the one priced for ITS span, so a
+    # cycle that settles on a Monday (31-32 days) is priced for 31-32 days
+    _long = [c for c in _rows if c["days"] > 30]
+    assert _long, "fixture dead: no cycle's expiry fell on a weekend"
+    for c in _rows:
+        _want = build(PUT_SPREAD, 400.0, 0.20, c["days"] / 365.0, 10, 5.0, 0.0)["credit"]
+        assert abs(c["credit"] - _want) < 1e-12, (c["days"], c["credit"], _want)
+    print(f"calendar         : {r['cycles']} cycles of "
+          f"{min(c['days'] for c in _rows)}-{max(c['days'] for c in _rows)} calendar days, "
+          f"priced for the days they live")
+
     # A crash path must produce a full-width loss, and the sizing clause must see it.
     crash = np.full(len(idx), 400.0)
     crash[40:] = 250.0
@@ -546,9 +580,14 @@ def selftest() -> int:
     # Every cycle on the flat path builds an identical position, so the expected
     # charge is exact rather than approximate. A stray factor of two for a
     # round trip the model does not take would fail here.
-    expect_usd = (rp.MAX_OPTION_SPREAD_PCT / 100.0 * CROSS_FRAC
-                * build(PUT_SPREAD, 400.0, 0.20, 30 / 365, 10, 5.0, 0.0)["gross"]
-                * 100.0)
+    # Each cycle is priced for the calendar days it actually lives (30, or
+    # 31-32 when the expiry lands on a weekend), so the formula is averaged
+    # over the cycles' own spans -- group B, 2026-10-28.
+    _spans = [c["days"] for c in free["rows"]]
+    expect_usd = float(np.mean([
+        rp.MAX_OPTION_SPREAD_PCT / 100.0 * CROSS_FRAC
+        * build(PUT_SPREAD, 400.0, 0.20, d / 365, 10, 5.0, 0.0)["gross"] * 100.0
+        for d in _spans]))
     observed_usd = (free["mean_pct"] - paid["mean_pct"]) / 100.0 * 5000.0
     assert abs(observed_usd - expect_usd) < 0.01, (
         f"engine charged ${observed_usd:.4f}/cycle, formula says ${expect_usd:.4f} — "

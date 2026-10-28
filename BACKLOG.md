@@ -1974,10 +1974,53 @@ positive prices, sorted unique sessions; finite R before `record_outcome`;
 finite spot/strike before an IV row; finite OHLC in the paper grader's
 `session_coverage`; `0 < bid <= ask` and integer contracts in
 `risk_params.check_option_cost`; drop bars dated after today whatever the
-clock; UUID-sized id suffix. **Open, group B (research engines, re-runs
-owed):** backtest warm-up discontinuity, execution bar dropped on missing
-volume, option clock by calendar dates and end-of-sample trades marked
-open, spread maturity, portfolio chronology. **Group C DONE 2026-10-28 (owner: "go with group C as well").**
+clock; UUID-sized id suffix. **Group B BUILT 2026-10-28 (owner: "go with
+group B as well"), RE-RUNS OWED — fix and re-runs merge as ONE change.**
+~~Open, group B (research engines, re-runs owed):~~ backtest warm-up
+discontinuity, execution bar dropped on missing volume, option clock by
+calendar dates and end-of-sample trades marked open, spread maturity,
+portfolio chronology, pullback history validation. What changed:
+`backtest.compute()` discards a FIXED head (first complete-indicator row +
+`WARMUP_BARS`) instead of a conditional one (189 raw rows kept 140, 190
+kept 41), keeps every session on the execution timeline and carries
+`SIGNAL_OK` (a missing Volume blanks twenty signal bars instead of
+deleting twenty sessions; `evaluate_signal` reads no signal from a blank
+row, tally "indicator gap"; `simulate_trade` sees a stop crossed in one).
+The live `scanner.compute()` keeps its conditional slice: it reads only
+the latest bar and fetches a year, so the cliff cannot reach it; aligning
+it is a live-path change and was not made here. `option_backtest` runs on
+the calendar: expiry = entry date + `dte` days, time value over
+`CALENDAR_DAYS` (365, not 252), the entry session's close is the first
+mark (a day-one stop fills), the TIME exit counts calendar days, expiry
+settles on the first session on or after the date, and a trade whose
+expiry lies past the sample's end is `OPEN` — counted by `summarise()`,
+never a win or a loss; `option_decompose` reprices on the same clock
+(`dte_left`/365, so the split reconciles to the engine's P&L) and it and
+`thesis_test` censor `OPEN` rows. `spread_backtest` settles a cycle on the
+first session on or after entry + `dte` calendar days and prices it for
+the days it lives (it priced 30/365 and held 30 SESSIONS); 300 sessions
+hold ~14 thirty-day cycles, not 10. `longs_only.simulate()` sorts entries
+by date, realises exits strictly BEFORE the entry day (an exit on day D no
+longer funds an entry at day D's open), realises them in exit order, and
+annualises over the observed span (`observed_years`: first entry to last
+exit; the benchmark over its own data's span, not the requested window).
+`pullback_signal` refuses a raw history that fails
+`signal_core.validate_bars` (duplicate, unsorted, NaN: tally
+"bad_history") and a non-finite ATR ("bad_atr"). Every guard falsified
+(30 mutants); `check_compute_preserves_alignment` re-derived for the
+complete timeline and fixed head; one check added (55,
+`check_research_clocks_group_b`); `check_option_iv_single_source` now
+also refuses a SUPERSEDED source file. **Superseded in place, re-runs
+owed from the branch on the laptop (frozen bars):** option sweep ×4 +
+default + thesis (→ run 3; `risk_params` constants and `OPT_SWEEP_SOURCE`
+move with them, so that check is RED until they land, which is the gate),
+`spread_backtest_run3.md`, `portfolio_replay_run4.txt`,
+`pullback_arrival_run2.txt`, `record_recheck_groupb_run1.txt` (CODE MOVED
+against the 10-08 data baseline is the expected verdict),
+`oos_validate_run4.md` (same frozen hash). The older research files
+(feature_sweep, exit_ab, conditional_test, drift_null, inverted_arm,
+universe_backtest) are readings of the engine of their day and are not
+re-run. **Group C DONE 2026-10-28 (owner: "go with group C as well").**
 `app.batch_get_data` retries exactly the names a partial batch left out
 and reports the ones still missing (`BATCH_GAPS`), which the scan lists
 beside its results as "no data after batch retry". The scanner's alert
@@ -2101,9 +2144,10 @@ FAIL unchanged, −0.112 R on 579 trades; the raw output
 (13 cached / 0 fetched) and 92 of 579 trades gapped through a level (61
 stops filled at the open), the mechanism behind the move from run 2.
 
-**Still pending, in blocking order:** the rest of BACKLOG 36 group B (research engines: warm-up discontinuity,
-execution bar on missing volume, option clock by calendar dates, spread
-maturity, portfolio chronology), each a re-run of a committed result;
+**Still pending, in blocking order:** the group B re-runs on the laptop
+(BACKLOG 36: option sweep ×4 + default + thesis run 3, spread run 3,
+portfolio replay run 4, pullback arrival run 2, record_recheck group B,
+OOS run 4), then fold them in and merge fix + results as one change;
 journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
 the 11-09/11-10 post-close logs (F5).
 
@@ -2111,8 +2155,8 @@ the 11-09/11-10 post-close logs (F5).
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 54 cross-module
-  invariants (54 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 55 cross-module
+  invariants (55 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip

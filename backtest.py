@@ -207,6 +207,9 @@ MIN_BARS_AFTER    = 40        # matches app.py MIN_BARS_AFTER_WARMUP
 # ══════════════════════════════════════════════════════════════════════
 # INDICATORS — identical to app.py compute()
 # ══════════════════════════════════════════════════════════════════════
+INDICATOR_COLUMNS = ["EMA20", "EMA50", "MACD", "Signal", "RSI", "ATR", "ADX", "VOL_AVG20"]
+
+
 def compute(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     c, h, l = df["Close"], df["High"], df["Low"]
@@ -219,11 +222,28 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
     df["ATR"]       = ta.volatility.average_true_range(h, l, c, window=14)
     df["ADX"]       = ta.trend.adx(h, l, c, window=14)
     df["VOL_AVG20"] = df["Volume"].rolling(20).mean()
-    df = df.dropna(subset=["EMA20", "EMA50", "MACD", "Signal", "RSI",
-                           "ATR", "ADX", "VOL_AVG20"])
-    # discard warm-up head exactly like app.py
-    if len(df) > WARMUP_BARS + MIN_BARS_AFTER:
-        df = df.iloc[WARMUP_BARS:]
+    ok = df[INDICATOR_COLUMNS].notna().all(axis=1)
+    if not ok.any():
+        out = df.iloc[0:0].copy()
+        out["SIGNAL_OK"] = pd.Series(dtype=bool)
+        return out.reset_index(drop=True)
+    # DETERMINISTIC WARM-UP (external review 2026-10-20, group B; 2026-10-28).
+    # The first row on which every indicator exists, plus WARMUP_BARS more, is
+    # the head that is discarded -- always. It used to be discarded only when
+    # more than WARMUP_BARS + MIN_BARS_AFTER rows survived, so 189 raw rows
+    # kept 140 and 190 kept 41: one extra bar flipped a hundred rows of
+    # eligibility. Now one extra bar is one extra row, and a frame too short
+    # to trade is one with fewer than MIN_BARS_AFTER rows, which every caller
+    # already checks.
+    first = int(np.flatnonzero(ok.to_numpy())[0])
+    df = df.iloc[first + WARMUP_BARS:]
+    # THE EXECUTION TIMELINE IS COMPLETE. An interior row whose indicators are
+    # NaN (one missing Volume empties VOL_AVG20 for twenty rows) used to be
+    # DROPPED, so a stop or target touched in one of those sessions was never
+    # seen by simulate_trade(). The row now stays, with SIGNAL_OK False: no
+    # signal is read from it, every level is still checked against it.
+    df = df.copy()
+    df["SIGNAL_OK"] = df[INDICATOR_COLUMNS].notna().all(axis=1).to_numpy()
     return df.reset_index(drop=True)
 
 
@@ -293,6 +313,12 @@ def evaluate_signal(df: pd.DataFrame, i: int, params: sc.SignalParams,
         if tally is not None:
             tally[key] = tally.get(key, 0) + 1
 
+    # A bar inside an indicator gap (SIGNAL_OK False: a missing Volume within
+    # the last twenty sessions) is part of the execution timeline, never a
+    # signal bar (group B, 2026-10-28).
+    if "SIGNAL_OK" in df.columns and not bool(df["SIGNAL_OK"].iloc[i]):
+        _count("indicator gap (no signal read)")
+        return None
     window = df.iloc[: i + 1]
     spy_regime = {"regime": regime} if regime is not None else None
     r = sc.evaluate(window, "BT", params, spy_regime=spy_regime,
@@ -2266,6 +2292,39 @@ def selftest() -> int:
     print(f"end-to-end synthetic run : {len(trades)} trade(s), no exceptions")
     for t in trades:
         assert t["filled"] and np.isfinite(t["r"])
+
+    # ── DETERMINISTIC WARM-UP, COMPLETE TIMELINE (group B, 2026-10-28) ──
+    # One more raw bar is one more retained row, never a hundred fewer.
+    _lens = [len(compute(raw.iloc[:k])) for k in (188, 189, 190, 191, 260)]
+    assert all(b - a == 1 for a, b in zip(_lens, _lens[1:4])) and _lens[-1] - _lens[0] == 260 - 188, \
+        (_lens, "warm-up must be a fixed head, not a conditional slice")
+    _first_ok = int(np.flatnonzero(
+        ta.trend.ema_indicator(raw["Close"], window=50).notna().to_numpy())[0])  # EMA50 is last to fill
+    assert len(compute(raw)) == n - (_first_ok + WARMUP_BARS), (len(compute(raw)), _first_ok)
+    # An interior missing Volume keeps its session on the timeline and
+    # blanks twenty signal bars, instead of deleting twenty sessions.
+    _gap = raw.copy()
+    _gap.loc[200, "Volume"] = np.nan
+    _g = compute(_gap)
+    assert len(_g) == len(compute(raw)), "a Volume gap must not shorten the execution timeline"
+    assert int((~_g["SIGNAL_OK"]).sum()) == 20 and str(_g.loc[~_g["SIGNAL_OK"], "Date"].iloc[0])[:10] == str(idx[200].date()), \
+        "the twenty rows after a missing Volume are ineligible for a signal, the first being the gap bar"
+    _k = int(np.flatnonzero(~_g["SIGNAL_OK"].to_numpy())[5])
+    _tl: dict = {}
+    assert evaluate_signal(_g, _k, build_signal_params(dict(cfg, adx_min=0.0)), tally=_tl) is None \
+        and _tl.get("indicator gap (no signal read)") == 1, _tl
+    # The stop touched inside the gap is honoured: a long entered just before
+    # it, with a stop the gap session's low crosses, exits THERE.
+    _gap2 = _g.copy()
+    _lo_row = _k
+    _gap2.loc[_lo_row, "Low"] = float(_gap2.loc[_lo_row, "Low"]) * 0.90
+    _tr = {"trend": "Bullish", "entry": float(_gap2["Close"].iloc[_k - 3]),
+           "stop": float(_gap2["Close"].iloc[_k - 3]) * 0.95,
+           "target": float(_gap2["Close"].iloc[_k - 3]) * 1.5, "rr": 10.0}
+    _res = simulate_trade(_gap2, _k - 4, _tr, dict(cfg, max_hold=30))
+    assert _res["filled"] and _res["outcome"] == "loss" and str(_res["exit_date"]) == str(_gap2["Date"].iloc[_lo_row]), (
+        _res, "a stop crossed in a Volume-gap session must fill in that session")
+    print("warm-up / timeline        : fixed head; a Volume gap blanks 20 signal bars and keeps its sessions")
 
     # ── DRAWDOWN COUNTS THE DIP FROM INITIAL EQUITY (external review 2026-10-19) ──
     _t = lambda rr: {"r": rr, "hold": 1}
