@@ -303,6 +303,95 @@ def record_signal(ticker: str, trend: str, setup: dict, decision: str,
     }, path=path)
 
 
+# ---------------------------------------------------------------------------
+# The random-entry control arm (amendment 2026-10-28 A, BACKLOG 34)
+# ---------------------------------------------------------------------------
+#
+# "Mean R against zero" cannot separate the entry logic from drift in the
+# names the rules pick; drift_null answered that on spent history only. So
+# beside every TAKEN signal the scanner records one CONTROL row: the same
+# ticker, the signal's own stop and target DISTANCES, anchored on a bar drawn
+# from the CONTROL_LOOKBACK settled sessions before the signal bar. The draw
+# is sha256(signal key) mod CONTROL_LOOKBACK: fixed by the row, reproducible,
+# chosen by nothing that knows the outcome. The same resolver grades both;
+# the reading is signal minus control, by episode (first row), on the
+# headline bucket. A control is never `taken`, never an episode, never alerted.
+
+CONTROL_LOOKBACK = 20
+
+
+def control_pick(key: str, bars_before: list) -> dict | None:
+    """
+    The control bar for a signal: `bars_before` are the settled bars strictly
+    BEFORE the signal bar, ascending, as {"date", "close"}. Returns one of the
+    last CONTROL_LOOKBACK of them, or None when fewer exist (a new listing).
+    """
+    window = list(bars_before or [])[-CONTROL_LOOKBACK:]
+    if len(window) < CONTROL_LOOKBACK:
+        return None
+    idx = int(hashlib.sha256(str(key).encode("utf-8")).hexdigest(), 16) % CONTROL_LOOKBACK
+    return dict(window[idx], index=idx)
+
+
+def control_setup(sig_row: dict, bar: dict) -> dict:
+    """The signal's stop and target distances, placed around the control bar's close."""
+    st = sig_row.get("setup") or {}
+    price, stop, target = float(st["price"]), float(st["stop"]), float(st["target"])
+    c = float(bar["close"])
+    d_stop, d_tgt = abs(price - stop), abs(target - price)
+    if sig_row.get("trend") == "Bullish":
+        c_stop, c_tgt = c - d_stop, c + d_tgt
+    else:
+        c_stop, c_tgt = c + d_stop, c - d_tgt
+    return {"price": round(c, 4), "entry": round(c, 4), "stop": round(c_stop, 4),
+            "target": round(c_tgt, 4), "rr": st.get("rr"),
+            "stop_distance": round(d_stop, 4), "target_distance": round(d_tgt, 4)}
+
+
+def record_control(sig_row: dict, bars_before: list,
+                   path: Path | None = None) -> dict | None:
+    """
+    One control row for a taken signal row, or None: already recorded, the
+    signal is not taken, fewer than CONTROL_LOOKBACK settled bars before it,
+    or the drawn bar is unusable. Never raises on the data; the caller logs.
+    """
+    import math as _math
+    if not counts_as_taken(sig_row):
+        return None
+    rows = read_all(path)
+    if any(r.get("kind") == "control" and r.get("ref_seq") == sig_row.get("seq") for r in rows):
+        return None
+    sig_date = str(sig_row.get("bar_date"))[:10]
+    clean = []
+    for b in bars_before or []:
+        try:
+            d = str(b["date"])[:10]
+            c = float(b["close"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if d < sig_date and _math.isfinite(c) and c > 0:
+            clean.append({"date": d, "close": c})
+    clean.sort(key=lambda b: b["date"])
+    bar = control_pick(sig_row.get("key"), clean)
+    if bar is None:
+        return None
+    st = sig_row.get("setup") or {}
+    try:
+        setup = control_setup(sig_row, bar)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if abs(setup["stop"] - setup["price"]) <= 0 or abs(setup["target"] - setup["price"]) <= 0:
+        return None
+    return append("control", {
+        "ref_seq": sig_row.get("seq"), "ticker": sig_row.get("ticker"),
+        "trend": sig_row.get("trend"), "bar_date": bar["date"],
+        "key": f"{sig_row.get('key')}|control", "bucket": bucket_of(sig_row),
+        "setup": setup, "config": sig_row.get("config"),
+        "draw": {"lookback": CONTROL_LOOKBACK, "index": bar["index"],
+                 "seed": "sha256(signal key)"},
+    }, path=path)
+
+
 def record_scan(bar_date, tickers: list, n_signals: int, cfg: dict,
                 path: Path | None = None, bucket: str = "live") -> dict:
     """
@@ -415,13 +504,17 @@ def record_outcome(ref_seq: int, outcome: str, r: float | None, basis: str,
             f"must never be summed.")
     rows = read_all(path)
     ref = next((x for x in rows
-                if x.get("seq") == ref_seq and x.get("kind") == "signal"), None)
+                if x.get("seq") == ref_seq and x.get("kind") in ("signal", "control")), None)
     if ref is None:
         raise ValueError(
             f"no signal at seq {ref_seq} to attach an outcome to. An outcome "
             f"pointing at nothing is how a result gets recorded for a trade "
             f"that was never logged")
-    if not counts_as_taken(ref):
+    if ref.get("kind") == "control" and basis != "stop_distance":
+        raise ValueError(
+            f"seq {ref_seq} is a control row; only the resolver's stop_distance "
+            f"outcome can attach to it, never a journal trade (amendment 2026-10-28 A)")
+    if ref.get("kind") == "signal" and not counts_as_taken(ref):
         raise ValueError(
             f"seq {ref_seq} was {ref.get('decision')!r}, not taken. A skipped "
             f"signal has no outcome to record — inventing one would put "
@@ -629,7 +722,7 @@ def open_signals(path: Path | None = None) -> list[dict]:
     rows = read_all(path)
     have = {(o.get("ref_seq"), o.get("basis")) for o in rows
             if o.get("kind") == "outcome"}
-    return [s for s in rows if counts_as_taken(s)
+    return [s for s in rows if (counts_as_taken(s) or s.get("kind") == "control")
             and (s.get("seq"), "stop_distance") not in have]
 
 
@@ -1128,11 +1221,43 @@ def summary(path: Path | None = None) -> dict:
     h1 = {"k": RANK_TIER_K,
           "tier": _episode_stats([e for e in head_eps if e["seq"] in tier]),
           "rest": _episode_stats([e for e in head_eps if e["seq"] not in tier])}
+    # A (amendment 2026-10-28 A): signal minus control, by episode. The pair
+    # is the episode's FIRST row and that row's control; both must be settled
+    # on the stop-distance basis. Controls of later rows are recorded (one per
+    # taken row) and graded, but only the first row's pair is read.
+    controls = [r for r in rows if r.get("kind") == "control"]
+    ctl_by_ref = {r.get("ref_seq"): r for r in controls}
+    by_control = {}
+    for b in sorted({e["bucket"] for e in eps}):
+        ctls = [c for c in controls if bucket_of(c) == b]
+        pairs = []
+        for e in eps:
+            if e["bucket"] != b or e["r"] is None:
+                continue
+            c = ctl_by_ref.get(e["seq"])
+            oc = sd_out.get(c["seq"]) if c else None
+            if oc is None or oc.get("r") is None:
+                continue
+            pairs.append((float(e["r"]), float(oc["r"])))
+        n = len(pairs)
+        deltas = [a - b_ for a, b_ in pairs]
+        mean_d = sum(deltas) / n if n else float("nan")
+        se = (math.sqrt(sum((d - mean_d) ** 2 for d in deltas) / (n - 1) / n)
+              if n > 1 else float("nan"))
+        by_control[b] = {
+            "controls": len(ctls),
+            "settled": sum(1 for c in ctls if (sd_out.get(c["seq"]) or {}).get("r") is not None),
+            "pairs": n,
+            "mean_signal": sum(a for a, _ in pairs) / n if n else float("nan"),
+            "mean_control": sum(b_ for _, b_ in pairs) / n if n else float("nan"),
+            "mean_delta": mean_d, "se_delta": se,
+        }
     return {
         "headline_bucket": HEADLINE_BUCKET,
         "by_episode": by_episode,
         "gate_settled_episodes": by_episode.get(HEADLINE_BUCKET, {}).get("settled", 0),
         "h1_rank": h1,
+        "by_control": by_control, "controls": len(controls),
         "rows": len(rows), "scans": len(scans),
         "bars_scanned": len({x.get("bar_date") for x in scans}),
         "signals": len(sigs), "taken": len(taken),
@@ -1159,8 +1284,9 @@ def report(path: Path | None = None) -> int:
         print("  empty. Nothing has been recorded yet.")
         print("  Every day without recording is clean data not accumulating.")
         return 0
-    print(f"  {s['rows']} rows: {s['signals']} signals, {s['outcomes']} outcomes, "
-          f"{s['scans']} scans, {s['alerts']} alerts ({s['alerts_delivered']} delivered)")
+    print(f"  {s['rows']} rows: {s['signals']} signals, {s['controls']} controls, "
+          f"{s['outcomes']} outcomes, {s['scans']} scans, {s['alerts']} alerts "
+          f"({s['alerts_delivered']} delivered)")
     print(f"  taken {s['taken']} ({s['headline_bucket']} bucket, the population: "
           f"{s['taken_headline']}: hq {s['taken_hq']}, base {s['taken_base']}; "
           f"live alerting view {s['taken_live']})   skipped {s['skipped']}")
@@ -1181,6 +1307,12 @@ def report(path: Path | None = None) -> int:
                       f"tier {h['tier']['episodes']} ep, {h['tier']['settled']} settled, mean R {_fmt(h['tier']['mean_r'])}  |  "
                       f"rest {h['rest']['episodes']} ep, {h['rest']['settled']} settled, mean R {_fmt(h['rest']['mean_r'])}")
                 print(f"  {'':12}  MDE at the 349 gate ~ +0.37 R; +0.15 R needs ~2,070 settled pool episodes")
+            bc = s["by_control"].get(b)
+            if bc and bc["controls"]:
+                print(f"  {'':12}  A: signal - control (amendment 2026-10-28 A): pairs {bc['pairs']}, "
+                      f"delta {_fmt(bc['mean_delta'])} R +/- {_fmt(bc['se_delta']).lstrip('+')} "
+                      f"(signal {_fmt(bc['mean_signal'])} / control {_fmt(bc['mean_control'])}); "
+                      f"controls recorded {bc['controls']}, settled {bc['settled']}")
     print(f"  by basis — the {s['headline_bucket'].upper()} bucket, the pre-registered population "
           f"(amendment 2026-10-28); the live bucket is the alerting view and never gates")
     for basis, b in s["by_basis"].items():
@@ -1666,6 +1798,62 @@ def selftest() -> int:
     assert "H1' rank tier (top 5/bar" in _buf.getvalue() and "tier 7 ep, 1 settled" in _buf.getvalue(), _buf.getvalue()
     print("H1' rank tier    : top 5 per bar by fewest failed legs, ADX, R:R, ticker; "
           "episode membership by first row; skipped and live rows never")
+
+    # ── A: THE CONTROL ARM (amendment 2026-10-28 A) ──
+    _ca = Path(tempfile.mkdtemp()) / "ctl.jsonl"
+    _cs = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0}
+    _bars_before = [{"date": f"2026-09-{d:02d}", "close": 90.0 + d * 0.5} for d in range(1, 26)]
+    _s1 = record_signal("CA", "Bullish", _cs, "taken", "", cfg, bar_date="2026-10-01", path=_ca, hq=False, bucket="pool")
+    _c1 = record_control(_s1, _bars_before, path=_ca)
+    assert _c1 is not None and _c1["kind"] == "control" and _c1["ref_seq"] == _s1["seq"], _c1
+    _want = int(hashlib.sha256(_s1["key"].encode()).hexdigest(), 16) % CONTROL_LOOKBACK
+    assert _c1["draw"]["index"] == _want and _c1["bar_date"] == _bars_before[-CONTROL_LOOKBACK:][_want]["date"], \
+        (_c1, "the control bar is sha256(key) mod 20 into the last 20 settled bars")
+    _pc = _c1["setup"]["price"]
+    assert abs((_pc - _c1["setup"]["stop"]) - 2.0) < 1e-9 and abs((_c1["setup"]["target"] - _pc) - 6.0) < 1e-9, \
+        "the signal's stop and target DISTANCES, around the control bar's close"
+    assert record_control(_s1, _bars_before, path=_ca) is None, "one control per signal"
+    assert record_control(_s1, _bars_before[-10:], path=_ca) is None or True
+    _s2 = record_signal("CB", "Bearish", dict(_cs, stop=103.0, target=91.0), "taken", "", cfg,
+                        bar_date="2026-10-01", path=_ca, hq=False, bucket="pool")
+    assert record_control(_s2, _bars_before[-10:], path=_ca) is None, "fewer than 20 settled bars -> no control"
+    _c2 = record_control(_s2, _bars_before, path=_ca)
+    assert _c2["setup"]["stop"] > _c2["setup"]["price"] > _c2["setup"]["target"], "a short's control is mirrored"
+    _s3 = record_signal("CC", "Bearish", _cs, "skipped", "direction gate", cfg, bar_date="2026-10-01", path=_ca, bucket="pool")
+    assert record_control(_s3, _bars_before, path=_ca) is None, "a skipped signal gets no control"
+    assert not counts_as_taken(_c1) and bucket_of(_c1) == "pool"
+    assert {r["ticker"] for r in open_signals(_ca)} == {"CA", "CB"} and \
+        sum(1 for r in open_signals(_ca) if r["kind"] == "control") == 2, "controls are graded with their signals"
+    try:
+        record_outcome(_c1["seq"], "win", 0.3, "premium", path=_ca)
+        raise AssertionError("a journal trade must never attach to a control")
+    except ValueError as _e:
+        assert "control" in str(_e), _e
+    # Grade both from ONE frame: the control bar (Sept) runs to target, the
+    # signal bar (Oct 1) stops out. The fetch serves the control's history too.
+    _frame = [dict(b, open=b["close"], high=b["close"] + 0.2, low=b["close"] - 0.2) for b in _bars_before]
+    _cdate = _c1["bar_date"]
+    _after_c = [b for b in _bars_before if b["date"] > _cdate][:3]
+    for i, b in enumerate(_frame):
+        if b["date"] in {x["date"] for x in _after_c}:
+            b.update(open=_pc + 1.0, high=_pc + 7.0, low=_pc + 0.5, close=_pc + 6.5)   # target hit
+    _frame += [{"date": "2026-10-01", "open": 100.0, "high": 100.5, "low": 99.5, "close": 100.0},
+               {"date": "2026-10-02", "open": 99.5, "high": 99.8, "low": 97.0, "close": 97.5}]  # signal stops
+    _fetched_ca = []
+    _rep_ca = grade_open_signals(lambda tk: (_fetched_ca.append(tk) or (_frame if tk == "CA" else None)),
+                                 path=_ca, today=datetime(2026, 10, 10).date())
+    assert _fetched_ca.count("CA") == 1 and _rep_ca["graded"] == 2, (_fetched_ca, _rep_ca)
+    _sm = summary(_ca)
+    _bc = _sm["by_control"]["pool"]
+    assert _sm["controls"] == 2 and (_bc["controls"], _bc["settled"], _bc["pairs"]) == (2, 1, 1), _bc
+    assert _bc["mean_signal"] < -0.9 and _bc["mean_control"] > 0.9 and _bc["mean_delta"] < -1.9, _bc
+    assert _sm["by_episode"]["pool"]["episodes"] == 2, "controls are never episodes"
+    _buf = _io.StringIO()
+    with _ctx.redirect_stdout(_buf):
+        report(_ca)
+    assert "A: signal - control" in _buf.getvalue() and "pairs 1" in _buf.getvalue(), _buf.getvalue()
+    print("control arm      : one seeded control per taken row, mirrored for shorts, graded from "
+          "the signal's fetch, never taken or an episode; summary pairs by episode")
 
     # ── ALERT ROWS: what was sent, whether it arrived; never a signal, scan or outcome ──
     al = Path(tempfile.mkdtemp()) / "al.jsonl"
