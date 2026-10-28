@@ -1,7 +1,9 @@
 !! MODELLED OPTION PREMIUMS in this file predate 2026-10-19, when option_backtest
 !! stopped reading the entry bar's own close into the realised-vol window (one bar
-!! of look-ahead; BACKLOG 35). The review measured a 0.24-point change in mean premium
-!! return on its fixture. Every premium here is off by that order; a re-run is owed.
+!! of look-ahead; BACKLOG 35). RE-RUN 2026-10-28 on the fixed code: results/thesis_exit_run2.md
+!! (thesis_exit_run2.txt). Verdict KEEP unchanged; the paired delta moved from +0.00%
+!! to +0.25% (CI -1.80..+2.31%, detectable 2.94%), so "it is zero" below reads
+!! "unmeasurable" on the fixed code. This file is kept as run 1.
 > **STALE FILL RULE — read with this caveat (BACKLOG 21, fixed 2026-10-08).**
 > Every R in this file was produced while `backtest.simulate_trade()` filled a
 > stop that was gapped THROUGH at the stop, so no loss here is worse than about

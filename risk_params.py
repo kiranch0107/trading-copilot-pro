@@ -93,10 +93,13 @@ MAX_POSITION_PCT = 25.0
 
 # MEASURED OPTION-LEVEL WIN RATE for this signal.
 #
-# 24.9% — option_backtest.py --sweep, TP +100% / SL -50%, 5 years, 7 tickers,
-# 398 trades, DATA COVERAGE 7 of 7 confirmed (2026-09-10).
+# 25.1% — option_backtest.py --sweep, TP +100% / SL -50%, 5 years, 7 tickers,
+# 398 trades, DATA COVERAGE 7 of 7 confirmed, RUN 2 on 2026-10-28 on the
+# no-look-ahead code (results/option_iv_sensitivity_run2.md; the entry premium
+# is priced from closes through the signal bar only, BACKLOG 35). Was 24.9%
+# (2026-09-10) and 25.4% (2026-10-08) on the code with one bar of look-ahead.
 #
-# WAS 0.238, AND 23.8% NO LONGER REPRODUCES. Re-measured at the same recorded
+# WAS 0.238 BEFORE THAT, AND 23.8% NO LONGER REPRODUCES. Re-measured at the same recorded
 # basis it comes back 24.9%. Two undistinguished causes: the 5-year window is
 # relative to the run date and has moved since the original measurement, and the
 # default universe includes ROKU, which is not in the 12-ticker set that
@@ -107,18 +110,18 @@ MAX_POSITION_PCT = 25.0
 # all, and a win rate quietly taken over a partial universe would flow straight
 # into the ceiling below.
 #
-# The change does not move any gate: 24.9% and 23.8% are both far under every
+# No change has moved any gate: 25.1%, 24.9% and 23.8% are all far under every
 # breakeven in the table below.
 #
 # THE FULL SWEEP, and it is the reason the ceiling is a loss cap:
 #
 #     TP     win%   avg win   avg loss   realised   realised BE   expectancy   PF
-#     +50   32.7%    +74.4%    -46.7%     1.59:1        38.6%       -7.10%   0.77
-#     +75   26.9%   +103.8%    -45.7%     2.27:1        30.6%       -5.48%   0.83
-#    +100   24.9%   +120.0%    -45.1%     2.66:1        27.3%       -3.99%   0.88
-#    +150   22.1%   +135.4%    -44.6%     3.04:1        24.8%       -4.82%   0.86
-#    +200   21.9%   +143.0%    -44.6%     3.21:1        23.8%       -3.52%   0.90
-#    +300   21.9%   +144.7%    -44.6%     3.24:1        23.6%       -3.14%   0.91
+#     +50   33.2%    +74.6%    -47.2%     1.58:1        38.8%       -6.76%   0.79
+#     +75   26.6%   +102.4%    -46.0%     2.23:1        31.0%       -6.53%   0.81
+#    +100   25.1%   +119.3%    -45.5%     2.62:1        27.6%       -4.14%   0.88
+#    +150   22.6%   +132.8%    -45.0%     2.95:1        25.3%       -4.82%   0.86
+#    +200   22.1%   +142.8%    -44.9%     3.18:1        23.9%       -3.42%   0.90
+#    +300   21.9%   +141.3%    -44.8%     3.15:1        24.1%       -4.04%   0.88
 #
 # THE EXPECTANCY COLUMN IS RECOMPUTED FROM THE ROW, not carried from the run
 # that produced it. It used to read -4.07% at TP+100 where measured_option_edge()
@@ -131,11 +134,10 @@ MAX_POSITION_PCT = 25.0
 # NO structure clears. Every row falls short of its own REALISED breakeven, and
 # the realised payoff is well below the nominal one because the DTE-7 floor and
 # max-hold close trades before they reach their target. TP+200 is what the live
-# rules use, and it measures 21.9% against a realised breakeven of 23.8%.
+# rules use, and it measures 22.1% against a realised breakeven of 23.9%.
 #
-# (Coincidence worth naming so it does not confuse a later reader: the realised
-# breakeven at TP+200 is 23.8%, which is the value OPT_WIN_RATE used to hold.
-# They are unrelated numbers that happen to collide.)
+# (Run 1 of this table had a realised breakeven of 23.8% at TP+200, the value
+# OPT_WIN_RATE once held: unrelated numbers that happened to collide.)
 #
 # It lives here because two separate places reason about it and they must not
 # drift: app.py's expected-value line, and the spread ceiling derived below.
@@ -143,7 +145,7 @@ MAX_POSITION_PCT = 25.0
 # rate. An option needs a far larger underlying move to gain 100% than a share
 # needs to reach 3xATR, and theta works against you the whole time, so the
 # share number made losing configurations look profitable.
-OPT_WIN_RATE = 0.249
+OPT_WIN_RATE = 0.251
 
 # THE IV ASSUMPTION EVERY OPTION NUMBER RESTS ON (BACKLOG 25,
 # results/option_iv_preregistration.md). option_backtest.py prices every
@@ -154,8 +156,9 @@ OPT_WIN_RATE = 0.249
 # option_backtest reads its default from here, and
 # check_option_iv_single_source() pins the two together.
 #
-# WHAT THE SENSITIVITY SWEEP SAID (results/option_iv_sensitivity_run1.md,
-# 2026-10-08, four multipliers, nothing else varied):
+# WHAT THE SENSITIVITY SWEEP SAID (results/option_iv_sensitivity_run2.md,
+# 2026-10-28, the no-look-ahead code; run 1 of 2026-10-08 read the same way;
+# four multipliers, nothing else varied):
 #   - the ORDERING of take-profit levels by win rate is the same at every
 #     multiplier, so "a wider target is hit less often" is robust;
 #   - the SIGN of expectancy at TP >= +100 is NOT: positive with no premium
@@ -164,12 +167,16 @@ OPT_WIN_RATE = 0.249
 #     and is UNMEASURED until the forward single-name premium reads (Part B).
 #   - OPT_WIN_RATE at TP+100 / SL-50 across the bracket, below.
 OPT_IV_MULT = 1.15
-OPT_WIN_RATE_BY_IV_MULT = {        # measured 2026-10-08, 393 trades per row
-    1.00: 27.7,
-    1.15: 25.4,                    # vs 24.9 recorded 2026-09-10: window drift
-    1.30: 24.7,
-    1.50: 20.6,
+OPT_WIN_RATE_BY_IV_MULT = {        # measured 2026-10-28 (run 2, no-look-ahead code), 398 trades per row
+    1.00: 26.9,                    # run 1 (2026-10-08, 393 trades, one bar of look-ahead): 27.7
+    1.15: 25.1,                    # run 1: 25.4; 2026-09-10: 24.9
+    1.30: 24.1,                    # run 1: 24.7
+    1.50: 20.4,                    # run 1: 20.6
 }
+# THE FILES THE TABLE ABOVE IS READ FROM, digit for digit, by
+# consistency_check.check_option_iv_single_source(). Run 1's files stay on
+# disk under their look-ahead caveat; the table is run 2's.
+OPT_SWEEP_SOURCE = "results/option_iv_sensitivity_run2_{mult:.2f}.txt"
 
 # THE BASIS OPT_WIN_RATE WAS MEASURED AT. Not decoration — a win rate is
 # meaningless without the payoff rule it was measured under, and this repo
@@ -177,31 +184,32 @@ OPT_WIN_RATE_BY_IV_MULT = {        # measured 2026-10-08, 393 trades per row
 # it against a breakeven computed at a DIFFERENT take-profit.
 #
 # option_backtest.py's defaults are `--tp 100 --sl 50 --dte-exit 7
-# --spread-pct 5`, so 24.9% is the rate at which a contract reached +100%
+# --spread-pct 5`, so 25.1% is the rate at which a contract reached +100%
 # before -50%, with a 5% round-trip spread ALREADY charged inside it.
 OPT_WIN_RATE_TP_PCT = 100.0
 OPT_WIN_RATE_SL_PCT = 50.0
 
 # EVERY TP LEVEL, MEASURED. This used to say the +200% rate "is not measured,
 # and it must not be assumed" — a correct rule while it was true. It is measured
-# now (option_backtest.py --sweep, 7 of 7 tickers, 398 trades per row,
-# 2026-09-10), so the honest move is to record it rather than keep refusing.
+# now (option_backtest.py --sweep, 7 of 7 tickers, 398 trades per row, run 2
+# 2026-10-28 on the no-look-ahead code), so the honest move is to record it
+# rather than keep refusing.
 #
 # Each entry is (win_rate_pct, realised_avg_win_pct, realised_avg_loss_pct).
 # The realised figures are what trades ACTUALLY returned, not the nominal TP/SL:
 # the DTE-7 floor and max-hold close positions before they reach target, so at
-# +200% the average win is +143.0%, not +200%. Breakeven must be computed from
+# +200% the average win is +142.8%, not +200%. Breakeven must be computed from
 # these, which is what realised_breakeven_wr() below does.
 #
 # The prediction held, for the record: a wider target is hit strictly less often,
-# and 21.9% at +200% is indeed below 24.9% at +100%.
-OPT_SWEEP_BY_TP = {
-    50.0:  (32.7, 74.4, 46.7),
-    75.0:  (26.9, 103.8, 45.7),
-    100.0: (24.9, 120.0, 45.1),
-    150.0: (22.1, 135.4, 44.6),
-    200.0: (21.9, 143.0, 44.6),
-    300.0: (21.9, 144.7, 44.6),
+# and 22.1% at +200% is indeed below 25.1% at +100%.
+OPT_SWEEP_BY_TP = {                # run 2, 2026-10-28, IV 1.15x, 398 trades per row
+    50.0:  (33.2, 74.6, 47.2),
+    75.0:  (26.6, 102.4, 46.0),
+    100.0: (25.1, 119.3, 45.5),
+    150.0: (22.6, 132.8, 45.0),
+    200.0: (22.1, 142.8, 44.9),
+    300.0: (21.9, 141.3, 44.8),
 }
 
 
@@ -257,15 +265,15 @@ def measured_option_edge(tp_pct: float) -> dict | None:
 #
 # Scored at the basis it was actually measured at, TP +100% / SL -50%:
 #
-#     spread   breakeven WR   vs measured 24.9%
-#        0%        33.3%            BELOW by 9.5 points
+#     spread   breakeven WR   vs measured 25.1%
+#        0%        33.3%            BELOW by 8.2 points
 #        5%        36.8%            BELOW
 #        8%        38.9%            BELOW
 #       10%        40.4%            BELOW
 #       15%        44.1%            BELOW
 #
 # THERE IS NO SPREAD AT WHICH THIS CONFIGURATION BREAKS EVEN. It loses before
-# any spread is paid, and the 23.8% already has a 5% round trip inside it. That
+# any spread is paid, and the 25.1% already has a 5% round trip inside it. That
 # is also what option_backtest.py prints on its own defaults — "the measured win
 # rate does NOT support this payoff structure" — so the two halves of the repo
 # were stating opposite conclusions from the same number.

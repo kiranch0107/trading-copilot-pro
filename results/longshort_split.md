@@ -1,7 +1,9 @@
-!! MODELLED OPTION PREMIUMS in this file predate 2026-10-19, when option_backtest
+!! MODELLED OPTION PREMIUMS quoted in this file predate 2026-10-19, when option_backtest
 !! stopped reading the entry bar's own close into the realised-vol window (one bar
-!! of look-ahead; BACKLOG 35). The review measured a 0.24-point change in mean premium
-!! return on its fixture. Every premium here is off by that order; a re-run is owed.
+!! of look-ahead; BACKLOG 35). The option engine was re-run 2026-10-28 on the fixed
+!! code (results/option_backtest_default_run2.txt): 25.1% win rate at TP+100/SL-50
+!! against a 33.3% breakeven, the same conclusion. The "23.8% against 23.3%" quoted
+!! below is the 2026-09-03 figure and was already superseded on 2026-09-10 (risk_params).
 > **STALE FILL RULE — read with this caveat (BACKLOG 21, fixed 2026-10-08).**
 > Every R in this file was produced while `backtest.simulate_trade()` filled a
 > stop that was gapped THROUGH at the stop, so no loss here is worse than about

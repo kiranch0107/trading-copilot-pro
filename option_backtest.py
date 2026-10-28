@@ -356,6 +356,20 @@ def _report_coverage(coverage: dict | None, requested: list[str]) -> int:
     """
     if coverage is None:
         return 0
+    # THE BARS THIS RUN READ, as one line (BACKLOG 36 group B, 2026-10-28). The
+    # share backtest prints it from the same cache log; this engine did not, so
+    # run 1 (2026-10-08, 393 trades) and run 2 (2026-10-28, 398 trades) of the
+    # IV sweep cannot say whether they read the same bars. From now on they can.
+    _bc = getattr(bt, "bar_cache", None)
+    _log = getattr(bt, "_CACHE_LOG", None)
+    if _bc is not None and _log:
+        _seen, _metas, _stat = set(), [], []
+        for _m, _st in _log:                      # one entry per series, first read
+            _k = (_m or {}).get("key") or (_m or {}).get("ticker")
+            if _k in _seen:
+                continue
+            _seen.add(_k); _metas.append(_m); _stat.append(_st)
+        print(f"  {_bc.summarise(_metas, _stat)}")
     ok, no_data, short = coverage["ok"], coverage["no_data"], coverage["too_short"]
     n_req = len(requested)
     print(f"\nDATA COVERAGE: {len(ok)} of {n_req} ticker(s) supplied usable bars"
@@ -459,6 +473,23 @@ def selftest() -> int:
     assert abs(simulate_option_trade(before, 40, "Bullish", cfg)["entry_prem"] - base["entry_prem"]) > 1e-9, \
         "closes up to the signal bar DO price the entry (or the test is vacuous)"
     print("no look-ahead     : entry premium ignores the entry bar's close and after")
+    # ── the run says what bars it read: one fingerprint line, one entry per series ──
+    import contextlib as _ctx, io as _io
+    _saved_log = list(getattr(bt, "_CACHE_LOG", []))
+    try:
+        _meta = lambda tk: {"key": f"{tk}_1d_5y", "ticker": tk, "interval": "1d", "years": 5,
+                            "variant": "raw", "hash": "ab" * 16, "fetched_at": "2026-10-01T00:00:00Z"}
+        bt._CACHE_LOG[:] = [(_meta("AAA"), "hit"), (_meta("AAA"), "hit"), (_meta("BBB"), "stored")]
+        _buf = _io.StringIO()
+        with _ctx.redirect_stdout(_buf):
+            _report_coverage({"ok": ["AAA", "BBB"], "no_data": [], "too_short": []}, ["AAA", "BBB"])
+        _out = _buf.getvalue()
+        assert "data: v2-" in _out and "2 series, 1 cached / 1 fetched" in _out, (
+            _out, "every option run must print the bar-cache fingerprint, one entry per series")
+    finally:
+        bt._CACHE_LOG[:] = _saved_log
+    print("fingerprint       : printed once per run, deduped to one entry per series")
+
     print("\nAll self-tests passed.")
     return 0
 
@@ -486,6 +517,8 @@ def main() -> int:
 
     if a.selftest:
         return selftest()
+    if hasattr(bt, "_CACHE_LOG"):
+        bt._CACHE_LOG.clear()                     # this run's reads only
     tickers = [t.strip().upper() for t in a.tickers.split(",") if t.strip()]
     sig_cfg = dict(bt.DEFAULTS)
     sig_cfg.update(tickers=tickers, years=a.years)
