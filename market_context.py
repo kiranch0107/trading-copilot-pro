@@ -197,7 +197,7 @@ def spy_regime_from_bars(df: pd.DataFrame,
     choppy", which is what the old ADX gate was claiming.
     """
     out = {"regime": "Unknown", "price": None, "sma200": None,
-           "adx": None, "reasoning": "SPY data unavailable"}
+           "adx": None, "reasoning": "SPY data unavailable", "asof": None}
     if df is None or getattr(df, "empty", True):
         return out
 
@@ -209,6 +209,13 @@ def spy_regime_from_bars(df: pd.DataFrame,
 
     price = float(d["Close"].iloc[-1])
     sma200 = float(d["Close"].rolling(REGIME_SMA_WINDOW).mean().iloc[-1])
+    # The bar the verdict was read from, so a caller can tell a current
+    # regime from a stale one (group C, 2026-10-28). None when the frame is
+    # not dated (fixtures).
+    try:
+        out["asof"] = str(pd.Timestamp(d.index[-1]).date())
+    except (TypeError, ValueError):
+        out["asof"] = None
     if not (pd.notna(price) and pd.notna(sma200)):
         return out
 
@@ -231,7 +238,47 @@ def spy_regime_from_bars(df: pd.DataFrame,
             "price": round(price, 2),
             "sma200": round(sma200, 2),
             "adx": adx_val,
+            "asof": out["asof"],
             "reasoning": f"SPY ${price:.0f} {where} 200-SMA ${sma200:.0f}{adx_note}"}
+
+
+REGIME_STALE_DAYS = 4   # a settled SPY bar older than this is stale: Fri -> Tue over a holiday is 4
+
+
+def regime_status(spy_regime: dict | None, enabled: bool, today=None) -> dict:
+    """
+    The four states a UI must keep apart (external review 2026-10-20, group C):
+    "off" (the filter is configured off: nothing is filtered, by choice),
+    "unavailable" (the filter is on but no verdict could be read: nothing is
+    filtered, NOT by choice), "stale" (a verdict from a bar older than
+    REGIME_STALE_DAYS) and "valid". "Unavailable macro data is presented as
+    disabled" was the finding: both read as a grey badge.
+    Returns {"state", "icon", "label", "filtered"}.
+    """
+    import datetime as _dt
+    r = spy_regime or {}
+    regime = r.get("regime")
+    asof = r.get("asof")
+    if not enabled:
+        return {"state": "off", "icon": "⚪", "filtered": False,
+                "label": "Macro regime filter OFF (sidebar) — setups are not filtered by SPY"}
+    if regime not in ("Bull", "Bear"):
+        return {"state": "unavailable", "icon": "⚠️", "filtered": False,
+                "label": (f"Macro regime UNAVAILABLE — setups are NOT filtered by SPY "
+                          f"({r.get('reasoning') or 'no verdict'})")}
+    today = today or _dt.date.today()
+    try:
+        age = (today - _dt.date.fromisoformat(str(asof)[:10])).days if asof else None
+    except ValueError:
+        age = None
+    if age is None or age > REGIME_STALE_DAYS:
+        return {"state": "stale", "icon": "🟠", "filtered": True,
+                "label": (f"Macro regime {regime} from a STALE SPY bar "
+                          f"({asof or 'undated'}, {age if age is not None else '?'} days old) "
+                          f"— {r.get('reasoning', '')}")}
+    icon = "🟢" if regime == "Bull" else "🔴"
+    return {"state": "valid", "icon": icon, "filtered": True,
+            "label": f"Macro Regime: {regime} (SPY bar {asof}) — {r.get('reasoning', '')}"}
 
 
 def calendar_dates(cal) -> list:
@@ -425,6 +472,24 @@ def _choppy_above_sma200():
 
 def selftest() -> int:
     import numpy as np
+
+    # ── regime status: four states, never one grey badge (group C, 2026-10-28) ──
+    import datetime as _dt
+    _today = _dt.date(2026, 10, 28)
+    _ok = {"regime": "Bull", "asof": "2026-10-27", "reasoning": "SPY above"}
+    assert regime_status(_ok, False, _today)["state"] == "off"
+    assert regime_status(_ok, False, _today)["filtered"] is False
+    assert regime_status({"regime": "Unknown", "reasoning": "fetch failed", "asof": None}, True, _today)["state"] == "unavailable"
+    assert regime_status(None, True, _today)["state"] == "unavailable"
+    assert regime_status(_ok, True, _today)["state"] == "valid" and regime_status(_ok, True, _today)["filtered"]
+    assert regime_status(dict(_ok, asof="2026-10-23"), True, _today)["state"] == "stale", "5 days old is stale"
+    assert regime_status(dict(_ok, asof="2026-10-24"), True, _today)["state"] == "valid", "4 days (a holiday weekend) is not"
+    assert regime_status(dict(_ok, asof=None), True, _today)["state"] == "stale", "an undated verdict is not current"
+    _dated = _spy(np.linspace(300, 400, 260))
+    _dated.index = pd.bdate_range(end="2026-10-27", periods=260)
+    assert spy_regime_from_bars(_dated)["asof"] == "2026-10-27", spy_regime_from_bars(_dated)
+    assert spy_regime_from_bars(_spy(np.linspace(300, 400, 100)))["regime"] == "Unknown"
+    print("regime status           : off / unavailable / stale / valid are four states; the verdict carries its bar")
 
     # ── weekly trend ──
     up = _weekly(np.linspace(50, 100, 60))

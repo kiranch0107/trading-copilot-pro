@@ -819,14 +819,29 @@ def batch_get_data(tickers: tuple, period: str = "1y",
                     result[t] = df
             except Exception:
                 pass
-        if result:
-            return result
 
-    for t in tickers:
+    # RETRY ONLY THE MISSING NAMES (external review 2026-10-20, group C). A
+    # partial batch used to return as a success and the names Yahoo left out
+    # of it were never fetched again; a batch that failed outright retried
+    # everything. Now every name absent from the batch gets one individual
+    # fetch, and the ones still missing are reported through BATCH_GAPS so
+    # the scan can list them beside its results instead of silently
+    # scanning a shorter list.
+    missing = [t for t in tickers if t not in result]
+    for t in missing:
         df = get_data(t, period, interval, min_rows)
         if df is not None:
             result[t] = df
+    BATCH_GAPS[:] = [t for t in tickers if t not in result]
+    if BATCH_GAPS:
+        logger.warning("batch fetch: %d of %d name(s) unresolved after retry: %s",
+                       len(BATCH_GAPS), len(tickers), ", ".join(BATCH_GAPS))
     return result
+
+
+# The names the last batch_get_data() call could not resolve after the
+# per-name retry. Read by the scan right after the call, on the same thread.
+BATCH_GAPS: list[str] = []
 
 
 # ─────────────────────────────────────────────
@@ -1395,7 +1410,9 @@ def _run_scan_uncached(scan_list: tuple, spy_regime: dict,
     """Does the actual parallel work — not cached so threads don't OOM cache."""
     data_map = batch_get_data(scan_list, min_rows=MIN_ROWS)
     results  = []
-    skipped: list[tuple[str, str]] = []
+    # A name the batch could not resolve after its retry is a gap the user
+    # must see, never a quiet shrink of the list (group C, 2026-10-28).
+    skipped: list[tuple[str, str]] = [(t, "no data after batch retry") for t in BATCH_GAPS]
     with ThreadPoolExecutor(max_workers=_SCAN_MAX_WORKERS) as executor:
         futures = {
             executor.submit(_scan_one_ticker, t, data_map, spy_regime, settings_key): t
@@ -1582,9 +1599,18 @@ with TAB_SCAN:
         else:
             st.warning("🔴 Market CLOSED")
     with col_regime:
-        regime       = spy_regime.get("regime", "Unknown")
-        regime_color = {"Bull":"🟢","Bear":"🔴","Neutral":"🟡"}.get(regime, "⚪")
-        st.info(f"{regime_color} **Macro Regime: {regime}** — {spy_regime.get('reasoning','')}")
+        # FOUR STATES, NOT ONE GREY BADGE (external review 2026-10-20, group
+        # C): off by setting, unavailable (on, but no verdict: nothing is
+        # filtered and that is not a choice), stale (a verdict from an old
+        # bar) and valid. market_context.regime_status() decides; the app
+        # only colours it.
+        _rs = market_context.regime_status(spy_regime, bool(SPY_REGIME))
+        if _rs["state"] == "off":
+            st.caption(f"{_rs['icon']} {_rs['label']}")
+        elif _rs["state"] in ("unavailable", "stale"):
+            st.warning(f"{_rs['icon']} **{_rs['label']}**")
+        else:
+            st.info(f"{_rs['icon']} **{_rs['label']}**")
 
     st.divider()
 

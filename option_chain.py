@@ -45,7 +45,19 @@ import logging
 import time
 
 import pandas as pd
-import streamlit as st
+# Streamlit is the APP's dependency. The selector below is read by the
+# scanner too (group C, 2026-10-28: one selector for both), and the
+# scanner's workflow does not install Streamlit, so the import is optional:
+# without it the chain cache decorator is a no-op and nothing else here
+# needs it.
+try:
+    import streamlit as st
+except ImportError:                                   # unattended runners
+    class _NoStreamlit:
+        @staticmethod
+        def cache_data(*_a, **_k):
+            return lambda fn: fn
+    st = _NoStreamlit()
 import yfinance as yf
 
 import risk_params
