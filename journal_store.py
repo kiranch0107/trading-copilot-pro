@@ -207,7 +207,7 @@ def log_skipped_signal(ticker: str, trend: str, reason: str,
     """
     skipped = load_skipped()
     skipped.append({
-        "id":       f"SKIP_{ticker}_{int(time.time())}_{secrets.token_hex(2)}",
+        "id":       f"SKIP_{ticker}_{int(time.time())}_{secrets.token_hex(8)}",
         "ticker":   ticker,
         "trend":    trend,
         "price":    round(float(price), 2) if price else None,
@@ -271,12 +271,23 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
     case. With it the match is exact. Stored as given, None when the owner
     did not say; never inferred from the source field.
     """
+    if str(source) == "signal" and not signal_key:
+        # A SIGNAL TRADE NAMES ITS SIGNAL (progress review 2026-10-26, F4).
+        # Every one of the 15 journal rows lacked a key, so attach_outcomes()
+        # could match none of them and the premium basis of the forward
+        # record stayed empty. The key is one date in the form; without it
+        # the row is a discretionary trade wearing the signal label.
+        raise ValueError(
+            "a trade logged as a system signal must name its signal bar "
+            "(signal_key); without it the outcome can never attach to the "
+            "forward record. Enter the 'Signal bar:' date from the alert, or "
+            "log the trade as discretionary.")
     positions = load_positions()
     now_epoch = time.time()
     pos = {
         # A random suffix: two entries on one name within a second collided
         # on the epoch alone (BACKLOG 35 group 4).
-        "id":               f"OPT_{ticker}_{int(now_epoch)}_{secrets.token_hex(2)}",
+        "id":               f"OPT_{ticker}_{int(now_epoch)}_{secrets.token_hex(8)}",
         "ticker":           ticker,
         "right":            right.upper(),          # CALL | PUT
         "strike":           float(strike),
@@ -428,7 +439,7 @@ def log_alert(ticker, trend, strength, entry, stop, target, rr, price,
             return False
 
     alerts.append({
-        "id":             f"{ticker}_{int(now_epoch)}_{secrets.token_hex(2)}",
+        "id":             f"{ticker}_{int(now_epoch)}_{secrets.token_hex(8)}",
         "timestamp":      datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d %H:%M ET"),
         "epoch":          now_epoch,   # tz-safe cooldown source of truth
         "ticker":  ticker, "trend":    trend,    "strength": strength,
@@ -864,8 +875,15 @@ def selftest() -> int:
                                    _rules, source="signal",
                                    signal_key="NVDA|Bullish|2026-10-07",
                                    traded_at="2026-10-07 10:15 ET")
+        try:
+            open_option_position("PFE", "CALL", 29.0, "2026-10-16", 1, 0.5,
+                                 _rules, source="signal")
+            raise AssertionError("a signal-sourced position without a signal key must be refused (F4)")
+        except ValueError as _e:
+            assert "signal_key" in str(_e), _e
+        assert not _mem["pos"] or all(p["ticker"] != "PFE" for p in _mem["pos"]), "refused = not written"
         _pn = open_option_position("PFE", "CALL", 29.0, "2026-10-16", 1, 0.5,
-                                   _rules, source="signal")
+                                   _rules, source="discretionary")
         assert _pk["signal_key"] == "NVDA|Bullish|2026-10-07"
         assert _pn["signal_key"] is None, "no key given -> None, never inferred"
         close_position(_pk["id"], 4.5, "WIN", closed_at="2026-10-09 15:40 ET")

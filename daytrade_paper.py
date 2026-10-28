@@ -177,6 +177,13 @@ def session_coverage(d, idx: list, session: str) -> str | None:
     import signal_core as sc
     if not idx:
         return "no_bars"
+    import numpy as np
+    _pc = [c for c in ("Open", "High", "Low", "Close") if c in d.columns]
+    _vals = d[_pc].iloc[idx].to_numpy(dtype=float)
+    if not np.isfinite(_vals).all() or (_vals <= 0).any():
+        # BACKLOG 36 group A: a session with a NaN low is not a complete
+        # session; a NaN never touches a stop, so the call would read flat.
+        return "bad_bar"
     starts = pd.to_datetime(d["Date"].iloc[idx], utc=True)
     if not starts.is_monotonic_increasing or starts.duplicated().any():
         return "bars_unordered"
@@ -202,7 +209,7 @@ def resolve_call(call: dict, bars, today: datetime | None = None) -> dict | None
     VOID reasons: no_bars, no_bar_after_call, price_outside_bar,
     gapped_before_fill, geometry; and, only after NO_BARS_DAYS of HOLDING
     for a better fetch: session_incomplete, session_gap, bars_unordered,
-    call_bar_missing (external review 2026-10-19, N01).
+    bad_bar, call_bar_missing (external review 2026-10-19, N01).
     """
     import pandas as pd
     t_call = datetime.fromisoformat(call["ts"]).astimezone(timezone.utc)
@@ -522,6 +529,9 @@ def selftest() -> int:
     _half = ir._session_frame([100.0] * 42, "2026-11-27", spread=0.1)
     _half_d = ir.prepare(_half)
     assert session_coverage(_half_d, list(range(42)), "2026-11-27") is None
+    _nan_d = _half_d.copy(); _nan_d.loc[_nan_d.index[5], "Low"] = float("nan")
+    assert session_coverage(_nan_d, list(range(42)), "2026-11-27") == "bad_bar", \
+        "a NaN low inside the session is not a whole session (BACKLOG 36 group A)"
     assert session_coverage(ir.prepare(ir._session_frame([100.0] * 41, "2026-11-27", spread=0.1)),
                             list(range(41)), "2026-11-27") == "session_incomplete"
     _half78 = ir.prepare(ir._session_frame([100.0] * 78, "2026-11-27", spread=0.1))

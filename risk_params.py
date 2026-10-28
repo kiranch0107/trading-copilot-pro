@@ -422,6 +422,13 @@ def check_option_cost(entry_premium: float, contracts: float,
                             "target can never trigger, so the monitor would "
                             "watch this position forever without alerting.")}
 
+    if qty != int(qty):
+        # BACKLOG 36 group A: a contract is indivisible; 1.5 contracts is a
+        # typo that would size the premium at 150 shares' worth.
+        return {"level": "invalid", "cost": 0.0, "pct": 0.0,
+                "budget": acct * bpct / 100, "ceiling": acct * cpct / 100,
+                "message": (f"{contracts!r} contracts: a contract count must be a "
+                            f"whole number.")}
     cost = prem * 100.0 * qty
     pct = cost / acct * 100 if acct else 0.0
     budget = acct * bpct / 100
@@ -585,10 +592,13 @@ def selftest() -> int:
     print(f"contracts counted        : 1x${_mult*100:,.0f} warn, "
           f"2x${_mult*100:,.0f} BLOCK")
 
-    for bad in ((0.0, 1), (2.25, 0), (-1.0, 1)):
+    for bad in ((0.0, 1), (2.25, 0), (-1.0, 1), (2.25, 1.5), (2.25, 0.5)):
         v = check_option_cost(*bad)
         assert v["level"] == "invalid", (bad, v)
-    print(f"zero / negative premium  : invalid (a %-stop on $0 never fires)")
+    assert "whole number" in check_option_cost(2.25, 1.5)["message"]
+    assert check_option_cost(2.25, 2.0)["level"] != "invalid", "2.0 contracts is two contracts"
+    print(f"zero / negative premium  : invalid (a %-stop on $0 never fires); "
+          f"fractional contracts invalid (BACKLOG 36 group A)")
 
     assert check_option_cost(6.25, 1, account_size=100_000)["level"] == "ok", \
         "the verdict must scale with the account, not be a fixed dollar rule"
