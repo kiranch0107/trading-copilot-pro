@@ -2850,6 +2850,54 @@ def check_spread_arm_preregistered() -> None:
           "pre-registration constants == code")
 
 
+def check_hq_tier_legs_declared() -> None:
+    """
+    The HQ tier's legs are the declared ones (amendments 2026-10-28 F and G):
+    ADX >= DEFAULTS.adx_min unrounded, every filter, R:R >= hq_min_rr, and
+    NOT the "Strong" tag. The flag that could restore the tag is False in
+    DEFAULTS, evaluate() and the scanner's leg list both read it, the scan
+    config names it so the fingerprint moved, and the pre-registration and
+    KNOWN_CONFIGS carry that fingerprint.
+    """
+    import signal_core as sc
+    import forward_log as fl
+    assert sc.DEFAULTS.hq_requires_strong is False, "the HQ tier requires the Strong tag again; amendment G says it does not"
+    assert sc.DEFAULTS.adx_min == 30.0, "the HQ tier's ADX leg is 30 (amendment F)"
+    src = Path("signal_core.py").read_text()
+    body = src[src.find("def evaluate("):src.find("\ndef ", src.find("def evaluate(") + 1)]
+    assert 'and (strength == "Strong" or not params.hq_requires_strong))' in body, \
+        "evaluate()'s high_quality must read hq_requires_strong"
+    sc_src = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
+    assert 'if PARAMS.hq_requires_strong and r.get("strength") != "Strong":' in sc_src, \
+        "the scanner's hq_fail leg list must read hq_requires_strong"
+    assert '"hq_requires_strong": PARAMS.hq_requires_strong' in sc_src, "the scan config must name the flag"
+    pre = Path("results/forward_record_preregistration.md").read_text(encoding="utf-8")
+    assert "Amendment 2026-10-28 (G)" in pre and "from `81fd95d84cfc` to **`4ddd12a3095f`**" in pre, \
+        "amendment G must declare the move of the fingerprint, old hash to new"
+    assert "4ddd12a3095f" in fl.KNOWN_CONFIGS and "81fd95d84cfc" in fl.KNOWN_CONFIGS
+    # Behaviour, not text: a Normal-strength signal with every other leg
+    # passing is HQ under DEFAULTS and is not under the pre-G rule.
+    import pandas as pd
+    import numpy as np
+    from dataclasses import replace
+    n = 60
+    idx = pd.bdate_range("2026-01-02", periods=n)
+    close = np.linspace(90.0, 100.0, n)
+    frame = pd.DataFrame({"Open": close, "Close": close, "High": close + 1.0, "Low": close - 1.0,
+                          "Volume": [1_000_000] * n, "EMA20": close * 0.98, "EMA50": close * 0.96,
+                          "RSI": 65.0, "MACD": 1.0, "Signal": 0.5, "ATR": 2.0, "ADX": 40.0,
+                          "VOL_AVG20": 1_000_000}, index=idx)
+    r = sc.evaluate(frame, "CHK", spy_regime={"regime": "Bullish"}, weekly_trend="Bullish")
+    assert not r["blocked"] and r["strength"] == "Normal" and r["high_quality"] is True, (r["strength"], r["high_quality"])
+    r2 = sc.evaluate(frame, "CHK", replace(sc.DEFAULTS, hq_requires_strong=True),
+                     spy_regime={"regime": "Bullish"}, weekly_trend="Bullish")
+    assert r2["high_quality"] is False
+    # the rank tier ignores the retired leg
+    assert fl.rank_score({"ticker": "Q", "setup": {"hq_fail": ["not Strong"], "adx": 1.0, "rr": 1.0}}) == \
+        fl.rank_score({"ticker": "Q", "setup": {"hq_fail": [], "adx": 1.0, "rr": 1.0}})
+    print("  HQ tier = ADX >= 30, every filter, R:R >= 1; 'Strong' is a recorded tag, not a leg; fingerprint declared")
+
+
 def check_intraday_rules_match_preregistration() -> None:
     """
     intraday_rules.py's constants are the numbers its pre-registration fixed.
@@ -3192,6 +3240,7 @@ CHECKS = [
     ("bar validator runs on every live frame",    check_bar_validator_wired),
     ("research clocks: group B",                  check_research_clocks_group_b),
     ("spread arm pre-registered and wired",      check_spread_arm_preregistered),
+    ("HQ tier legs declared (F, G)",             check_hq_tier_legs_declared),
 ]
 
 

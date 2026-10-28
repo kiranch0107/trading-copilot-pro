@@ -5,6 +5,77 @@ and tagging HQ"). Written and committed BEFORE the first row under the new rule
 is recorded.** Everything below is fixed. Nothing here may be changed after a
 result is seen; the timestamp on this file in git is the point of it.
 
+## Amendment 2026-10-28 (G) — the HQ tier no longer requires the "Strong" tag (BACKLOG 24, owner's decision). THRESHOLD CHANGE on the tag and the alert tier, declared as an INTAKE choice; the fingerprint moves once and is declared
+
+**Owner's decision 2026-10-28 ("go with the Strong leg as well, make it its
+own amendment"), written before the first row under the new hash.** The HQ
+tier required "Strong": RSI > 60 (for a long) AND volume ≥ 1.2× its 20-bar
+average. From the next scan the tier is **ADX ≥ 30 (unrounded), every
+filter passing, R:R ≥ 1.0**, and nothing else. `signal_core.SignalParams`
+gains `hq_requires_strong`, False; the old rule is still expressible for a
+research run that wants it.
+
+**What it rests on, stated so it cannot be mistaken for a finding.** The
+volume half of "Strong" is the RVOL ≥ 1.2× feature, REFUTED out of sample
+on 4,544 trades (`rvol_confirm_run1.md`, adequately powered). The RSI half
+has no measurement for it (`feature_sweep_run1` records only its sign).
+On the record so far (amendment F) the leg is what kept the tier empty:
+of 277 tagged rows, 229 failed "not Strong", and every one of the 22 rows
+at ADX ≥ 35 that failed the tier failed this leg or another. A gate on a
+refuted feature starves the record (the finding of BACKLOG 24 itself);
+removing it is an intake choice and no claim that the tier has an edge.
+
+**What it does to the record, measured on the rows so far.** Under F and G
+together, **30 of the 277 tagged rows would have been HQ** (18 pool, 12
+live; 27 of them "Normal", 3 "Strong") against 3 under F alone and 0 under
+the original tier. On the 12 pool scan bars so far that is about 1.5 HQ
+rows a bar, 11 % of taken rows, so the alert tier fires for the first
+time at a rate the pool's cap of five a day can see. The RSI of the
+Normal rows admitted runs 56 to 75: the tier now admits a bullish base
+signal on ordinary volume, which is what the base signal is. Stated now
+so a later reader does not credit the tier with rows the tag selected.
+
+**What changes.**
+
+- `signal_core.evaluate()`'s `high_quality` no longer requires
+  `strength == "Strong"` (unless `hq_requires_strong`). The `strength` tag
+  is still computed, recorded on every row (`setup.strength`) and still
+  steers the option selector's strike window; only the gate dropped it.
+- `setup.hq_fail` no longer lists `not Strong`. Rows before this
+  amendment carry it; `forward_log.rank_score()` leaves that leg out of
+  its count for every row, so the rank tier (amendment D) ranks on the
+  same legs before and after.
+- The alert tier fires on the new HQ. The pool's cap of five a day and
+  the live bucket's rules are unchanged.
+- The fingerprint moves once, from `81fd95d84cfc` to **`4ddd12a3095f`**
+  (`hq_requires_strong` is named in `_scan_cfg()`). `forward_log.KNOWN_CONFIGS`
+  declares it with this note.
+
+**How the rows are read across the change.** The base-signal question (H0,
+the pool, 349 settled episodes) is unaffected: the base rules did not
+move. The HQ questions (H1, H1′) are read from amendment F forward, as F
+says; this amendment changes which rows the tag selects from that date,
+and an HQ row's hash says which tier tagged it. A reader who wants the
+tier WITH the Strong leg reconstructs it from `setup.strength` on any row.
+**Prediction, stated now**: HQ's mean R does not exceed base by +0.15 R
+(H1), as the pool amendment predicted; the tier now admits enough rows
+for H1 to be read at all, which it could not under the old legs.
+
+**What does NOT change.** `volume_mult` (1.2, the tag's own threshold),
+the base condition's 0.7× volume floor, every other threshold, the
+direction gate, the pullback bucket, the control arm, the research
+engines' committed results.
+
+**Enforcement.** `signal_core` selftest (a Normal signal with every other
+leg passing is HQ; the pre-G rule still gates when asked for; the tag is
+still recorded); `scanner.py --selftest` (no `not Strong` leg in
+`hq_fail`; the tag recorded beside it; the fingerprint in force pinned to
+`4ddd12a3095f`); `forward_log` selftest (the fingerprint reproduces; the
+rank ignores the retired leg); `consistency_check.check_hq_tier_legs_declared`
+(the flag is False in `DEFAULTS`, `evaluate()` and the scanner's leg list
+read it, the scan config names it, this amendment and `KNOWN_CONFIGS`
+carry the hash).
+
 ## Amendment 2026-10-28 (F) — the HQ tier's ADX leg is 30, not 35 (BACKLOG 33, owner's decision). THRESHOLD CHANGE on the tag and the alert tier, declared as an INTAKE choice; the fingerprint moves once and is declared
 
 **Owner's decision 2026-10-28 ("go with BACKLOG 33 as well, ADX 30"),

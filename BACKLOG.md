@@ -1149,6 +1149,24 @@ gate on it — the record then measures what the rules produce and what the gate
 would have selected, without the gate deciding what gets recorded. Pre-register
 before changing.
 
+**The Strong leg, DECIDED 2026-10-28 (owner: "go with the Strong leg as
+well, make it its own amendment").** Amendment 2026-10-28 (G) in
+`results/forward_record_preregistration.md`, written before the first row
+under it: the HQ tier no longer requires the "Strong" tag (RSI > 60 and
+volume ≥ 1.2×); it is ADX ≥ 30, every filter, R:R ≥ 1.0.
+`signal_core.SignalParams.hq_requires_strong` (False) keeps the old rule
+expressible; the tag is still computed, recorded and read by the option
+selector. The fingerprint moves once more, `81fd95d84cfc` → `4ddd12a3095f`.
+What it rests on: the volume half is the RVOL feature refuted out of
+sample (`rvol_confirm_run1`), the RSI half unmeasured, and the leg is what
+kept the tier empty (229 of 277 tagged rows failed it). On the rows so
+far F and G together would have tagged **30 of 277** HQ (18 pool, 12
+live; about 1.5 a pool bar, 11 % of taken rows) against 3 under F alone
+and 0 before: the alert tier fires for the first time at a rate the
+record can read. `rank_score` leaves the retired leg out of its count so
+the rank tier (D) ranks the same legs across the change. An intake
+choice; prediction stated (H1 not exceeded). One check (57).
+
 ---
 
 ## 25. The option engine prices every contract at one constant, guessed IV — PART A DONE, PART B RUNNING (first reading 2027-04-08)
@@ -2230,9 +2248,11 @@ FAIL unchanged, −0.112 R on 579 trades; the raw output
 (13 cached / 0 fetched) and 92 of 579 trades gapped through a level (61
 stops filled at the open), the mechanism behind the move from run 2.
 
-**Still pending, in blocking order:** the first scan under ADX 30
-(fingerprint `81fd95d84cfc` on its scan row; the HQ tag may now fire on a
-[30, 35) row that passes the other legs, ~1 % of taken rows so far); the
+**Still pending, in blocking order:** the first scan under amendments F
+and G (fingerprint `4ddd12a3095f` on its scan row; the HQ tag and the alert
+tier now fire on about one taken row in nine, ~1.5 a pool bar, so the
+first Telegram alerts of the record are due and the pool's cap of five a
+day may bind on a busy bar); the
 first forward spread reading at 6 graded cycles per arm (~6 months,
 BACKLOG 34 E) and the result at 12; the first `spread arms:` lines in the
 post-close log (eight cycles opened, or the reason not); journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
@@ -2242,8 +2262,8 @@ the 11-09/11-10 post-close logs (F5).
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 56 cross-module
-  invariants (56 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 57 cross-module
+  invariants (57 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip

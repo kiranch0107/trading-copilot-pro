@@ -118,6 +118,10 @@ KNOWN_CONFIGS = {
                     "tier, an INTAKE choice, not a measured improvement (adx_live_run1: the [30, 35) "
                     "band is NOT ESTABLISHED); the base rules, buckets, resolver and readings are the "
                     "same; 3 of the 298 taken rows so far would have been HQ under it",
+    "4ddd12a3095f": "from 2026-10-28 (amendment G, BACKLOG 24): the HQ tier no longer requires the "
+                    "'Strong' tag (RSI > 60 and volume >= 1.2x; the volume half is the RVOL feature "
+                    "refuted out of sample); the tier is ADX >= 30, every filter, R:R >= 1.0; the tag "
+                    "is still recorded. 30 of the 277 tagged rows so far would have been HQ under F+G",
 }
 
 
@@ -1124,7 +1128,10 @@ def rank_score(row: dict) -> tuple:
     """
     st = row.get("setup") or {}
     hf = st.get("hq_fail")
-    legs = -len(hf) if isinstance(hf, list) else -99
+    # "not Strong" stopped being a leg on 2026-10-28 (amendment G); rows
+    # tagged before carry it, rows after do not. It is left out of the count
+    # for every row so the tier ranks the same legs across the change.
+    legs = -sum(1 for x in hf if x != "not Strong") if isinstance(hf, list) else -99
     try:
         adx = float(st.get("adx") or 0.0)
     except (TypeError, ValueError):
@@ -1504,11 +1511,15 @@ def selftest() -> int:
                     spy_regime_on=True)
     assert config_fingerprint(_old_cfg) == "e7d75b855a51", config_fingerprint(_old_cfg)
     assert config_fingerprint(_new_cfg) == "c357a0d01ff5", config_fingerprint(_new_cfg)
-    assert set(KNOWN_CONFIGS) == {"e7d75b855a51", "c357a0d01ff5", "ba6b3b46afa6", "81fd95d84cfc"}, KNOWN_CONFIGS
+    assert set(KNOWN_CONFIGS) == {"e7d75b855a51", "c357a0d01ff5", "ba6b3b46afa6", "81fd95d84cfc",
+                                  "4ddd12a3095f"}, KNOWN_CONFIGS
     assert config_fingerprint(dict(_new_cfg, gate_precision="unrounded")) == "ba6b3b46afa6", \
         "the unrounded-gate fingerprint (amendment 2026-10-28 E) must reproduce"
     assert config_fingerprint(dict(_new_cfg, gate_precision="unrounded", adx_min=30.0)) == "81fd95d84cfc", \
         "the ADX-30 fingerprint (amendment 2026-10-28 F, BACKLOG 33) must reproduce"
+    assert config_fingerprint(dict(_new_cfg, gate_precision="unrounded", adx_min=30.0,
+                                   hq_requires_strong=False)) == "4ddd12a3095f", \
+        "the no-Strong-leg fingerprint (amendment 2026-10-28 G, BACKLOG 24) must reproduce"
     import contextlib as _ctx, io as _io
     _kp = Path(tempfile.mkdtemp()) / "known.jsonl"
     _ks = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0}
@@ -1770,18 +1781,23 @@ def selftest() -> int:
     # One bar, seven pool rows: 0-leg HQ first, then 1-leg by ADX, then 2-leg.
     _r = {}
     _r["HQ"] = _rrow("HQ", "2026-10-20", [], 36.0)
-    _r["A1"] = _rrow("A1", "2026-10-20", ["not Strong"], 40.0)
+    # ("not Strong" is not used as a leg here: it stopped counting on
+    # 2026-10-28, amendment G, and the assertion below pins that.)
+    _r["A1"] = _rrow("A1", "2026-10-20", ["Earnings Blackout"], 40.0)
     _r["A2"] = _rrow("A2", "2026-10-20", ["ADX Trend Strength"], 30.0)
-    _r["B1"] = _rrow("B1", "2026-10-20", ["ADX Trend Strength", "not Strong"], 33.0, rr=3.0)
-    _r["B2"] = _rrow("B2", "2026-10-20", ["ADX Trend Strength", "not Strong"], 33.0, rr=1.0)
-    _r["B3"] = _rrow("B3", "2026-10-20", ["ADX Trend Strength", "not Strong"], 20.0)
-    _r["C1"] = _rrow("C1", "2026-10-20", ["ADX Trend Strength", "not Strong", "rr<1"], 50.0)
+    _r["B1"] = _rrow("B1", "2026-10-20", ["ADX Trend Strength", "Earnings Blackout"], 33.0, rr=3.0)
+    _r["B2"] = _rrow("B2", "2026-10-20", ["ADX Trend Strength", "Earnings Blackout"], 33.0, rr=1.0)
+    _r["B3"] = _rrow("B3", "2026-10-20", ["ADX Trend Strength", "Earnings Blackout"], 20.0)
+    _r["C1"] = _rrow("C1", "2026-10-20", ["ADX Trend Strength", "Earnings Blackout", "rr<1"], 50.0)
     _r["SK"] = _rrow("SK", "2026-10-20", [], 99.0, decision="skipped")          # skipped: never
     _r["LV"] = _rrow("LV", "2026-10-20", [], 99.0, bucket="live")               # live: never
     _rows = read_all(_rt)
     _t = rank_tier(_rows)
     _in = {tk for tk, r in _r.items() if r["seq"] in _t}
     assert _in == {"HQ", "A1", "A2", "B1", "B2"}, _in
+    assert rank_score({"ticker": "Q", "setup": {"hq_fail": ["not Strong"], "adx": 30.0, "rr": 1.0}}) == \
+        rank_score({"ticker": "Q", "setup": {"hq_fail": [], "adx": 30.0, "rr": 1.0}}), \
+        "'not Strong' (a leg until amendment G) must not count against a row recorded under the old tier"
     assert rank_score(_r["A1"]) > rank_score(_r["A2"]) > rank_score(_r["B1"]) > rank_score(_r["B2"]), \
         "fewest failed legs, then ADX, then R:R"
     # Ticker breaks a full tie deterministically: AA before AB.

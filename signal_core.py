@@ -69,6 +69,12 @@ class SignalParams:
     adx_min: float = 30.0       # 35 until 2026-10-28 (BACKLOG 33, amendment F: an intake choice)
     min_rr: float = 0.5
     hq_min_rr: float = 1.0          # high-quality tier; alerts fire on this
+    # The HQ tier required the "Strong" tag (RSI > 60 and volume >= 1.2x
+    # average) until 2026-10-28. Amendment G (BACKLOG 24, owner's decision)
+    # dropped the leg: its volume half was REFUTED out of sample
+    # (rvol_confirm_run1) and it was the leg that kept the tier empty. The
+    # tag is still computed and recorded on every row; it no longer gates.
+    hq_requires_strong: bool = False
     volume_mult: float = 1.2        # "Strong" needs volume >= avg * this
     volume_soft_mult: float = 0.70  # base condition floor
     atr_stop_mult: float = 1.25
@@ -619,7 +625,8 @@ def evaluate(df: pd.DataFrame,
             "rsi": round(rsi, 1), "adx": adx_val, "rr_raw": rr_raw, "adx_raw": adx_raw,
         }
 
-    high_quality = (gate_rr(rr_raw, params.hq_min_rr) and strength == "Strong" and all_pass)
+    high_quality = (gate_rr(rr_raw, params.hq_min_rr) and all_pass
+                    and (strength == "Strong" or not params.hq_requires_strong))
 
     return {
         "blocked": False, "ticker": ticker, "price": round(price, 2),
@@ -798,6 +805,20 @@ def selftest() -> int:
         "the live ADX leg is 30, compared unrounded"
     _r34 = evaluate(_frame(), "TEST", adx_value=34.0, spy_regime={"regime": "Bullish"}, weekly_trend="Bullish")
     assert _r34["filters"]["ADX Trend Strength"]["pass"] is True, "the [30, 35) band is admitted"
+    # THE STRONG LEG NO LONGER GATES THE TIER (amendment 2026-10-28 G, BACKLOG
+    # 24): volume at 1.0x average is "Normal", above the 0.7x floor, and with
+    # every filter passing and R:R >= 1 the signal IS high quality. The old
+    # rule is still expressible, so a research run can ask for it.
+    assert DEFAULTS.hq_requires_strong is False
+    _rn = evaluate(_frame(vol=1_000_000), "TEST", spy_regime={"regime": "Bullish"}, weekly_trend="Bullish")
+    assert not _rn["blocked"] and _rn["strength"] == "Normal" and _rn["all_pass"] and _rn["high_quality"] is True, (
+        _rn["strength"], _rn["all_pass"], _rn["high_quality"], "a Normal signal with every other leg passing is HQ")
+    _ro = evaluate(_frame(vol=1_000_000), "TEST", replace(DEFAULTS, hq_requires_strong=True),
+                   spy_regime={"regime": "Bullish"}, weekly_trend="Bullish")
+    assert _ro["strength"] == "Normal" and _ro["high_quality"] is False, "the pre-G rule still gates when asked for"
+    _rs = evaluate(_frame(), "TEST", spy_regime={"regime": "Bullish"}, weekly_trend="Bullish")
+    assert _rs["strength"] == "Strong" and _rs["high_quality"] is True, "the tag is still computed and recorded"
+    print("HQ tier legs              : ADX, every filter, R:R >= 1; 'Strong' is a tag, not a leg (amendment G)")
     assert gate_rr(0.996, 1.0) is False and gate_rr(1.0, 1.0) is True and gate_rr(0.4999, 0.5) is False
     assert gate_adx(34.96, 35) is False and gate_adx(35.0, 35) is True
     assert "rr_raw" in r and abs(round(r["rr_raw"], 2) - r["rr"]) < 1e-9, "rr is the rounded display of rr_raw"
