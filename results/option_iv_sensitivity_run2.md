@@ -60,19 +60,47 @@ at 25.1 %: the 0 % breakeven of 33.3 % is cleared by nothing, so
 `MAX_OPTION_SPREAD_PCT` stays the loss cap it already was. The app's
 captions read the function, so they moved with it.
 
-## Two things this run cannot settle
+## The 393-against-398 question, settled by the cache manifest (same day)
 
-1. **398 trades against run 1's 393.** 398 is also the 2026-09-10 count.
-   Run 1's 1.00x file says ROKU had a bar dated 2026-10-08 dropped as still
-   forming, so run 1 read bars fetched that day; that bar is settled now
-   and the cache is never-expiring, which accounts for at most ROKU's last
-   bar, not five trades. The option engine printed no bar-cache fingerprint
-   until this change, so the two runs cannot prove they read the same bars.
-   `option_backtest.py` now prints the same `data: v2-…` line the share
-   backtest prints, at the end of every run, so run 3 will be comparable.
-   Until then the row-to-row movements above are read as "the fix plus
-   possibly a bar-set difference", and the findings that held do not
-   depend on which.
-2. **The default run's exit mix** (THESIS 159, STOP 123, TARGET 70, TIME
-   45, EXPIRY 1 of 398) is consistent with `option_decompose`'s 42.6 %
-   thesis share; nothing here re-reads that study.
+The owner's `python bar_cache.py --info` after run 2: every one of the
+seven engine names at the 5-year window (`TSLA/NVDA/AAPL/MSFT/AMZN/META/ROKU_1d_5y_raw`)
+was fetched **48 days before 2026-10-28, i.e. on 2026-09-10**, bars
+2021-09-10 → 2026-09-08 (ROKU to 09-09), and none was refreshed since.
+So:
+
+- **Run 2 read the frozen 2026-09-10 bars.** That is why it has 398
+  trades, the 2026-09-10 count.
+- **Run 1 (2026-10-08) did not.** Its 1.00x file reports a ROKU bar dated
+  2026-10-08 dropped as still forming, a bar this cache does not hold. Run
+  1 was a live fetch whose 5-year window ran a month later at both ends.
+  Run 1 and run 2 therefore differ in BARS as well as code, and the
+  run-1 → run-2 movements above are mostly the window, not the fix.
+- **The clean, same-bars, code-only comparison is the 2026-09-10 sweep
+  (the rows `risk_params.OPT_SWEEP_BY_TP` held until today) against run
+  2, both at 1.15x on 398 trades:**
+
+| TP | 09-10: win / avg win / avg loss / exp | run 2: win / avg win / avg loss / exp |
+|---|---|---|
+| +50 | 32.7 / +74.4 / −46.7 / −7.10 % | 33.2 / +74.6 / −47.2 / −6.76 % |
+| +75 | 26.9 / +103.8 / −45.7 / −5.48 % | 26.6 / +102.4 / −46.0 / −6.53 % |
+| +100 | 24.9 / +120.0 / −45.1 / −3.99 % | 25.1 / +119.3 / −45.5 / −4.14 % |
+| +150 | 22.1 / +135.4 / −44.6 / −4.82 % | 22.6 / +132.8 / −45.0 / −4.82 % |
+| +200 | 21.9 / +143.0 / −44.6 / −3.52 % | 22.1 / +142.8 / −44.9 / −3.42 % |
+| +300 | 21.9 / +144.7 / −44.6 / −3.14 % | 21.9 / +141.3 / −44.8 / −4.04 % |
+
+  The look-ahead fix alone moves the win rate by at most 0.5 points and
+  the expectancy by at most 1.1 points, with no row changing sign. Every
+  finding above holds on this comparison as well.
+
+- The thesis test's 12 names at the 10-year window were also fetched
+  2026-09-10/11 and never refreshed, so run 1 (2026-09-12) and run 2 of
+  `thesis_test` read the SAME bars; that comparison was already clean.
+
+`option_backtest.py` now prints the fingerprint on every run, so this
+reading never has to be reconstructed from a manifest again.
+
+## One thing this run does not re-read
+
+The default run's exit mix (THESIS 159, STOP 123, TARGET 70, TIME 45,
+EXPIRY 1 of 398) is consistent with `option_decompose`'s 42.6 % thesis
+share; nothing here re-reads that study.
