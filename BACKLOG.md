@@ -1074,7 +1074,7 @@ None of this makes the stop a stop. It makes the silence audible.
 
 ---
 
-## 23. The live config and the research config are different, and nothing pins them — PINNED 2026-10-08, DECISION OPEN
+## 23. The live config and the research config are different, and nothing pins them — PINNED 2026-10-08; DECIDED 2026-10-28: NEW RUNS USE THE LIVE CONFIG, THE RECORD KEEPS ITS OWN
 
 **Found 2026-10-07; see `results/code_review_2026-10-07.md` (H1).**
 
@@ -1107,6 +1107,24 @@ a dict literal. **Fix:** a `check_` that asserts either `bt.DEFAULTS` ==
 `signal_core.DEFAULTS` on the shared keys, or that the divergence is declared in
 one named constant with a reason — then decide which config the *next* research
 run should use, and say so in its pre-registration.
+
+**DECIDED 2026-10-28 (owner: "go with BACKLOG 23 as well").** The standing
+rule, now in the working conventions: **every NEW research run starts from
+the live config**, built by one function, `backtest.live_cfg()` (every key
+`build_signal_params()` reads, from `signal_core.DEFAULTS` through
+`CFG_TO_PARAMS`; `python backtest.py --config live`), and its
+pre-registration says so; the direction gate (`risk_params.LONGS_ONLY`) is
+applied to the trades by the study, as `adx_retest --longs-only` does.
+**The record keeps `bt.DEFAULTS`**: `record_recheck` and every file built
+on the 1,386-trade record (longshort_split, drift_null, exit_ab, atr_stop,
+inverted_arm, longs_only, tranche C) measure the research config, and
+changing `bt.DEFAULTS` would move every committed number without a re-run,
+so it is not changed. `run()` now prints `Config : live | research |
+custom` so a result file says which it ran. `adx_retest.live_cfg`
+delegates to the one builder; `check_research_config_choice_declared` (58)
+pins the builder to the scanner's params, the CLI switch, the print, the
+delegation and the convention. Nothing is re-run by this decision; the
+first research run under it is whichever study is next pre-registered.
 
 ---
 
@@ -2262,8 +2280,17 @@ the 11-09/11-10 post-close logs (F5).
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 57 cross-module
-  invariants (57 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 58 cross-module
+  invariants (58 `check_` functions); run it before pushing.
+- **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
+  is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
+  off) and is never changed, because every committed number was built on
+  it; `signal_core.DEFAULTS` is the LIVE config the scanner runs. From
+  2026-10-28 every NEW research run starts from `backtest.live_cfg()`
+  (`python backtest.py --config live`), says so in its pre-registration,
+  and prints `Config : live` in its result; a study that extends the
+  record says `research`. `backtest.RESEARCH_VS_LIVE` lists every
+  difference with its reason.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip

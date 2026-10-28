@@ -178,9 +178,12 @@ CFG_TO_PARAMS = {
 # entry fails CI — the old comments drifted for a year because nothing read
 # them.
 #
-# Which config the NEXT research run uses is the owner's call and belongs in
-# that run's pre-registration (BACKLOG 23, 24). This table only makes the
-# question impossible to miss.
+# Which config a research run uses: DECIDED 2026-10-28 (BACKLOG 23). Every
+# NEW research run starts from live_cfg() (`--config live`), the config the
+# scanner runs, and its pre-registration says so; the studies that extend
+# the RECORD keep DEFAULTS, because changing DEFAULTS would move every
+# committed number without a re-run. This table makes the difference
+# impossible to miss; run() prints which one it is running.
 RESEARCH_VS_LIVE = {
     "adx_min": (25, 30.0,
                 "the record was built pre-sweep at 25; the sweep's 35 was "
@@ -275,6 +278,35 @@ def build_signal_params(cfg: dict) -> sc.SignalParams:
         weekly_confirm=bool(cfg.get("use_weekly", False)),
         spy_regime_on=cfg["use_regime"],
     )
+
+
+def live_cfg(tickers=None, years=None, **overrides) -> dict:
+    """
+    THE LIVE CONFIG AS A BACKTEST CFG (BACKLOG 23, decided 2026-10-28): every
+    key build_signal_params() reads is taken from signal_core.DEFAULTS through
+    CFG_TO_PARAMS, so this is the signal the scanner runs by construction,
+    not a hand copy of it. Everything else (max_hold, cooldown, slippage,
+    tickers, years) is DEFAULTS unless overridden. From 2026-10-28 every NEW
+    research run starts from this; the record's studies keep DEFAULTS and
+    say so. The direction gate (risk_params.LONGS_ONLY) is not a SignalParams
+    field: a study applies it to the trades, as adx_retest --longs-only does.
+    """
+    cfg = dict(DEFAULTS)
+    for key, field in CFG_TO_PARAMS.items():
+        cfg[key] = getattr(sc.DEFAULTS, field)
+    if tickers is not None:
+        cfg["tickers"] = list(tickers)
+    if years is not None:
+        cfg["years"] = int(years)
+    cfg.update(overrides)
+    return cfg
+
+
+def describe_config(cfg: dict) -> str:
+    """'live', 'research' or 'custom': which declared config a cfg's signal keys are."""
+    live = all(cfg.get(k) == getattr(sc.DEFAULTS, f) for k, f in CFG_TO_PARAMS.items())
+    research = all(cfg.get(k) == DEFAULTS[k] for k in CFG_TO_PARAMS)
+    return "live" if live else "research" if research else "custom"
 
 
 def evaluate_signal(df: pd.DataFrame, i: int, params: sc.SignalParams,
@@ -1072,6 +1104,10 @@ def run(cfg: dict, policy: dict | None = None) -> list[dict]:
     print(f"Max hold     : {cfg['max_hold']} bars   Slippage: {cfg['slippage_bps']}bps/side   "
           f"Regime filter: {'ON (SPY 200-SMA)' if cfg['use_regime'] else 'OFF'}")
     print(f"Prices       : {'auto_adjust=True (split+dividend adjusted) — NOT reproducible across refetches' if AUTO_ADJUST else 'auto_adjust=False (raw; splits still adjusted) — matches every live path'}")
+    print(f"Config       : {describe_config(cfg)}"
+          f"{' (signal_core.DEFAULTS, what the scanner runs)' if describe_config(cfg) == 'live' else ''}"
+          f"{' (bt.DEFAULTS, the record' + chr(39) + 's; NOT the live config -- RESEARCH_VS_LIVE)' if describe_config(cfg) == 'research' else ''}"
+          f"{' (neither declared config)' if describe_config(cfg) == 'custom' else ''}")
     print(f"Weekly filter: {'ON (price vs 20w EMA)' if cfg.get('use_weekly') else 'OFF'}"
           f"{'   <- OFF live since 2026-09-02; this re-measures it' if cfg.get('use_weekly') else '   (matches the live default)'}")
     print("=" * 78)
@@ -1394,6 +1430,36 @@ def selftest() -> int:
         "--use-weekly must actually turn the filter on"
     assert params.adx_min == 35.0 and params.atr_stop_mult == 1.25
     print("build_signal_params    : weekly off by default, on with use_weekly")
+
+    # THE LIVE CONFIG, by construction (BACKLOG 23, decided 2026-10-28):
+    # live_cfg() builds exactly the scanner's params, differs from DEFAULTS
+    # on exactly the declared keys, and run() can say which it is running.
+    assert build_signal_params(live_cfg()) == sc.DEFAULTS, build_signal_params(live_cfg())
+    assert {k for k in CFG_TO_PARAMS if live_cfg()[k] != DEFAULTS[k]} == set(RESEARCH_VS_LIVE), \
+        "live_cfg() must differ from DEFAULTS on exactly the keys RESEARCH_VS_LIVE declares"
+    assert live_cfg(["AAA"], 3)["tickers"] == ["AAA"] and live_cfg(["AAA"], 3)["years"] == 3 \
+        and live_cfg()["max_hold"] == DEFAULTS["max_hold"]
+    assert describe_config(live_cfg()) == "live" and describe_config(dict(DEFAULTS)) == "research" \
+        and describe_config(live_cfg(adx_min=99.0)) == "custom"
+    print("live config            : live_cfg() == signal_core.DEFAULTS; differs from the record on the declared keys only")
+    _argv = sys.argv
+    try:
+        sys.argv = ["backtest.py"]
+        _c0, _ = parse_args()
+        assert describe_config(_c0) == "research", "the bare command is unchanged: the record's config"
+        sys.argv = ["backtest.py", "--config", "live"]
+        _c1, _ = parse_args()
+        assert describe_config(_c1) == "live" and build_signal_params(_c1) == sc.DEFAULTS, _c1
+        sys.argv = ["backtest.py", "--config", "live", "--adx-min", "25"]
+        _c2, _ = parse_args()
+        assert _c2["adx_min"] == 25.0 and _c2["atr_stop_mult"] == sc.DEFAULTS.atr_stop_mult \
+            and _c2["use_regime"] is True and describe_config(_c2) == "custom", _c2
+        sys.argv = ["backtest.py", "--adx-min", "35", "--use-regime"]
+        _c3, _ = parse_args()
+        assert _c3["adx_min"] == 35.0 and _c3["use_regime"] is True and _c3["atr_stop_mult"] == DEFAULTS["atr_stop_mult"]
+    finally:
+        sys.argv = _argv
+    print("--config               : research by default; live fills the signal keys from the scanner; flags override")
 
     # Clean bullish setup, ADX comfortably above threshold -> a trade.
     df = _synthetic_ohlc(adx=40.0)
@@ -2347,15 +2413,23 @@ def parse_args() -> tuple[dict, bool]:
                         "no network, then exit")
     p.add_argument("--tickers", type=str, default=",".join(DEFAULTS["tickers"]))
     p.add_argument("--years", type=int, default=DEFAULTS["years"])
-    p.add_argument("--adx-min", type=float, default=DEFAULTS["adx_min"])
-    p.add_argument("--atr-stop", type=float, default=DEFAULTS["atr_stop_mult"])
-    p.add_argument("--atr-tgt", type=float, default=DEFAULTS["atr_tgt_mult"])
-    p.add_argument("--min-rr", type=float, default=DEFAULTS["min_rr"])
+    # BACKLOG 23 (decided 2026-10-28): a NEW research run starts from the
+    # live config; the record's studies keep the research one. The signal
+    # flags below default to None so that `--config live` fills them from
+    # signal_core.DEFAULTS and an explicit flag still overrides either base.
+    p.add_argument("--config", choices=("research", "live"), default="research",
+                   help="which declared config the signal keys start from: "
+                        "research (bt.DEFAULTS, the record's) or live (signal_core.DEFAULTS, "
+                        "what the scanner runs; backtest.live_cfg())")
+    p.add_argument("--adx-min", type=float, default=None)
+    p.add_argument("--atr-stop", type=float, default=None)
+    p.add_argument("--atr-tgt", type=float, default=None)
+    p.add_argument("--min-rr", type=float, default=None)
     p.add_argument("--max-hold", type=int, default=DEFAULTS["max_hold"])
     p.add_argument("--slippage-bps", type=float, default=DEFAULTS["slippage_bps"])
     p.add_argument("--commission", type=float, default=DEFAULTS["commission"])
     p.add_argument("--cooldown", type=int, default=DEFAULTS["cooldown_bars"])
-    p.add_argument("--use-regime", action="store_true", default=DEFAULTS["use_regime"])
+    p.add_argument("--use-regime", action="store_true", default=None)
     p.add_argument("--adjusted-prices", action="store_true",
                    help="fetch with auto_adjust=True (split+dividend "
                         "adjusted). This is what the ORIGINAL OOS baseline "
@@ -2386,18 +2460,20 @@ def parse_args() -> tuple[dict, bool]:
     CACHE_REFRESH = a.refresh_cache
     AUTO_ADJUST = bool(a.adjusted_prices)
 
+    base = live_cfg() if a.config == "live" else dict(DEFAULTS)
+    pick = lambda flag, key: base[key] if flag is None else flag          # noqa: E731
     cfg = dict(
         tickers       = [t.strip().upper() for t in a.tickers.split(",") if t.strip()],
         years         = a.years,
-        adx_min       = a.adx_min,
-        atr_stop_mult = a.atr_stop,
-        atr_tgt_mult  = a.atr_tgt,
-        min_rr        = a.min_rr,
-        volume_mult   = DEFAULTS["volume_mult"],
+        adx_min       = pick(a.adx_min, "adx_min"),
+        atr_stop_mult = pick(a.atr_stop, "atr_stop_mult"),
+        atr_tgt_mult  = pick(a.atr_tgt, "atr_tgt_mult"),
+        min_rr        = pick(a.min_rr, "min_rr"),
+        volume_mult   = base["volume_mult"],
         max_hold      = a.max_hold,
         slippage_bps  = a.slippage_bps,
         commission    = a.commission,
-        use_regime    = a.use_regime,
+        use_regime    = pick(a.use_regime, "use_regime"),
         use_weekly    = a.use_weekly,
         cooldown_bars = a.cooldown,
     )
