@@ -62,13 +62,29 @@ here. The bound stated above is what the record can honestly say.
   record is the only route to evidence) is strengthened, not changed.
 - `risk_params` carries no constant from this run; nothing moves.
 
-## What is missing from this run's committed files
+## The run's own provenance (raw output pushed the same day)
 
-The harness writes the backtest's raw output to `oos_raw_output.txt`
-(not committed), which carries the bar-cache fingerprint line (`data:
-v2-…  (13 series, 13 cached / 0 fetched …)`) and the fill tally (`N stops
-filled at the open, M targets`). The tee'd summary does not. From this
-run on, `oos_validate.py` prints both in its summary and records them in
-the ledger entry. For run 3 the owner's `oos_raw_output.txt` should be
-pushed as `results/oos_validate_run3_raw.txt`; until it is, "same frozen
-bars" rests on the cache manifest, not on this run's own print.
+`results/oos_validate_run3_raw.txt` is the backtest's full output for run
+3. Its fingerprint line:
+
+```
+data: v2-38fc8d83a7275823  (13 series, 13 cached / 0 fetched, oldest 56d)
+```
+
+Thirteen series (the 12 names and SPY), every one from the cache, the
+oldest 56 days old on 2026-10-28, i.e. fetched 2026-09-02, the day of run
+2. So run 2 and run 3 read the same bars; the movement between them is
+code, as the section above assumed from the manifest. Bars tested:
+43,024. The regime filter blocked 3,857 bars (28.1 % of the eligible
+ones).
+
+The fill tally: **92 of 579 trades had a level gapped through, 61 stops
+and 31 targets filled at the open.** One trade in six, the same share the
+record's 10-year re-run found. Sixty-one stops filled beyond −1 R are the
+mechanism behind most of the −0.09 R move from run 2, which filled every
+one of them at the stop. The 31 gapped targets go the other way (a better
+fill than the target) and are already in the number.
+
+From this run on, `oos_validate.py` prints both lines in its summary and
+records them in the ledger entry, so the raw file no longer has to be
+pushed separately.

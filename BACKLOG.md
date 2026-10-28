@@ -2096,9 +2096,10 @@ basket record, both forward from the next post-close pass.
 selector, shared regime minimum, four regime states.
 
 **OOS reproduction run 2026-10-28** (item 36, `results/oos_validate_run3.md`):
-FAIL unchanged, −0.112 R on 579 trades; the owner's `oos_raw_output.txt`
-(fingerprint and fill tally) is still to be pushed as
-`results/oos_validate_run3_raw.txt`.
+FAIL unchanged, −0.112 R on 579 trades; the raw output
+(`results/oos_validate_run3_raw.txt`) confirms the frozen 09-02 bars
+(13 cached / 0 fetched) and 92 of 579 trades gapped through a level (61
+stops filled at the open), the mechanism behind the move from run 2.
 
 **Still pending, in blocking order:** the rest of BACKLOG 36 group B (research engines: warm-up discontinuity,
 execution bar on missing volume, option clock by calendar dates, spread
