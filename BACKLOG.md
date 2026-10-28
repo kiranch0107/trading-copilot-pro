@@ -1903,8 +1903,11 @@ into its own list and returns it only whole (N08). Guards falsified.
 finding held; `OPT_WIN_RATE` 0.249 → 0.251 and both sweep tables are run
 2's, pinned to the run-2 files by `check_option_iv_single_source`; the
 seven caveated files now point at run 2; `option_backtest.py` prints the
-bar-cache fingerprint from now on (run 1 and run 2 read 393 vs 398 trades
-and cannot prove they read the same bars).
+bar-cache fingerprint from now on. The 393-vs-398 question was settled by
+the cache manifest the same day: run 2 read the frozen 2026-09-10 bars (as
+the 09-10 sweep did), run 1 of 10-08 was a live fetch a month later at both
+ends; the clean same-bars comparison (09-10 vs run 2) moves win rates by at
+most 0.5 points and no sign, so the fix was small and every finding holds.
 
 **Group 4 done 2026-10-19.** `journal_store.close_position` removes the
 position only after the journal row's durable write succeeded and returns
