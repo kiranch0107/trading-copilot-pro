@@ -447,6 +447,18 @@ def long_levels(df, price: float, atr: float, params) -> tuple[float, float, flo
     return entry, stop, target
 
 
+def gate_adx(adx_raw: float, adx_min: float) -> bool:
+    """ADX >= adx_min, compared UNROUNDED (amendment 2026-10-28 E). The
+    rounded value is for display only: 34.96 used to pass a 35 threshold."""
+    return float(adx_raw) >= float(adx_min)
+
+
+def gate_rr(rr_raw: float, rr_min: float) -> bool:
+    """R:R >= rr_min on the cent-rounded levels, compared UNROUNDED
+    (amendment 2026-10-28 E): 0.996 used to pass a 1.0 threshold."""
+    return float(rr_raw) >= float(rr_min)
+
+
 def evaluate(df: pd.DataFrame,
              ticker: str,
              params: SignalParams = DEFAULTS,
@@ -521,9 +533,9 @@ def evaluate(df: pd.DataFrame,
     # ── Four enhancement filters ──
     filters: dict[str, dict] = {}
 
-    adx_val = adx_value if adx_value is not None else float(latest.get("ADX", 0) or 0)
-    adx_val = round(adx_val, 1)
-    adx_ok = adx_val >= params.adx_min
+    adx_raw = float(adx_value if adx_value is not None else (latest.get("ADX", 0) or 0))
+    adx_val = round(adx_raw, 1)                 # display; the gate reads adx_raw
+    adx_ok = gate_adx(adx_raw, params.adx_min)
     filters["ADX Trend Strength"] = {
         "pass": adx_ok,
         "detail": f"ADX {adx_val} {'>=' if adx_ok else '<'} {params.adx_min:g} threshold"}
@@ -594,8 +606,9 @@ def evaluate(df: pd.DataFrame,
             "filters": filters, "filters_pass": n_pass, "filters_total": n_total,
         }
 
-    rr = round(abs(target - entry) / risk, 2)
-    if rr < params.min_rr:
+    rr_raw = abs(target - entry) / risk          # the levels are cent-rounded; the ratio is not
+    rr = round(rr_raw, 2)                        # display; the gates read rr_raw
+    if not gate_rr(rr_raw, params.min_rr):
         return {
             "blocked": True, "block_reason": "rr",
             "reason": f"R:R {rr} below the {params.min_rr:g} minimum",
@@ -603,15 +616,16 @@ def evaluate(df: pd.DataFrame,
             "trend": trend, "strength": strength, "price": round(price, 2),
             "entry": entry, "stop": stop, "target": target, "rr": rr,
             "filters": filters, "filters_pass": n_pass, "filters_total": n_total,
-            "rsi": round(rsi, 1), "adx": adx_val,
+            "rsi": round(rsi, 1), "adx": adx_val, "rr_raw": rr_raw, "adx_raw": adx_raw,
         }
 
-    high_quality = (rr >= params.hq_min_rr and strength == "Strong" and all_pass)
+    high_quality = (gate_rr(rr_raw, params.hq_min_rr) and strength == "Strong" and all_pass)
 
     return {
         "blocked": False, "ticker": ticker, "price": round(price, 2),
         "trend": trend, "strength": strength, "entry": entry, "stop": stop,
         "target": target, "rr": rr, "rsi": round(rsi, 1), "adx": adx_val,
+        "rr_raw": rr_raw, "adx_raw": adx_raw,
         "atr": round(atr, 2), "ema20": round(ema20, 2), "ema50": round(ema50, 2),
         "volume": volume, "vol_avg": vol_avg,
         "vol_ratio": round(volume / vol_avg, 2) if vol_avg else 0,
@@ -762,6 +776,21 @@ def selftest() -> int:
     assert r["high_quality"] is False
     print(f"low ADX                   : filter fails, high_quality="
           f"{r['high_quality']}")
+
+    # UNROUNDED GATES (amendment 2026-10-28 E): 34.96 is below 35, 0.996 is
+    # below 1.0; the displayed values are still rounded.
+    r = evaluate(_frame(), "TEST", adx_value=34.96, spy_regime={"regime": "Bullish"},
+                 weekly_trend="Bullish")
+    assert r["filters"]["ADX Trend Strength"]["pass"] is False and r["high_quality"] is False \
+        and r["adx"] == 35.0 and abs(r["adx_raw"] - 34.96) < 1e-12, (
+        r["filters"]["ADX Trend Strength"], r["adx"], "34.96 must fail a 35 gate while displaying 35.0")
+    r = evaluate(_frame(), "TEST", adx_value=35.0, spy_regime={"regime": "Bullish"},
+                 weekly_trend="Bullish")
+    assert r["filters"]["ADX Trend Strength"]["pass"] is True
+    assert gate_rr(0.996, 1.0) is False and gate_rr(1.0, 1.0) is True and gate_rr(0.4999, 0.5) is False
+    assert gate_adx(34.96, 35) is False and gate_adx(35.0, 35) is True
+    assert "rr_raw" in r and abs(round(r["rr_raw"], 2) - r["rr"]) < 1e-9, "rr is the rounded display of rr_raw"
+    print("unrounded gates           : 34.96 fails ADX 35, 0.996 fails R:R 1.0; display stays rounded")
 
     # THE BUG THAT CAUSED THIS: low volume must block at the base condition.
     # The scanner had no volume gate at all, so it fired where the app did not.

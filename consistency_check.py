@@ -2583,6 +2583,34 @@ def check_control_arm_wired() -> None:
     print("  one control per taken row in both recorders; graded with its signal; never taken")
 
 
+def check_gates_compare_unrounded() -> None:
+    """
+    Amendment 2026-10-28 E: the ADX and R:R gates compare UNROUNDED values in
+    the one evaluate() every path shares; the rounded fields are display. A
+    comparison on a rounded value let 34.96 pass 35 and 0.996 pass 1.0
+    (external review 2026-10-20). The scan config names the precision so the
+    fingerprint moved once; the app's own ADX gate already compared raw.
+    """
+    import signal_core as sc
+    import scanner
+    src = Path("signal_core.py").read_text()
+    body = src[src.find("def evaluate("):src.find("def _norm_trend(") if src.find("def _norm_trend(") > src.find("def evaluate(") else len(src)]
+    assert "adx_ok = gate_adx(adx_raw, params.adx_min)" in body, "the ADX filter must read the raw value through gate_adx()"
+    assert "if not gate_rr(rr_raw, params.min_rr):" in body, "the min R:R gate must read rr_raw through gate_rr()"
+    assert "gate_rr(rr_raw, params.hq_min_rr)" in body, "the HQ R:R leg must read rr_raw through gate_rr()"
+    assert "adx_val >= params.adx_min" not in body and "rr < params.min_rr" not in body \
+        and "rr >= params.hq_min_rr" not in body, "a gate still compares a rounded value"
+    assert sc.gate_adx(34.96, 35) is False and sc.gate_rr(0.996, 1.0) is False
+    assert scanner._scan_cfg().get("gate_precision") == "unrounded", \
+        "the scan config must name the gate precision (it is in the fingerprint)"
+    sc_src = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
+    assert 'sc.gate_rr(r.get("rr_raw"' in sc_src, "the scanner's hq_fail leg must read rr_raw"
+    app = Path("app.py").read_text(encoding="utf-8", errors="replace")
+    assert "return adx_val >= ADX_MIN, round(adx_val, 1)" in app, \
+        "app.py's own ADX gate must compare the raw value and round only for display"
+    print("  ADX and R:R gates compare raw values in evaluate(), the scanner's hq_fail and the app")
+
+
 def check_intraday_rules_match_preregistration() -> None:
     """
     intraday_rules.py's constants are the numbers its pre-registration fixed.
@@ -2892,6 +2920,7 @@ CHECKS = [
     ("IV snapshot: one writer, committed, post-close", check_iv_snapshot_single_writer_and_committed),
     ("RS basket: one writer, committed, post-close", check_basket_log_single_writer_and_committed),
     ("control arm: one per taken row, graded",      check_control_arm_wired),
+    ("gates compare unrounded values",             check_gates_compare_unrounded),
     ("intraday rules match their pre-registration", check_intraday_rules_match_preregistration),
     ("Phase 2 paper record isolated, one writer",   check_daytrade_paper_isolated),
     ("pool bucket wired, capped, kept apart",       check_pool_bucket_wired),

@@ -1980,10 +1980,16 @@ volume, option clock by calendar dates and end-of-sample trades marked
 open, spread maturity, portfolio chronology. **Open, group C (app
 paths):** partial batch retry, contract selection divergence, regime
 minimum history shared with the backtest, macro status wording.
-**Owner's decision:** unrounded gate comparisons (ADX, R:R) are a rule
-change that moves what the record records and need a dated declaration
-before their first row. The three policy items (dry-run rows, next-open
-R:R, opening-target precedence) stay policy.
+**Owner's decision, MADE 2026-10-28 ("go with the unrounded-gate
+declaration as well"):** amendment 2026-10-28 (E) in
+`results/forward_record_preregistration.md`. `signal_core.gate_adx` /
+`gate_rr` compare the raw values at the ADX filter, the min-R:R gate and
+the HQ R:R leg; `rr_raw` / `adx_raw` ride on the row; `_scan_cfg` names
+`gate_precision: unrounded`, so the fingerprint moved once to
+`ba6b3b46afa6`, declared in `KNOWN_CONFIGS` with the magnitude (5 of 469
+rows sat on a threshold, all in the HQ leg). A 52nd check pins it. The
+three policy items (dry-run rows, next-open R:R, opening-target
+precedence) stay policy.
 
 ---
 
@@ -2059,9 +2065,12 @@ moved, caveats replaced with pointers to run 2.
 **A and B declared 2026-10-28** (item 34): the control arm and the RS
 basket record, both forward from the next post-close pass.
 
-**Still pending, in blocking order:** the unrounded-gate
-declaration — the owner's, since each moves what the record records;
-group B (the option re-runs are done); group C app paths;
+**Unrounded gates declared 2026-10-28** (amendment E; item 36).
+
+**Still pending, in blocking order:** the rest of BACKLOG 36 group B
+(research engines: warm-up discontinuity, execution bar on missing
+volume, option clock by calendar dates, spread maturity, portfolio
+chronology), each a re-run of a committed result; group C app paths;
 journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
 the 11-09/11-10 post-close logs (F5).
 
@@ -2069,8 +2078,8 @@ the 11-09/11-10 post-close logs (F5).
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 51 cross-module
-  invariants (51 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 52 cross-module
+  invariants (52 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip
