@@ -868,8 +868,8 @@ def analyze(df: pd.DataFrame, ticker: str,
     _hq_fail = []
     if not sc.gate_rr(r.get("rr_raw", r.get("rr") or 0), PARAMS.hq_min_rr):
         _hq_fail.append(f"rr<{PARAMS.hq_min_rr:g}")
-    if r.get("strength") != "Strong":
-        _hq_fail.append("not Strong")
+    if PARAMS.hq_requires_strong and r.get("strength") != "Strong":
+        _hq_fail.append("not Strong")          # a leg only while the tier requires the tag (not since amendment G)
     _hq_fail += [n for n, f in (r.get("filters") or {}).items()
                  if not (f or {}).get("pass")]
     _setup["hq_fail"] = _hq_fail
@@ -1049,7 +1049,10 @@ def _scan_cfg() -> dict:
             # Amendment 2026-10-28 E: the ADX and R:R gates compare unrounded
             # values. Named here so the fingerprint moved once, declared in
             # forward_log.KNOWN_CONFIGS with the magnitude of the change.
-            "gate_precision": "unrounded"}
+            "gate_precision": "unrounded",
+            # Amendment 2026-10-28 G: the HQ tier no longer requires the
+            # "Strong" tag. Named so the fingerprint moved once more.
+            "hq_requires_strong": PARAMS.hq_requires_strong}
 
 
 def _record_alert(tk: str, r: dict, bucket: str, delivered: bool, header: str,
@@ -1888,9 +1891,9 @@ def _selftest_body() -> int:
             f"a long base signal that fails the HQ tier must be TAKEN with "
             f"hq=False, got {_byt['ZC']['decision']}/{_byt['ZC'].get('hq')}. "
             f"Gating the record on the tier is what starved it (BACKLOG 24)")
-        assert _byt["ZC"]["setup"]["hq_fail"] == ["rr<1", "not Strong",
-                                                   "ADX Trend Strength"], \
-            _byt["ZC"]["setup"]["hq_fail"]
+        assert _byt["ZC"]["setup"]["hq_fail"] == ["rr<1", "ADX Trend Strength"], \
+            (_byt["ZC"]["setup"]["hq_fail"], "'not Strong' is not a leg since amendment G; the tag is recorded beside it")
+        assert _byt["ZC"]["setup"]["strength"] == "Normal", "the tag is still recorded"
         assert _ret["ZC"] is None, \
             "a base signal below the tier must still NOT produce an alert payload"
         assert _byt["ZA"]["decision"] == "taken" and _byt["ZA"]["hq"] is True \
@@ -2452,7 +2455,7 @@ def _selftest_body() -> int:
     # fails until the new hash is declared there and in the pre-registration,
     # which is the order the record requires.
     _fp_now = forward_log.config_fingerprint(_scan_cfg())
-    assert _fp_now == "81fd95d84cfc" and _fp_now in forward_log.KNOWN_CONFIGS, (
+    assert _fp_now == "4ddd12a3095f" and _fp_now in forward_log.KNOWN_CONFIGS, (
         _fp_now, _scan_cfg(), "undeclared config fingerprint: declare it before the first row")
     print(f"config fingerprint      : {_fp_now}, declared in forward_log.KNOWN_CONFIGS")
 
