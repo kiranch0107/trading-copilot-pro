@@ -46,6 +46,21 @@ from pathlib import Path
 # describes exactly this failure. Failing CI ~6 weeks out is the cheap warning.
 CALENDAR_MIN_RUNWAY_DAYS = 45
 
+# THE TWO PERSONAL ACCESS TOKENS EXPIRE IN THE SAME WEEK (BACKLOG, scheduler
+# item, "FORCING FUNCTION — TWO PATs"). When the dispatch token dies every
+# cron-job.org dispatch is refused and the scanner falls back to GitHub's own
+# schedule, which fires 40-110 minutes late against a two-hour post-close
+# window; when the app token dies every app write fails (the 2026-10-13
+# incident). Nothing enforced the rotation the way the calendar check above
+# enforces the holiday list, so this does: it fails TOKEN_MIN_RUNWAY_DAYS
+# before the earlier expiry. Rotating a token = replacing the secret AND
+# moving its date here, in one commit that says so.
+TOKEN_EXPIRY = {
+    "app PAT (Streamlit secret GITHUB_TOKEN; Contents read/write)": "2027-01-05",
+    "cron-job.org dispatch PAT (workflow_dispatch on scanner.yml)":  "2027-01-06",
+}
+TOKEN_MIN_RUNWAY_DAYS = 21
+
 # The four Python modules plus the inline copy in the scanner workflow. Each
 # entry is (path, holidays-anchor, half-days-anchor).
 CALENDAR_SOURCES = [
@@ -132,6 +147,23 @@ def check_calendar_runway(today: date | None = None) -> None:
             f"silently analyses day-stale data.\n"
             f"  Add next year's NYSE holidays and 1:00pm early closes to all "
             f"{len(CALENDAR_SOURCES)} copies listed in CALENDAR_SOURCES.")
+
+
+def check_token_runway(today: date | None = None) -> None:
+    today = today or date.today()
+    for name, exp in TOKEN_EXPIRY.items():
+        d = datetime.strptime(exp, "%Y-%m-%d").date()
+        runway = (d - today).days
+        print(f"  {name}: expires {exp} — {runway} days of runway "
+              f"(minimum {TOKEN_MIN_RUNWAY_DAYS})")
+        if runway < TOKEN_MIN_RUNWAY_DAYS:
+            raise AssertionError(
+                f"The {name} expires {exp}, {runway} days away.\n"
+                f"  Rotate it now (both tokens are rotated in one sitting; see "
+                f"BACKLOG 'FORCING FUNCTION — TWO PATs'), then move its date in "
+                f"TOKEN_EXPIRY to the new expiry in the same commit. A dead "
+                f"dispatch token leaves the scanner on GitHub's late schedule; a "
+                f"dead app token makes every app write fail.")
 
 
 # ---------------------------------------------------------------------------
@@ -2727,9 +2759,28 @@ def check_yahoo_downloads_raw_prices() -> None:
     print(f"  every yf.download() in the live paths ({calls} calls) names auto_adjust=False")
 
 
+def check_bar_validator_wired() -> None:
+    """
+    BACKLOG 36 group A: signal_core.validate_bars() is the one validator, and
+    it has to be CALLED. scanner.get_data() refuses a frame with the reason
+    before anything is scanned; bars_for_grading() refuses it before the
+    grader sees a NaN low. A validator nobody calls validates nothing.
+    """
+    src = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
+    for fn in ("def get_data(", "def bars_for_grading("):
+        i = src.index(fn)
+        j = src.find("\ndef ", i + 1)            # this function's body only, not the next one's
+        body = src[i:j if j > 0 else len(src)]
+        assert "sc.validate_bars(" in body, (
+            f"scanner.{fn.split('(')[0][4:]}() no longer calls signal_core.validate_bars(); "
+            f"a NaN close or a duplicated date reaches the scan or the grader unrefused")
+    print("  get_data() and bars_for_grading() both run signal_core.validate_bars()")
+
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
+    ("access tokens have runway left",             check_token_runway),
     ("compute() agrees across modules",            check_compute_agrees),
     ("app.py compute() indicator set intact",      check_app_compute_source),
     ("app.py defaults derive from signal_core",    check_app_defaults_derived),
@@ -2775,6 +2826,7 @@ CHECKS = [
     ("BACKLOG coverage table is current",          check_backlog_coverage_table_current),
     ("duplicated constants agree",                 check_duplicated_constants_agree),
     ("every production module imports",            check_modules_import),
+    ("bar validator runs on every live frame",    check_bar_validator_wired),
 ]
 
 

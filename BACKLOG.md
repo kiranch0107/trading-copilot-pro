@@ -1924,7 +1924,7 @@ repo journal's read at save time; a file loaded as absent must be created,
 and refuses if another writer created it since (`SHA_ABSENT`). Guards
 falsified. Response file § "Third pass".
 
-**Open, group A (small, mechanical):** one validator for finite OHLC,
+**Group A DONE 2026-10-28 (owner: "fix these"; see item 37).** ~~Open, group A (small, mechanical):~~ one validator for finite OHLC,
 positive prices, sorted unique sessions; finite R before `record_outcome`;
 finite spot/strike before an IV row; finite OHLC in the paper grader's
 `session_coverage`; `0 < bid <= ask` and integer contracts in
@@ -1974,18 +1974,47 @@ the first time. (F6) Both PATs expire 2027-01-05/06 with no consistency
 check enforcing the rotation, unlike the calendar. (F7) `universe-snapshot.yml`
 comment says Monday, cron is Sunday.
 
-**Pending, in blocking order:** BACKLOG 34 decisions (C, episodes reading,
-D); BACKLOG 36 group A and the unrounded-gate declaration; F3, F6, F2 as
-small code; group B and the option re-runs (owner's laptop); group C and
-journal hygiene; BACKLOG 33 and 23 decisions; read the 11-09/11-10
-post-close logs.
+**Fixed 2026-10-28 (owner: "fix these").** F2: `forward_log.episodes()`
+reads the record by the pre-registered unit (consecutive bars on one
+ticker and direction, gap ≤ 4 calendar days, first row graded);
+`summary()["by_episode"]` and `report()` print it under each bucket's row
+line, the gate line counts the live bucket's settled episodes, and an
+empty HQ tier reads "no HQ rows" instead of NaN. Reading change only; no
+amendment. F3: `resolve_signal` voids `no_bars` when the window has not
+closed and the last fetched bar is older than `GRADE_NO_BARS_DAYS` (a
+delisted, acquired or halted name), with the bar count and last bar in
+the detail; the declared reason applied to the case its text describes.
+F4: `journal_store.open_option_position` refuses `source="signal"` without
+a `signal_key`, and both app forms show the refusal; the 15 existing rows
+are untouched. F6: `consistency_check.check_token_runway` fails from
+2026-12-16 until both expiry dates in `TOKEN_EXPIRY` are moved by the
+rotation commit. F7: the snapshot workflow comment says Sunday. BACKLOG 36
+group A: `signal_core.validate_bars` (finite, positive, low ≤ high, dated,
+unique, ordered) runs in `scanner.get_data` (ticker refused with the
+reason, counted failed) and `bars_for_grading` (grade refused, counted as
+a failed fetch), enforced by a 49th check; `drop_unsettled` drops a bar
+dated after today whatever the clock or policy; `record_outcome` refuses
+a non-finite R; `iv_snapshot.record` refuses a non-finite spot or strike;
+the paper grader holds a session with a non-finite or non-positive bar
+(`bad_bar`); `check_option_cost` refuses fractional contracts; the chain
+treats ask < bid as unquoted in both the diagnostic and the selection;
+position, skip and alert ids carry a 16-hex-character suffix. Every guard
+falsified. Readings after the change (not results): live 18 episodes, 15
+settled, −0.196 R; pool 42 / 26, −0.332; pullback 9 / 4, −0.517.
+
+**Still pending, in blocking order:** BACKLOG 34 decisions (amendment C
+naming the pool as the population, D re-posing H1) and the unrounded-gate
+declaration — the owner's, since each moves what the record records;
+group B and the option re-runs (owner's laptop); group C app paths;
+journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
+the 11-09/11-10 post-close logs (F5).
 
 ---
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 47 cross-module
-  invariants (47 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 49 cross-module
+  invariants (49 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip

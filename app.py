@@ -158,7 +158,23 @@ def signal_bar_input(key: str, ticker: str, right: str) -> str | None:
     if not _tkr or _d is None:
         return None
     _trend = "Bullish" if str(right).upper().startswith("C") else "Bearish"
-    return forward_log.signal_key(_tkr, _trend, _d)
+    _key = forward_log.signal_key(_tkr, _trend, _d)
+    # The key must NAME A RECORDED SIGNAL or the outcome never attaches
+    # (progress review 2026-10-26, F4). The date input defaults to today,
+    # which is rarely the signal bar. Read-only look-up of the copy of the
+    # forward log this deployment carries; a warning, not a refusal, since
+    # that copy can lag the scanner's by a push.
+    try:
+        _hit = any(r.get("kind") == "signal" and r.get("key") == _key
+                   and forward_log.counts_as_taken(r)
+                   for r in forward_log.read_all())
+    except Exception:  # noqa: BLE001 — an unreadable log is not this form's problem
+        _hit = True
+    if not _hit:
+        st.warning(f"No taken signal `{_key}` in this deployment's forward log. "
+                   f"Check the 'Signal bar:' date in the alert; a key that names "
+                   f"no row leaves the trade's outcome unattached.")
+    return _key
 
 
 def trade_time_input(key: str, label: str) -> str:
@@ -2530,18 +2546,24 @@ with TAB_POSITIONS:
         _o_ok = size_gate(o_prem, o_qty, "op")
         if _o_ok and st.button("📍 Start monitoring this contract",
                                type="primary", key="op_save"):
-            open_option_position(
-                mode=_o_mode, source=_o_src, signal_key=_o_key, traded_at=_o_traded,
-                ticker=o_tkr, right=o_right, strike=o_strike,
-                expiry=o_expiry.strftime("%Y-%m-%d"), contracts=o_qty,
-                entry_premium=o_prem,
-                rules={"tp_pct": rule_tp, "sl_pct": rule_sl,
-                       "dte_exit": rule_dte, "max_hold_bars": rule_hold,
-                       "invalidate_ema": rule_thesis},
-                notes=o_notes,
-                entry_features=capture_entry_features(o_tkr))
-            st.success(f"Now monitoring {o_tkr} {o_expiry} ${o_strike:g} {o_right}.")
-            st.rerun()
+            try:
+                open_option_position(
+                    mode=_o_mode, source=_o_src, signal_key=_o_key, traded_at=_o_traded,
+                    ticker=o_tkr, right=o_right, strike=o_strike,
+                    expiry=o_expiry.strftime("%Y-%m-%d"), contracts=o_qty,
+                    entry_premium=o_prem,
+                    rules={"tp_pct": rule_tp, "sl_pct": rule_sl,
+                           "dte_exit": rule_dte, "max_hold_bars": rule_hold,
+                           "invalidate_ema": rule_thesis},
+                    notes=o_notes,
+                    entry_features=capture_entry_features(o_tkr))
+            except ValueError as _ve:
+                # A signal trade without its signal bar is refused by
+                # journal_store (F4); say so and keep the form.
+                st.error(f"Not logged: {_ve}")
+            else:
+                st.success(f"Now monitoring {o_tkr} {o_expiry} ${o_strike:g} {o_right}.")
+                st.rerun()
     else:
         st.caption("Fill in underlying, strike and premium to begin monitoring.")
 

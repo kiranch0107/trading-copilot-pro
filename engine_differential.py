@@ -59,7 +59,11 @@ def compare_frame(df: pd.DataFrame, n_setups: int, rng: random.Random,
     bars = bars_rows(d)
     dates = [str(x.date()) for x in d.index]
     cfg = {"slippage_bps": fl.GRADE_SLIPPAGE_BPS, "commission": 0.0, "max_hold": fl.GRADE_MAX_HOLD}
-    far = dt.date(2099, 1, 1)
+    # "Today" is the day after the frame's last bar: the grader's dead-name
+    # rule (forward_log F3, 2026-10-28) voids a window whose last bar is
+    # GRADE_NO_BARS_DAYS stale, so a far-future clock would void every
+    # end-of-frame setup the engine still reports as settled.
+    far = d.index[-1].date() + dt.timedelta(days=1)
     out = {"compared": 0, "void_both": 0, "unsettled_both": 0, "mismatches": []}
     hi, lo, cl = d["High"].to_numpy(float), d["Low"].to_numpy(float), d["Close"].to_numpy(float)
     for _ in range(n_setups):

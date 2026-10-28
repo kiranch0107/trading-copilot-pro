@@ -245,7 +245,10 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
         opts["spread"] = opts["ask"] - opts["bid"]
         opts["mid"]    = (opts["ask"] + opts["bid"]) / 2
 
-        _live = opts[(opts["mid"] > 0) & (opts["bid"] > 0)]
+        # An inverted quote (ask below bid) is a stale or crossed print, not a
+        # market; its "spread" is negative and would pass any ceiling
+        # (BACKLOG 36 group A).
+        _live = opts[(opts["mid"] > 0) & (opts["bid"] > 0) & (opts["ask"] >= opts["bid"])]
         diag["had_bid"] += len(_live)
         _vol = _live[_live["volume"] > 0]
         diag["had_volume"] += len(_vol)
@@ -282,6 +285,7 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
         valid = opts[
             (opts["mid"] > 0) &
             (opts["bid"] > 0) &
+            (opts["ask"] >= opts["bid"]) &          # a crossed quote is no quote
             (opts["volume"] > 0) &
             # Was 0.15. Single-sourced from risk_params.MAX_OPTION_SPREAD_PCT.
             #
@@ -473,6 +477,13 @@ def selftest() -> int:
         "tightest — it was never eligible")
     assert "open interest" in r2["error"]
     print("gating order      : no-OI strikes never surface as 'tightest'")
+
+    # ── an inverted quote (ask < bid) is not a live quote ──
+    inv = _pick(_chain([(100, 1.20, 1.00, 50, 50)]))
+    assert "error" in inv and inv["diag"]["had_bid"] == 0, (
+        "ask 1.00 under bid 1.20 is a crossed print with a negative spread; it "
+        "must never count as quoted, let alone pass the ceiling", inv)
+    print("inverted quote    : ask < bid is refused as unquoted")
 
     # ── PUT side reports PUT, not CALL ──
     bear = _pick(_chain([(100, 1.00, 1.40, 10, 10)]), trend="Bearish")

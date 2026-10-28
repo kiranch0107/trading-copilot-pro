@@ -453,7 +453,15 @@ def get_data(ticker: str) -> pd.DataFrame | None:
         logger.info("%s: Yahoo unavailable, used %s fallback", ticker, source)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    return df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+    df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+    # BACKLOG 36 group A: one validator, a refusal with its reason. A frame
+    # with a NaN close, a negative price or a duplicated date is not scanned
+    # and the ticker counts as failed, which run() surfaces.
+    _why = sc.validate_bars(df)
+    if _why:
+        logger.warning("%s — bars refused: %s", ticker, _why)
+        return None
+    return df
 
 
 def bars_for_grading(df: pd.DataFrame, now: datetime | None = None) -> list:
@@ -473,6 +481,12 @@ def bars_for_grading(df: pd.DataFrame, now: datetime | None = None) -> list:
     must stay importable anywhere), so pandas stops here.
     """
     df, _dropped = sc.drop_partial_bar(df, now=now if now is not None else datetime.now(ET))
+    _why = sc.validate_bars(df)
+    if _why:
+        # The grader must not see a NaN low (it never touches a stop) or an
+        # unordered frame; grade_open_signals() counts the raise as a failed
+        # fetch and says why (BACKLOG 36 group A).
+        raise ValueError(f"bars refused for grading: {_why}")
     out = []
     dates = sc._bar_dates(df, None)
     for d, (o, h, l, c) in zip(dates, df[["Open", "High", "Low", "Close"]].itertuples(index=False)):
@@ -2091,6 +2105,12 @@ def _selftest_body() -> int:
                          index=_pd5.DatetimeIndex(["2026-10-12", "2026-10-13", "2026-10-14"]))
     _mid = ET.localize(_dt2(2026, 10, 14, 12, 0))
     _post = ET.localize(_dt2(2026, 10, 14, 17, 0))
+    _fnan = _f5.copy(); _fnan.iloc[0, _fnan.columns.get_loc("Low")] = float("nan")
+    try:
+        bars_for_grading(_fnan, now=_mid)
+        raise AssertionError("a frame with a NaN low must be refused for grading (BACKLOG 36 group A)")
+    except ValueError as _ve:
+        assert "non-finite OHLC" in str(_ve), _ve
     assert [b["date"] for b in bars_for_grading(_f5, now=_mid)] == ["2026-10-12", "2026-10-13"], \
         "mid-session: today's forming bar must not reach the grader"
     assert [b["date"] for b in bars_for_grading(_f5, now=_post)] == \
@@ -2250,6 +2270,15 @@ def _selftest_body() -> int:
             # post-close pass; a live-bucket name that left the watchlist is
             # fetched in session, once, as before.
             _setup9 = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0}
+            # The fixture's bars end 2026-06-30, months before any real "today":
+            # with four bars after the signal and the last one that stale, the
+            # resolver would VOID LV9 as a dead name (F3, 2026-10-28) on the
+            # in-session run and the post-close fetch below would have nothing
+            # to grade. This test is about the FETCH rule, so the dead-name
+            # clock is parked for its duration; F3 has its own test in
+            # forward_log.
+            _nbd9 = forward_log.GRADE_NO_BARS_DAYS
+            forward_log.GRADE_NO_BARS_DAYS = 10 ** 6
             forward_log.record_signal("LV9", "Bullish", _setup9, "taken", "", {"adx_min": 35},
                                       bar_date=str(_bars4[-5].date()), hq=False)
             forward_log.record_signal("P9", "Bullish", _setup9, "taken", "", {"adx_min": 35},
@@ -2279,6 +2308,7 @@ def _selftest_body() -> int:
             _fetched.clear()
             _g["is_post_close_window"] = lambda now=None: True
             run(_ns(force=False, record_only=True))
+            forward_log.GRADE_NO_BARS_DAYS = _nbd9
             assert "P9" in _fetched and "LV9" in _fetched, (_fetched, "post-close grades both buckets")
             # --force-pool RE-RUNS IT: the five already sent sit inside the cooldown,
             # so the sixth (P3, beyond the cap the first time) is the only alert.

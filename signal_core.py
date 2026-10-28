@@ -47,6 +47,7 @@ from zoneinfo import ZoneInfo
 
 try:
     import pandas as pd
+    import numpy as np
 except ImportError:
     raise SystemExit("Missing pandas. Run: pip install pandas")
 
@@ -222,6 +223,41 @@ def _bar_dates(df: pd.DataFrame, date_col: str | None):
     return pd.DatetimeIndex(idx).normalize()
 
 
+def validate_bars(df: pd.DataFrame, date_col: str | None = None) -> str | None:
+    """
+    None when a daily OHLC frame is usable, else one reason why not. BACKLOG
+    36 group A, the one validator every live path runs: scanner.get_data()
+    refuses the ticker with the reason, bars_for_grading() refuses the grade.
+    A refusal, never a fill with zero: a NaN close that reached evaluate()
+    would fail every comparison silently and read as "no signal"; a NaN low
+    in the grader would never touch a stop.
+    """
+    cols = ("Open", "High", "Low", "Close")
+    if df is None or len(df) == 0:
+        return "empty frame"
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        return f"missing columns {', '.join(missing)}"
+    try:
+        vals = df[list(cols)].to_numpy(dtype=float)
+    except (TypeError, ValueError):
+        return "non-numeric OHLC"
+    if not np.isfinite(vals).all():
+        return "non-finite OHLC"
+    if (vals <= 0).any():
+        return "non-positive price"
+    if (vals[:, 2] > vals[:, 1]).any():
+        return "low above high"
+    dates = _bar_dates(df, date_col)
+    if dates.isna().any():
+        return "undated bar"
+    if dates.duplicated().any():
+        return "duplicate bar dates"
+    if not dates.is_monotonic_increasing:
+        return "bars out of order"
+    return None
+
+
 def drop_unsettled(df: pd.DataFrame,
                    *,
                    policy: str = DROP_UNTIL_CLOSE,
@@ -241,8 +277,6 @@ def drop_unsettled(df: pd.DataFrame,
     if df is None or len(df) == 0:
         return df, 0
     now = now if now is not None else datetime.now(_ET)
-    if policy == DROP_UNTIL_CLOSE and session_closed(now):
-        return df, 0            # today's bar is settled; it is the best data there is
 
     has_col = bool(date_col) and date_col in getattr(df, "columns", ())
     if not has_col and not isinstance(getattr(df, "index", None), pd.DatetimeIndex):
@@ -252,7 +286,15 @@ def drop_unsettled(df: pd.DataFrame,
             return df, 0        # undated frame — do not guess which row is today
 
     dates = _bar_dates(df, date_col if has_col else None)
-    keep = dates < pd.Timestamp(now.date())
+    today = pd.Timestamp(now.date())
+    if policy == DROP_UNTIL_CLOSE and session_closed(now):
+        # Today's bar is settled; it is the best data there is. A bar dated
+        # AFTER today is never data, whatever the clock says (BACKLOG 36
+        # group A): a provider glitch or a wrong container clock must not
+        # put a bar from the future at the end of the frame.
+        keep = ~(dates > today)
+    else:
+        keep = dates < today
     dropped = int((~keep).sum())
     if not dropped:
         return df, 0
@@ -640,9 +682,13 @@ def selftest() -> int:
     assert not dropped2 and len(d2) == len(df), \
         "after the close today's bar is settled and is the freshest real data"
 
-    sat = _dt(2026, 8, 22, 12, 0)
+    sat = _dt(2026, 8, 29, 12, 0)             # the Saturday AFTER the last bar
     assert not drop_partial_bar(df, now=sat)[1], \
         "a Saturday reference day has no session in progress"
+    # A Saturday BEFORE the frame's last bars makes those bars future-dated,
+    # and a future-dated bar is never data (BACKLOG 36 group A).
+    assert drop_partial_bar(df, now=_dt(2026, 8, 22, 12, 0))[1], \
+        "bars dated after the reference day must go, whatever the weekday"
 
     # DROP_ALWAYS is the reproducible policy: the close does not rescue the bar.
     _a1, _n1 = drop_unsettled(df, policy=DROP_ALWAYS, now=after)
@@ -665,6 +711,34 @@ def selftest() -> int:
     assert drop_unsettled(_bad, policy=DROP_ALWAYS, now=after)[1] == 0, \
         "an undated frame must be returned untouched, not trimmed by position"
     print("frame shapes              : index or Date column; undated untouched")
+
+    # A bar dated AFTER today is never data, whatever the clock (BACKLOG 36
+    # group A): after the close UNTIL_CLOSE keeps today's bar and still drops
+    # tomorrow's; ALWAYS drops both.
+    _fut = pd.concat([df, df.iloc[[-1]].set_index(df.index[-1:] + pd.Timedelta(days=1))])
+    _f1, _fn1 = drop_unsettled(_fut, policy=DROP_UNTIL_CLOSE, now=after)
+    assert _fn1 == 1 and _f1.index[-1] == df.index[-1], \
+        "a future-dated bar must be dropped after the close, today's kept"
+    assert drop_unsettled(_fut, policy=DROP_ALWAYS, now=after)[1] == 2
+    assert drop_unsettled(_fut, policy=DROP_UNTIL_CLOSE, now=mid)[1] == 2, \
+        "mid-session both today's stub and the future bar go"
+    print("future bars               : dropped whatever the clock or policy")
+
+    # validate_bars: one reason per defect, None when clean.
+    assert validate_bars(df) is None, validate_bars(df)
+    _v = df.copy(); _v.iloc[3, _v.columns.get_loc("Close")] = float("nan")
+    assert validate_bars(_v) == "non-finite OHLC", validate_bars(_v)
+    _v = df.copy(); _v.iloc[3, _v.columns.get_loc("Low")] = -1.0
+    assert validate_bars(_v) == "non-positive price", validate_bars(_v)
+    _v = df.copy(); _v.iloc[3, _v.columns.get_loc("Low")] = float(_v["High"].iloc[3]) + 1.0
+    assert validate_bars(_v) == "low above high", validate_bars(_v)
+    _v = pd.concat([df, df.iloc[[2]]])
+    assert validate_bars(_v) == "duplicate bar dates", validate_bars(_v)
+    _v = df.iloc[::-1]
+    assert validate_bars(_v) == "bars out of order", validate_bars(_v)
+    assert validate_bars(df.drop(columns=["Low"])) == "missing columns Low"
+    assert validate_bars(_col, date_col="Date") is None, "a Date column is read like the index"
+    print("validate_bars             : finite, positive, low<=high, dated, unique, ordered")
 
     # session_closed() is the question, and it is NOT `not is_market_open()`.
     assert not session_closed(pre_open) and not session_closed(mid)

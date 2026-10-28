@@ -432,6 +432,16 @@ def record_outcome(ref_seq: int, outcome: str, r: float | None, basis: str,
             f"seq {ref_seq} already has a {basis} outcome. A second one would "
             f"let a result be revised after the fact, which is what "
             f"append-only is for")
+    if r is not None:
+        import math as _math
+        try:
+            _rf = float(r)
+        except (TypeError, ValueError):
+            _rf = float("nan")
+        if not _math.isfinite(_rf):
+            raise ValueError(
+                f"r={r!r} is not a finite number. A NaN or infinite R would be "
+                f"summed into a mean silently (BACKLOG 36 group A)")
     if (outcome == "void") != (r is None):
         raise ValueError(
             "a void outcome carries r=None and nothing else does; a number on "
@@ -571,6 +581,19 @@ def resolve_signal(row: dict, bars: list, today=None,
             exit_bar = (j, b); break
     if exit_rule is None:
         if len(after) < max_hold:
+            # A NAME THAT STOPPED TRADING INSIDE ITS WINDOW (progress review
+            # 2026-10-26, F3). Some bars after the signal and then none for
+            # GRADE_NO_BARS_DAYS is a delisting, an acquisition or a halt, not
+            # a window still open: the no_bars rule applies, dated from the
+            # last bar the provider has, instead of returning "unsettled" for
+            # ever and re-fetching the name on every pass.
+            last_bar = _dt.date.fromisoformat(str(after[-1]["date"])[:10])
+            if (today - last_bar).days > GRADE_NO_BARS_DAYS:
+                return {"outcome": "void", "reason": "no_bars",
+                        "detail": {"exit_rule": "void:no_bars",
+                                   "bars_after_signal": len(after),
+                                   "last_bar": after[-1]["date"],
+                                   "days_since_last_bar": (today - last_bar).days}}
             return None                                # unsettled: window open
         j, b = max_hold - 1, after[max_hold - 1]
         exit_rule, exit_px, level_px = "timeout", float(b["close"]), float(b["close"])
@@ -931,6 +954,66 @@ def _mean_r(settled: list, sigs: list, hq: bool) -> float:
     return sum(rs) / len(rs) if rs else float("nan")
 
 
+EPISODE_GAP_DAYS = 4      # a run of bars on the same (ticker, trend) is one episode
+                          # while consecutive rows are at most this many calendar
+                          # days apart: a Friday-to-Monday pair is 3, a holiday
+                          # weekend 4; anything longer is a new episode.
+
+
+def episodes(rows: list, outcomes: dict | None = None) -> list[dict]:
+    """
+    The pre-registration's unit of observation (results/forward_record_
+    preregistration.md, "The independent unit is an episode, not a row"):
+    consecutive bars on the same (ticker, trend) are ONE episode, dated at its
+    first bar, and only the first bar's row is graded. BACKLOG 34 finding 1:
+    the report counted rows under an "EPISODES" gate line, and rows flatter
+    whichever side has the longer runs (TMO logged eight in a row).
+
+    `rows` are taken signal rows (counts_as_taken). `outcomes` maps a signal
+    seq to its stop_distance outcome row. Returns one dict per episode:
+    {"seq", "ticker", "trend", "bucket", "bar_date", "rows", "r", "outcome"}
+    where `r` is the FIRST row's graded R (None while open or void).
+    """
+    import datetime as _dt
+    outcomes = outcomes or {}
+    by_key: dict = {}
+    for s in rows:
+        by_key.setdefault((bucket_of(s), s.get("ticker"), s.get("trend")), []).append(s)
+    out = []
+    for (b, tk, tr), lst in sorted(by_key.items(), key=lambda kv: (kv[0][0] or "", kv[0][1] or "", kv[0][2] or "")):
+        lst = sorted(lst, key=lambda s: str(s.get("bar_date")))
+        prev = None
+        cur = None
+        for s in lst:
+            try:
+                d = _dt.date.fromisoformat(str(s.get("bar_date"))[:10])
+            except ValueError:
+                d = None
+            new = prev is None or d is None or (d - prev).days > EPISODE_GAP_DAYS
+            prev = d
+            if new:
+                o = outcomes.get(s.get("seq"))
+                cur = {"seq": s.get("seq"), "ticker": tk, "trend": tr, "bucket": b,
+                       "bar_date": s.get("bar_date"), "rows": 1,
+                       "r": None if o is None else o.get("r"),
+                       "outcome": None if o is None else o.get("outcome")}
+                out.append(cur)
+            else:
+                cur["rows"] += 1
+    return out
+
+
+def _episode_stats(eps: list) -> dict:
+    settled = [e for e in eps if e["r"] is not None]
+    return {"episodes": len(eps), "settled": len(settled),
+            "open": sum(1 for e in eps if e["outcome"] is None),
+            "void": sum(1 for e in eps if e["outcome"] == "void"),
+            "rows": sum(e["rows"] for e in eps),
+            "mean_r": (sum(e["r"] for e in settled) / len(settled)
+                       if settled else float("nan")),
+            "wins": sum(1 for e in settled if e["r"] > 0)}
+
+
 def summary(path: Path | None = None) -> dict:
     rows = read_all(path)
     sigs = [r for r in rows if r.get("kind") == "signal"]
@@ -979,7 +1062,14 @@ def summary(path: Path | None = None) -> dict:
             "mean_r": sum(o["r"] for o in sb) / len(sb) if sb else float("nan"),
             "mean_r_hq": _mean_r(sb, tb, True), "mean_r_base": _mean_r(sb, tb, False),
         }
+    # BY EPISODE (BACKLOG 34 finding 1, read 2026-10-28). The stop-distance
+    # outcome of the FIRST row of each episode; the 349 gate counts these.
+    sd_out = {o.get("ref_seq"): o for o in outs if o.get("basis") == "stop_distance"}
+    eps = episodes(taken, sd_out)
+    by_episode = {b: _episode_stats([e for e in eps if e["bucket"] == b])
+                  for b in sorted({e["bucket"] for e in eps})}
     return {
+        "by_episode": by_episode,
         "rows": len(rows), "scans": len(scans),
         "bars_scanned": len({x.get("bar_date") for x in scans}),
         "signals": len(sigs), "taken": len(taken),
@@ -1009,21 +1099,30 @@ def report(path: Path | None = None) -> int:
           f"{s['scans']} scans, {s['alerts']} alerts ({s['alerts_delivered']} delivered)")
     print(f"  taken {s['taken']} (live bucket {s['taken_live']}: hq {s['taken_hq']}, "
           f"base {s['taken_base']})   skipped {s['skipped']}")
+    def _fmt(x):
+        return "no HQ rows" if x != x else f"{x:+.3f}"
     for b, bb in s["by_bucket"].items():
         print(f"  bucket {b:<5}: taken {bb['taken']} (hq {bb['taken_hq']})   "
               f"settled {bb['settled']} on stop distance   "
-              f"mean R hq {bb['mean_r_hq']:+.3f} / base {bb['mean_r_base']:+.3f}")
+              f"mean R hq {_fmt(bb['mean_r_hq'])} / base {_fmt(bb['mean_r_base'])}  [rows]")
+        eb = s["by_episode"].get(b)
+        if eb:
+            print(f"  {'':12}  EPISODES {eb['episodes']} ({eb['rows']} rows)   "
+                  f"settled {eb['settled']}   open {eb['open']}   void {eb['void']}   "
+                  f"mean R {_fmt(eb['mean_r'])} ({eb['wins']} wins)  <- the pre-registered unit")
     print("  by basis — the LIVE bucket only, the pre-registered reading; other buckets above")
     for basis, b in s["by_basis"].items():
         if not (b["settled"] or b["void"]):
             continue
         print(f"  {basis:14} settled {b['settled']}   void {b['void']}   "
               f"open {b['open']}   mean R {b['mean_r']:+.4f} "
-              f"(hq {b['mean_r_hq']:+.4f} / base {b['mean_r_base']:+.4f})")
+              f"(hq {_fmt(b['mean_r_hq'])} / base {_fmt(b['mean_r_base'])})  [rows]")
     if any(b["settled"] for b in s["by_basis"].values()):
+        _le = s["by_episode"].get("live", {"settled": 0})
         print(f"  NOT a result. It becomes one at 349 settled EPISODES on one")
-        print(f"  basis (results/forward_record_preregistration.md); the two")
-        print(f"  bases are different denominators and are never summed.")
+        print(f"  basis (results/forward_record_preregistration.md): the live")
+        print(f"  bucket has {_le['settled']} settled episode(s). The two bases")
+        print(f"  are different denominators and are never summed.")
     if s["skip_reasons"]:
         print(f"  skipped because:")
         for reason, n in sorted(s["skip_reasons"].items(), key=lambda kv: -kv[1]):
@@ -1164,6 +1263,12 @@ def selftest() -> int:
     # ONE OUTCOME PER (ref_seq, basis). A second on the SAME basis is a
     # revision and is refused; a different basis is a different measurement
     # of the same signal and coexists (results/forward_grading_preregistration.md).
+    for _nan in (float("nan"), float("inf"), "x"):
+        try:
+            record_outcome(s1["seq"], "loss", _nan, "premium", path=tmp)
+            raise AssertionError(f"r={_nan!r} must be refused (BACKLOG 36 group A)")
+        except ValueError as e:
+            assert "finite" in str(e), e
     try:
         record_outcome(s1["seq"], "loss", -1.0, "stop_distance", path=tmp)
         raise SystemExit("a second outcome on one basis was accepted for one signal")
@@ -1397,6 +1502,35 @@ def selftest() -> int:
     print("buckets          : rows name live/pool (legacy = live); pool scans are not "
           "the heartbeat; summary splits hq/base per bucket")
 
+    # ── EPISODES: consecutive bars on one (ticker, trend) are ONE observation ──
+    # BACKLOG 34 finding 1. Three consecutive bars on EP1 are one episode with
+    # three rows; a fourth bar nine days later starts a second. Only the first
+    # row's outcome counts; a graded second row changes nothing.
+    _ep = Path(tempfile.mkdtemp()) / "ep.jsonl"
+    _eps = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0}
+    _e1 = record_signal("EP1", "Bullish", _eps, "taken", "", cfg, bar_date="2026-10-05", path=_ep, hq=False)
+    _e2 = record_signal("EP1", "Bullish", _eps, "taken", "", cfg, bar_date="2026-10-06", path=_ep, hq=False)
+    record_signal("EP1", "Bullish", _eps, "taken", "", cfg, bar_date="2026-10-07", path=_ep, hq=False)
+    _e4 = record_signal("EP1", "Bullish", _eps, "taken", "", cfg, bar_date="2026-10-16", path=_ep, hq=False)
+    record_signal("EP2", "Bullish", _eps, "taken", "", cfg, bar_date="2026-10-06", path=_ep, hq=False, bucket="pool")
+    record_outcome(_e1["seq"], "win", 2.0, "stop_distance", path=_ep)
+    record_outcome(_e2["seq"], "loss", -1.0, "stop_distance", path=_ep)   # 2nd row: NOT counted
+    _es = summary(_ep)["by_episode"]
+    assert set(_es) == {"live", "pool"}, _es
+    assert (_es["live"]["episodes"], _es["live"]["rows"], _es["live"]["settled"], _es["live"]["open"]) == (2, 4, 1, 1), _es["live"]
+    assert abs(_es["live"]["mean_r"] - 2.0) < 1e-9, "the episode's R is its FIRST row's, not the rows' mean"
+    assert (_es["pool"]["episodes"], _es["pool"]["settled"]) == (1, 0), _es["pool"]
+    _el = episodes([r for r in read_all(_ep) if counts_as_taken(r)])
+    assert [e["bar_date"] for e in _el if e["ticker"] == "EP1"] == ["2026-10-05", "2026-10-16"], _el
+    _buf = _io.StringIO()
+    with _ctx.redirect_stdout(_buf):
+        report(_ep)
+    assert "EPISODES 2 (4 rows)" in _buf.getvalue(), _buf.getvalue()
+    assert "no HQ rows" in _buf.getvalue() and "nan" not in _buf.getvalue(), _buf.getvalue()
+    assert "has 1 settled episode(s)" in _buf.getvalue(), _buf.getvalue()
+    print("episodes         : consecutive bars = one observation, first row graded; "
+          "report prints the episode count under the gate line")
+
     # ── ALERT ROWS: what was sent, whether it arrived; never a signal, scan or outcome ──
     al = Path(tempfile.mkdtemp()) / "al.jsonl"
     a1 = record_alert("NVDA", "Bullish", "2026-10-13", "pool", True, "POOL", path=al)
@@ -1511,7 +1645,8 @@ def selftest() -> int:
     assert t_loss["outcome"] == "loss" and t_be["outcome"] == "breakeven", (t_loss, t_be)
     # Nineteen bars and no hit -> UNSETTLED, no row.
     assert resolve_signal(_row, _bars(_sig, *[_flat(d) for d in _days[:19]]),
-                          today=_today) is None, "19 bars is not a closed window"
+                          today=_dt.date.fromisoformat(_days[18]) + _dt.timedelta(days=3)) is None, \
+        "19 bars is not a closed window while the last bar is fresh"
     # Gapped before the fill -> VOID, not a trade with an inverted stop.
     v1 = resolve_signal(_row, _bars(_sig, (_days[0], 97.0, 99.0, 96.0, 98.0)), today=_today)
     assert v1["outcome"] == "void" and v1["reason"] == "gapped_before_fill", v1
@@ -1523,6 +1658,15 @@ def selftest() -> int:
     assert resolve_signal(_row, _bars(_sig), today=_dt.date(2026, 9, 10)) is None
     v3 = resolve_signal(_row, _bars(_sig), today=_today)
     assert v3["outcome"] == "void" and v3["reason"] == "no_bars", v3
+    # Some bars after the signal and then NONE (delisted, acquired, halted):
+    # unsettled while the last bar is fresh, void:no_bars once it is stale —
+    # never "window open" for ever (progress review 2026-10-26, F3).
+    _five = _bars(_sig, *[_flat(d) for d in _days[:5]])
+    assert resolve_signal(_row, _five, today=_dt.date.fromisoformat(_days[4]) + _dt.timedelta(days=10)) is None, \
+        "five fresh bars and no hit is an open window"
+    v4 = resolve_signal(_row, _five, today=_dt.date.fromisoformat(_days[4]) + _dt.timedelta(days=GRADE_NO_BARS_DAYS + 1))
+    assert v4 is not None and v4["outcome"] == "void" and v4["reason"] == "no_bars" \
+        and v4["detail"]["bars_after_signal"] == 5 and v4["detail"]["last_bar"] == _days[4], v4
     # A short, mirrored: gap UP through the stop fills at the open.
     _srow = {"trend": "Bearish", "bar_date": "2026-09-01",
              "setup": {"price": 100.0, "stop": 102.0, "target": 94.0}}
@@ -1547,7 +1691,7 @@ def selftest() -> int:
     _calls = []
     def _fetch(tk):
         _calls.append(tk); return _feeds.get(tk)
-    rep_g = grade_open_signals(_fetch, path=ag, today=_today)
+    rep_g = grade_open_signals(_fetch, path=ag, today=_dt.date(2026, 9, 5))
     assert rep_g["graded"] == 1 and rep_g["unsettled"] == 1 and rep_g["void"] == 0, rep_g
     assert sorted(_calls) == ["GA", "GB"], "one fetch per ticker, skipped rows never fetched"
     _outs = [x for x in read_all(ag) if x["kind"] == "outcome"]
@@ -1555,7 +1699,7 @@ def selftest() -> int:
         and _outs[0]["basis"] == "stop_distance" and _outs[0]["detail"]["gap_fill"]
     assert [x["ticker"] for x in open_signals(ag)] == ["GB"], (
         open_signals(ag), "open_signals is the grader's own filter: GA graded, GC skipped")
-    rep_g2 = grade_open_signals(_fetch, path=ag, today=_today)
+    rep_g2 = grade_open_signals(_fetch, path=ag, today=_dt.date(2026, 9, 5))
     assert rep_g2["graded"] == 0 and len([x for x in read_all(ag) if x["kind"] == "outcome"]) == 1, \
         "a graded signal must never be graded again"
     # SKIPPED, not refused: a graded signal is not offered to the resolver at
