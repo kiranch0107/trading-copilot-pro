@@ -2775,6 +2775,81 @@ def check_research_clocks_group_b() -> None:
           "no same-day funding; pullback history validated")
 
 
+def check_spread_arm_preregistered() -> None:
+    """
+    The spread arms' forward record (BACKLOG 34 E,
+    results/spread_preregistration.md): one writer (scanner.py, post-close,
+    after the day's settlements), stdlib to read, committed by the workflow,
+    its selftest in CI, no fixture in the committed file; settle(),
+    CROSS_FRAC, the arms and the vol indices live in spread_log and the
+    backtest imports them; and every constant the pre-registration states
+    is the code's.
+    """
+    import spread_log as sl
+    import spread_backtest as sb
+    import risk_params as rp
+    writers = []
+    for q in sorted(Path(".").glob("*.py")):
+        if q.name in ("spread_log.py", "consistency_check.py"):
+            continue
+        txt = q.read_text(encoding="utf-8", errors="replace")
+        if any(f"spread_log.{fn}(" in txt for fn in ("record", "grade", "append")):
+            writers.append(q.name)
+    assert writers == ["scanner.py"], (
+        f"spread_log.jsonl must have exactly one writer, scanner.py; found {writers or 'none'}")
+    src = Path("spread_log.py").read_text()
+    for banned in ("import pandas", "import numpy", "import yfinance", "import requests"):
+        assert banned not in src, f"spread_log.py must stay stdlib: found {banned!r}"
+    wf = Path(".github/workflows/scanner.yml").read_text()
+    i = wf.find("git add")
+    assert i > 0 and "spread_log.jsonl" in wf[i:i + 240], \
+        "scanner.yml does not stage spread_log.jsonl; every row would die with the runner"
+    assert Path("spread_log.jsonl").exists(), "spread_log.jsonl must exist in the repo (even empty)"
+    assert "python spread_log.py --selftest" in Path(".github/workflows/tests.yml").read_text(), \
+        "spread_log's selftest is not in CI"
+    sc_src = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
+    j = sc_src.find("spread_record_pass(\n                _closes_for")
+    k = sc_src.rfind("if record_only:", 0, j)
+    g = sc_src.find("spread_log.grade(_closes_for)")
+    assert j > 0 and k > 0 and j - k < 6000, \
+        "the spread cycle must be opened inside the record-only (post-close) branch of run()"
+    assert 0 < g < j, "run() must settle the expired cycles BEFORE opening the next (the backtest's re-entry rule)"
+    assert "fetch_atm_chain(tk, min_dte=md)" in sc_src, "the chain is the first listed expiry at least DTE_DAYS out"
+    # single sources
+    assert sb.settle is sl.settle and sb.CROSS_FRAC is sl.CROSS_FRAC and sb.VOL_INDEX is sl.VOL_INDEX, \
+        "spread_backtest must import settle, CROSS_FRAC and VOL_INDEX from spread_log"
+    assert [sl.arm_key(a) for a in sl.ARMS] == [f"{tk} {st} w{w:.0f} otm5" for tk in ("SPY", "QQQ")
+                                               for st in ("put_spread", "iron_condor") for w in (10.0, 5.0)]
+    assert sb.PUT_SPREAD == sl.PUT_SPREAD and sb.IRON_CONDOR == sl.IRON_CONDOR
+    # the pre-registration's constants are the code's
+    pre = Path("results/spread_preregistration.md").read_text(encoding="utf-8")
+    for text, ok in (("`REALISTIC_SKEW` = 20", sb.REALISTIC_SKEW == 20.0),
+                     ("`MAX_DRAWDOWN_PCT` = 25 %", sb.MAX_DRAWDOWN_PCT == 25.0),
+                     ("`risk_params.MAX_POSITION_PCT` = 25 %", rp.MAX_POSITION_PCT == 25.0),
+                     ("`--cost-frac` 0.5", sl.COST_FRAC == 0.5),
+                     ("`MAX_OPTION_SPREAD_PCT` (8 %)", rp.MAX_OPTION_SPREAD_PCT == 8.0),
+                     ("`CROSS_FRAC` 0.5", sl.CROSS_FRAC == 0.5),
+                     ("`DEFAULT_ACCOUNT_SIZE` = $5,000", sl.ACCOUNT == 5000.0),
+                     ("`DTE_DAYS` = 30", sl.DTE_DAYS == 30),
+                     ("`NO_BARS_DAYS` = 45", sl.NO_BARS_DAYS == 45),
+                     ("`SPLIT_TOL` = 2 %", sl.SPLIT_TOL == 0.02),
+                     ("`RESULT_CYCLES` = 12", sl.RESULT_CYCLES == 12),
+                     ("First reading at 6 graded cycles", sl.FIRST_READ_CYCLES == 6)):
+        assert text in pre, f"the pre-registration no longer states {text!r}"
+        assert ok, f"the code disagrees with the pre-registration on {text!r}"
+    import re as _re
+    m = _re.search(r"default=([0-9.]+),\s*\n\s*help=\"fraction of MAX_OPTION_SPREAD_PCT", Path("spread_backtest.py").read_text())
+    assert m and float(m.group(1)) == sl.COST_FRAC, "the backtest's --cost-frac default must be the forward arm's COST_FRAC"
+    # no fixture ever reaches the committed file
+    import json as _json
+    for n, line in enumerate(Path("spread_log.jsonl").read_text(encoding="utf-8").splitlines(), 1):
+        if line.strip():
+            row = _json.loads(line)
+            assert row.get("ticker") in (None, "SPY", "QQQ"), f"spread_log.jsonl row {n} carries {row.get('ticker')}"
+    print("  one writer (scanner.py, post-close, after settlement), stdlib, committed, in CI; settle/arms single-sourced; "
+          "pre-registration constants == code")
+
+
 def check_intraday_rules_match_preregistration() -> None:
     """
     intraday_rules.py's constants are the numbers its pre-registration fixed.
@@ -3116,6 +3191,7 @@ CHECKS = [
     ("every production module imports",            check_modules_import),
     ("bar validator runs on every live frame",    check_bar_validator_wired),
     ("research clocks: group B",                  check_research_clocks_group_b),
+    ("spread arm pre-registered and wired",      check_spread_arm_preregistered),
 ]
 
 
