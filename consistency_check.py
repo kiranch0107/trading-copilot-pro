@@ -2898,6 +2898,40 @@ def check_hq_tier_legs_declared() -> None:
     print("  HQ tier = ADX >= 30, every filter, R:R >= 1; 'Strong' is a recorded tag, not a leg; fingerprint declared")
 
 
+def check_research_config_choice_declared() -> None:
+    """
+    BACKLOG 23, decided 2026-10-28: every NEW research run starts from the
+    live config, built by ONE function (backtest.live_cfg) from
+    signal_core.DEFAULTS through CFG_TO_PARAMS; the record's studies keep
+    bt.DEFAULTS and the two differ on exactly the declared keys; the CLI
+    offers `--config live`; run() prints which config it is running; the
+    other builder of a live cfg (adx_retest) delegates; the convention is
+    written down.
+    """
+    import backtest as bt
+    import signal_core as sc
+    assert bt.build_signal_params(bt.live_cfg()) == sc.DEFAULTS, "backtest.live_cfg() is not the scanner's config"
+    assert {k for k in bt.CFG_TO_PARAMS if bt.live_cfg()[k] != bt.DEFAULTS[k]} == set(bt.RESEARCH_VS_LIVE)
+    assert bt.describe_config(bt.live_cfg()) == "live" and bt.describe_config(dict(bt.DEFAULTS)) == "research"
+    src = Path("backtest.py").read_text()
+    assert '"--config"' in src and 'choices=("research", "live")' in src, "backtest.py must offer --config research|live"
+    body = src[src.find("def run(cfg: dict"):src.find("\ndef ", src.find("def run(cfg: dict") + 1)]
+    assert 'print(f"Config       : {describe_config(cfg)}"' in body, \
+        "run() must print the config line naming describe_config(cfg)"
+    ar = Path("adx_retest.py").read_text()
+    assert "return bt.live_cfg(tickers, years, adx_min=adx_min)" in ar, "adx_retest.live_cfg must delegate to backtest.live_cfg"
+    for q in sorted(Path(".").glob("*.py")):
+        if q.name in ("backtest.py", "consistency_check.py"):
+            continue
+        txt = q.read_text(encoding="utf-8", errors="replace")
+        assert "for key, field in bt.CFG_TO_PARAMS.items():" not in txt, \
+            f"{q.name} rebuilds the live cfg by hand; use backtest.live_cfg()"
+    bl = Path("BACKLOG.md").read_text(encoding="utf-8")
+    assert "every NEW research run starts from `backtest.live_cfg()`" in bl, \
+        "the working conventions must state the research-config rule (BACKLOG 23)"
+    print("  live_cfg() == scanner's params; record keeps bt.DEFAULTS; --config live; run() names it; one builder")
+
+
 def check_intraday_rules_match_preregistration() -> None:
     """
     intraday_rules.py's constants are the numbers its pre-registration fixed.
@@ -3241,6 +3275,7 @@ CHECKS = [
     ("research clocks: group B",                  check_research_clocks_group_b),
     ("spread arm pre-registered and wired",      check_spread_arm_preregistered),
     ("HQ tier legs declared (F, G)",             check_hq_tier_legs_declared),
+    ("research config choice (BACKLOG 23)",      check_research_config_choice_declared),
 ]
 
 

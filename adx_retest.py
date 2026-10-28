@@ -136,12 +136,8 @@ def live_cfg(tickers: list[str], years: int, adx_min: float) -> dict:
     Everything else (max_hold 20, cooldown 3, slippage 2 bps) is bt.DEFAULTS.
     """
     import backtest as bt
-    import signal_core as sc
-    cfg = dict(bt.DEFAULTS, tickers=list(tickers), years=years)
-    for key, field in bt.CFG_TO_PARAMS.items():
-        cfg[key] = getattr(sc.DEFAULTS, field)
-    cfg["adx_min"] = adx_min
-    return cfg
+    # One builder (BACKLOG 23, decided 2026-10-28): backtest.live_cfg().
+    return bt.live_cfg(tickers, years, adx_min=adx_min)
 
 
 def signal_adx(trade: dict) -> float | None:
