@@ -716,8 +716,24 @@ def check_unattended_modules_are_streamlit_free() -> None:
             tree = ast.parse((repo / f"{mod}.py").read_text())
         except FileNotFoundError:
             return set()
+        # An import inside `try: ... except ImportError:` is OPTIONAL: the
+        # module runs without it (option_chain.py's Streamlit cache
+        # decorator, group C 2026-10-28). Everything else is a hard edge.
+        guarded: set[int] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Try) and any(
+                    (isinstance(h.type, ast.Name) and h.type.id in ("ImportError", "ModuleNotFoundError"))
+                    or (isinstance(h.type, ast.Tuple) and any(
+                        isinstance(e, ast.Name) and e.id in ("ImportError", "ModuleNotFoundError")
+                        for e in h.type.elts))
+                    for h in node.handlers):
+                for inner in ast.walk(ast.Module(body=node.body, type_ignores=[])):
+                    if isinstance(inner, (ast.Import, ast.ImportFrom)):
+                        guarded.add(id(inner))
         out = set()
         for node in ast.walk(tree):
+            if id(node) in guarded:
+                continue
             if isinstance(node, ast.Import):
                 out.update(a.name.split(".")[0] for a in node.names)
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
@@ -2611,6 +2627,68 @@ def check_gates_compare_unrounded() -> None:
     print("  ADX and R:R gates compare raw values in evaluate(), the scanner's hq_fail and the app")
 
 
+def check_contract_selection_shared() -> None:
+    """
+    Group C (external review 2026-10-20): the scanner and the app name the
+    same contract on the same chain. option_chain.get_option_data() is the
+    one selector; scanner.suggest_option() fetches, then calls it, and keeps
+    no ranking of its own.
+    """
+    import pandas as pd
+    import scanner
+    import option_chain
+    src = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
+    body = src[src.find("def suggest_option("):src.find("def fetch_chain_data(")]
+    assert "option_chain.get_option_data(" in body, "scanner.suggest_option() must select through option_chain.get_option_data()"
+    assert 'sort_values("score"' not in body and '"score"]' not in body, \
+        "scanner.suggest_option() still ranks contracts with a score of its own"
+    rows = [(97, 2.00, 2.08, 300, 900), (100, 1.50, 1.56, 500, 2000), (103, 1.00, 1.04, 900, 4000)]
+    cd = option_chain._chain(rows)
+    for strength in ("Strong", "Normal"):
+        mine = scanner.suggest_option("CKC", 100.0, "Bullish", 2.0, strength=strength, chain_data=cd)
+        app = option_chain.get_option_data("CKC", 100.0, "Bullish", strength, scanner.OPT_MIN_DTE,
+                                           scanner.PARAMS.atr_tgt_mult, 1e9, lambda: True, atr=2.0,
+                                           chain_data=cd)
+        assert mine and app.get("strike") == mine["strike"], (strength, mine, app)
+    print("  scanner.suggest_option() selects through option_chain.get_option_data(); same strike on one chain")
+
+
+def check_app_paths_group_c() -> None:
+    """
+    Group C, the rest: the batch fetch retries only the names the batch
+    left out and surfaces the unresolved ones; the backtest's regime series
+    shares market_context's minimum history; the app renders the regime's
+    four states through market_context.regime_status().
+    """
+    import pandas as pd
+    import numpy as np
+    import backtest as bt
+    import market_context as mc
+    app = Path("app.py").read_text(encoding="utf-8", errors="replace")
+    i = app.find("def batch_get_data(")
+    body = app[i:app.find("\ndef ", i + 1)]
+    assert "missing = [t for t in tickers if t not in result]" in body and "for t in missing:" in body, \
+        "batch_get_data() must retry exactly the names the batch left out"
+    assert "BATCH_GAPS[:] = [t for t in tickers if t not in result]" in body, "unresolved names must be reported"
+    assert '(t, "no data after batch retry") for t in BATCH_GAPS' in app, \
+        "the scan must list the unresolved names beside its results"
+    assert "market_context.regime_status(spy_regime, bool(SPY_REGIME))" in app, \
+        "the app's regime banner must render market_context.regime_status()"
+    for st in ("off", "unavailable", "stale", "valid"):
+        assert f'"state": "{st}"' in Path("market_context.py").read_text(), f"regime_status lacks the {st} state"
+    # Shared readiness: on a 100-bar history both say "no view"; on a 260-bar
+    # rising history both say Bull on the last bar.
+    short = pd.DataFrame({"Close": np.linspace(300, 400, 100)})
+    assert bt.build_regime_series(short).iloc[-1] == "Neutral" and mc.spy_regime_from_bars(short)["regime"] == "Unknown", \
+        "on a 100-bar history the record has a verdict the live paths do not"
+    long_ = pd.DataFrame({"Close": np.linspace(300, 400, 260), "High": np.linspace(301, 401, 260),
+                          "Low": np.linspace(299, 399, 260)})
+    assert bt.build_regime_series(long_).iloc[-1] == "Bull" == mc.spy_regime_from_bars(long_)["regime"]
+    assert (bt.build_regime_series(long_) == "Neutral").sum() == mc.REGIME_MIN_BARS - 1, \
+        "the record's no-view prefix must be exactly the live minimum"
+    print("  batch retries only missing names and reports gaps; regime minimum shared; four regime states rendered")
+
+
 def check_intraday_rules_match_preregistration() -> None:
     """
     intraday_rules.py's constants are the numbers its pre-registration fixed.
@@ -2921,6 +2999,8 @@ CHECKS = [
     ("RS basket: one writer, committed, post-close", check_basket_log_single_writer_and_committed),
     ("control arm: one per taken row, graded",      check_control_arm_wired),
     ("gates compare unrounded values",             check_gates_compare_unrounded),
+    ("contract selection: one selector",          check_contract_selection_shared),
+    ("app paths: batch gaps, regime minimum, status", check_app_paths_group_c),
     ("intraday rules match their pre-registration", check_intraday_rules_match_preregistration),
     ("Phase 2 paper record isolated, one writer",   check_daytrade_paper_isolated),
     ("pool bucket wired, capped, kept apart",       check_pool_bucket_wired),

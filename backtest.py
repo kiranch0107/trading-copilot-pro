@@ -847,9 +847,20 @@ def build_weekly_trend_map(ticker: str, years: int) -> "pd.Series | None":
     return pd.Series(verdict, index=pd.DatetimeIndex(effective_from)).sort_index()
 
 
-def build_regime_series(spy_df: pd.DataFrame) -> pd.Series:
-    """Approximate app.py's SPY macro filter: price vs its own 200-SMA."""
-    sma200 = spy_df["Close"].rolling(200, min_periods=50).mean()
+def build_regime_series(spy_df: pd.DataFrame, min_bars: int | None = None) -> pd.Series:
+    """
+    The SAME rule the live paths read (market_context.spy_regime_from_bars):
+    price vs its own 200-SMA, two-state, and NO VIEW until REGIME_MIN_BARS
+    bars exist. This used `min_periods=50`, so on a 100-bar history the
+    record had a Bull/Bear verdict where the scanner and the app had none
+    (external review 2026-10-20, group C; shared 2026-10-28). The first
+    REGIME_MIN_BARS - 50 bars of a run are "Neutral" (no view) now; a result
+    built with --use-regime can move only in those bars, and the 15-year OOS
+    reproduction is owed on the laptop to show whether any trade did.
+    """
+    import market_context as _mc
+    _min = _mc.REGIME_MIN_BARS if min_bars is None else int(min_bars)
+    sma200 = spy_df["Close"].rolling(_mc.REGIME_SMA_WINDOW, min_periods=_min).mean()
     out = pd.Series("Neutral", index=spy_df.index)
     out[spy_df["Close"] > sma200] = "Bull"
     out[spy_df["Close"] < sma200] = "Bear"

@@ -60,6 +60,7 @@ import data_source
 import market_context
 import iv_snapshot
 import basket_log
+import option_chain
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(),format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("scanner")
@@ -581,114 +582,110 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
 # rate-limit-expensive thing this script can do.
 # ══════════════════════════════════════════════════════════════════
 def suggest_option(ticker: str, price: float, trend: str,
-                   atr: float) -> dict | None:
+                   atr: float, strength: str = "Normal",
+                   chain_data: dict | None = None) -> dict | None:
+    """
+    The contract an alert names. The FETCH is this module's (its retry and
+    rate-limit backoff, its 21-45 DTE window, at most OPT_MAX_EXPIRIES
+    expiries: the policy inputs the alert text states). The SELECTION is
+    option_chain.get_option_data(), the one selector the app reads, so the
+    scanner and the app name the same strike on the same chain (external
+    review 2026-10-20, group C: "scanner 103 versus app 100 on one fixture";
+    this module ranked by its own score). `chain_data` is injectable for the
+    selftest, in option_chain's shape.
+    """
     try:
-        stock = yf.Ticker(ticker)
-        expiries = None
-        delay = YF_RETRY_DELAY
-        for attempt in range(YF_RETRY_ATTEMPTS):
-            try:
-                expiries = list(stock.options or [])
-                break
-            except Exception as e:
-                if _is_rate_limit_error(e) and attempt < YF_RETRY_ATTEMPTS - 1:
-                    logger.warning("Rate limited options(%s); backoff %ss", ticker, delay)
-                    time.sleep(delay)
-                    delay *= 2
-                    continue
-                logger.warning("%s expiries fetch failed: %s", ticker, e)
-                return None
-        if not expiries:
+        if chain_data is None:
+            chain_data = fetch_chain_data(ticker)
+        if not chain_data or chain_data.get("error") or not chain_data.get("expiries"):
             return None
-
-        today = pd.Timestamp.today().normalize()
-        right = "CALL" if trend == "Bullish" else "PUT"
-
-        # Strike window sized to +-2 ATR, clamped to 3-12%. A flat 5% band means
-        # something very different on a 1%-ATR index than a 6%-ATR small cap.
-        band = min(max((atr * 2.0) / price, 0.03), 0.12) if price > 0 else 0.05
-        lo, hi = price * (1 - band), price * (1 + band)
-
-        best, best_score, checked = None, 0.0, 0
-        for exp in expiries:
-            if checked >= OPT_MAX_EXPIRIES:
-                break
-            try:
-                dte = (pd.Timestamp(exp) - today).days
-            except Exception:
-                continue
-            if not (OPT_MIN_DTE <= dte <= OPT_MAX_DTE):
-                continue
-            checked += 1
-            chain = None
-            c_delay = YF_RETRY_DELAY
-            for c_attempt in range(YF_RETRY_ATTEMPTS):
-                try:
-                    time.sleep(0.5)
-                    chain = stock.option_chain(exp)
-                    break
-                except Exception as e:
-                    if _is_rate_limit_error(e) and c_attempt < YF_RETRY_ATTEMPTS - 1:
-                        logger.warning("Rate limited chain %s %s; backoff %ss",
-                                       ticker, exp, c_delay)
-                        time.sleep(c_delay)
-                        c_delay *= 2
-                        continue
-                    logger.warning("%s chain %s failed: %s", ticker, exp, e)
-                    chain = None
-                    break
-            if chain is None:
-                continue
-
-            df = chain.calls if right == "CALL" else chain.puts
-            if df is None or df.empty:
-                continue
-            df = df[(df["strike"] >= lo) & (df["strike"] <= hi)].copy()
-            if df.empty:
-                continue
-
-            df["mid"]    = (df["bid"] + df["ask"]) / 2
-            df["spread"] = df["ask"] - df["bid"]
-            # bid>0 and volume>0 matter: a mid can look fine on a contract with
-            # no bid at all, and a zero-volume contract is untradeable however
-            # much open interest it carries.
-            df = df[(df["mid"] > 0) & (df["bid"] > 0) &
-                    (df["volume"].fillna(0) > 0) &
-                    (df["openInterest"].fillna(0) > 0)]
-            if df.empty:
-                continue
-            df["spread_pct"] = df["spread"] / df["mid"] * 100
-            df = df[df["spread_pct"] <= OPT_MAX_SPREAD]
-            if df.empty:
-                continue
-
-            df["score"] = ((df["volume"].fillna(0) + df["openInterest"].fillna(0))
-                           / (1 + df["spread_pct"] / 10))
-            top = df.sort_values("score", ascending=False).iloc[0]
-            if float(top["score"]) > best_score:
-                best_score = float(top["score"])
-                best = (top, exp, dte)
-
-        if best is None:
-            return None
-        row, exp, dte = best
-        mid  = float(row["mid"])
-        cost = mid * 100
         budget = risk_params.option_budget(ACCOUNT_SIZE, OPTION_BUDGET_PCT)
+        pick = option_chain.get_option_data(
+            ticker, price, trend, strength, OPT_MIN_DTE, PARAMS.atr_tgt_mult,
+            budget / 100.0, is_market_open, atr=atr, chain_data=chain_data)
+        if not pick or pick.get("error"):
+            if pick and pick.get("error"):
+                logger.info("%s — no contract: %s", ticker, pick["error"])
+            return None
+        mid = float(pick["mid"])
+        spread = float(pick["spread"])
+        bid, ask = mid - spread / 2.0, mid + spread / 2.0
+        cost = mid * 100
         return {
-            "right": right, "strike": float(row["strike"]), "expiry": exp,
-            "dte": dte, "mid": round(mid, 2), "bid": float(row["bid"]),
-            "ask": float(row["ask"]),
-            "spread_pct": round(float(row["spread_pct"]), 1),
-            "volume": int(row["volume"] or 0), "oi": int(row["openInterest"] or 0),
+            "right": pick["label"], "strike": float(pick["strike"]),
+            "expiry": pick["expiry"], "dte": int(pick["dte"]), "mid": round(mid, 2),
+            "bid": round(bid, 2), "ask": round(ask, 2),
+            "spread_pct": round(spread / mid * 100, 1) if mid else 0.0,
+            "volume": int(pick.get("volume") or 0), "oi": int(pick.get("oi") or 0),
             "cost": round(cost, 2),
             "pct_account": round(cost / ACCOUNT_SIZE * 100, 1),
             "within_budget": cost <= budget,
             "budget": round(budget, 2),
+            "dte_adequate": bool(pick.get("dte_adequate", True)),
+            "days_needed": int(pick.get("days_needed") or 0),
         }
     except Exception as e:
         logger.warning("suggest_option(%s) failed: %s", ticker, e)
         return None
+
+
+def fetch_chain_data(ticker: str) -> dict | None:
+    """
+    The chain in option_chain.get_option_data()'s injectable shape, fetched
+    with this module's retry and backoff and bounded to the alert window
+    (OPT_MIN_DTE..OPT_MAX_DTE, OPT_MAX_EXPIRIES expiries).
+    """
+    stock = yf.Ticker(ticker)
+    expiries = None
+    delay = YF_RETRY_DELAY
+    for attempt in range(YF_RETRY_ATTEMPTS):
+        try:
+            expiries = list(stock.options or [])
+            break
+        except Exception as e:
+            if _is_rate_limit_error(e) and attempt < YF_RETRY_ATTEMPTS - 1:
+                logger.warning("Rate limited options(%s); backoff %ss", ticker, delay)
+                time.sleep(delay)
+                delay *= 2
+                continue
+            logger.warning("%s expiries fetch failed: %s", ticker, e)
+            return None
+    if not expiries:
+        return None
+    today = pd.Timestamp.today().normalize()
+    out, checked = [], 0
+    for exp in expiries:
+        if checked >= OPT_MAX_EXPIRIES:
+            break
+        try:
+            dte = (pd.Timestamp(exp) - today).days
+        except Exception:
+            continue
+        if not (OPT_MIN_DTE <= dte <= OPT_MAX_DTE):
+            continue
+        checked += 1
+        chain = None
+        c_delay = YF_RETRY_DELAY
+        for c_attempt in range(YF_RETRY_ATTEMPTS):
+            try:
+                time.sleep(0.5)
+                chain = stock.option_chain(exp)
+                break
+            except Exception as e:
+                if _is_rate_limit_error(e) and c_attempt < YF_RETRY_ATTEMPTS - 1:
+                    logger.warning("Rate limited chain %s %s; backoff %ss",
+                                   ticker, exp, c_delay)
+                    time.sleep(c_delay)
+                    c_delay *= 2
+                    continue
+                logger.warning("%s chain %s failed: %s", ticker, exp, e)
+                chain = None
+                break
+        if chain is None:
+            continue
+        out.append({"expiry": exp, "dte": int(dte),
+                    "calls": chain.calls.fillna(0), "puts": chain.puts.fillna(0)})
+    return {"error": None, "expiries": out} if out else None
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -993,7 +990,7 @@ def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
 
     # Chain fetch happens here — AFTER the cooldown check — so
     # suppressed alerts cost no API calls.
-    opt = suggest_option(tk, r["price"], r["trend"], r["atr"]) \
+    opt = suggest_option(tk, r["price"], r["trend"], r["atr"], r.get("strength", "Normal")) \
         if SUGGEST_OPTIONS else None
 
     if opt:
@@ -2203,6 +2200,26 @@ def _selftest_body() -> int:
             basket_log.LOG = _real_bk
         print("rs basket row           : once per snapshot on one shared anchor; no benchmark or "
               "mixed anchors -> nothing written")
+
+        # ── ONE SELECTOR (group C, 2026-10-28): the scanner's contract is the
+        # app's on the same chain, strength and ATR; the mapping keeps the
+        # alert's fields consistent with each other.
+        _rows_oc = [(97, 2.00, 2.08, 300, 900), (100, 1.50, 1.56, 500, 2000),
+                    (103, 1.00, 1.04, 900, 4000), (106, 0.60, 0.66, 50, 100)]
+        _cd = {"error": None, "expiries": [{"expiry": "2026-11-20", "dte": 23,
+                                            "calls": option_chain._chain(_rows_oc)["expiries"][0]["calls"],
+                                            "puts": option_chain._chain(_rows_oc)["expiries"][0]["puts"]}]}
+        for _strength in ("Strong", "Normal"):
+            _mine = suggest_option("OCX", 100.0, "Bullish", 2.0, strength=_strength, chain_data=_cd)
+            _app = option_chain.get_option_data("OCX", 100.0, "Bullish", _strength, OPT_MIN_DTE,
+                                                PARAMS.atr_tgt_mult, 1e9, is_market_open, atr=2.0,
+                                                chain_data=_cd)
+            assert _mine and "error" not in _app and _mine["strike"] == _app["strike"] \
+                and _mine["expiry"] == _app["expiry"], (_strength, _mine, _app)
+            assert abs((_mine["ask"] - _mine["bid"]) / _mine["mid"] * 100 - _mine["spread_pct"]) < 0.11, _mine
+            assert _mine["right"] == "CALL" and _mine["cost"] == round(_mine["mid"] * 100, 2), _mine
+        assert suggest_option("OCX", 100.0, "Bullish", 2.0, chain_data={"error": "x", "expiries": []}) is None
+        print("contract selection      : scanner and app name the same strike on one chain (Strong and Normal)")
         # THE IV SNAPSHOT RODE ON THE POST-CLOSE PASS: one row per watchlist
         # name, ATM at 100 with the call/put mean, and only in that pass (the
         # first run above was outside the window and fetched no chain).

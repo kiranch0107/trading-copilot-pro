@@ -1977,9 +1977,28 @@ finite spot/strike before an IV row; finite OHLC in the paper grader's
 clock; UUID-sized id suffix. **Open, group B (research engines, re-runs
 owed):** backtest warm-up discontinuity, execution bar dropped on missing
 volume, option clock by calendar dates and end-of-sample trades marked
-open, spread maturity, portfolio chronology. **Open, group C (app
-paths):** partial batch retry, contract selection divergence, regime
-minimum history shared with the backtest, macro status wording.
+open, spread maturity, portfolio chronology. **Group C DONE 2026-10-28 (owner: "go with group C as well").**
+`app.batch_get_data` retries exactly the names a partial batch left out
+and reports the ones still missing (`BATCH_GAPS`), which the scan lists
+beside its results as "no data after batch retry". The scanner's alert
+contract is now chosen by `option_chain.get_option_data()`, the app's
+selector, on the chain the scanner fetches (its 21–45 DTE window and
+retry stay its own); the same chain, strength and ATR name the same
+strike in both, pinned by selftest and check; `option_chain`'s Streamlit
+import is optional so the unattended runner can import it (the
+import-graph check treats a `try/except ImportError` import as optional
+and still refuses a hard one). `backtest.build_regime_series` reads
+`market_context.REGIME_MIN_BARS` (200) instead of `min_periods=50`, so the
+record has no regime view where the live paths have none; a `--use-regime`
+result can move only in the first 150 SPY bars of its window, and the
+15-year OOS reproduction (`python oos_validate.py`, same frozen hash) is
+OWED on the laptop to show whether any of the 591 trades did. The app's
+regime banner renders `market_context.regime_status()`: off by setting,
+unavailable (on, no verdict: nothing filtered, not by choice), stale (a
+verdict from a bar older than 4 days; the verdict now carries `asof`) and
+valid, four different badges. Two checks (54). ~~Open, group C (app
+paths): partial batch retry, contract selection divergence, regime
+minimum history shared with the backtest, macro status wording.~~
 **Owner's decision, MADE 2026-10-28 ("go with the unrounded-gate
 declaration as well"):** amendment 2026-10-28 (E) in
 `results/forward_record_preregistration.md`. `signal_core.gate_adx` /
@@ -2067,10 +2086,14 @@ basket record, both forward from the next post-close pass.
 
 **Unrounded gates declared 2026-10-28** (amendment E; item 36).
 
-**Still pending, in blocking order:** the rest of BACKLOG 36 group B
-(research engines: warm-up discontinuity, execution bar on missing
-volume, option clock by calendar dates, spread maturity, portfolio
-chronology), each a re-run of a committed result; group C app paths;
+**Group C done 2026-10-28** (item 36): batch gaps, one contract
+selector, shared regime minimum, four regime states.
+
+**Still pending, in blocking order:** the OOS reproduction owed by the
+shared regime minimum (`python oos_validate.py` on the laptop; item 36);
+the rest of BACKLOG 36 group B (research engines: warm-up discontinuity,
+execution bar on missing volume, option clock by calendar dates, spread
+maturity, portfolio chronology), each a re-run of a committed result;
 journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
 the 11-09/11-10 post-close logs (F5).
 
@@ -2078,8 +2101,8 @@ the 11-09/11-10 post-close logs (F5).
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 52 cross-module
-  invariants (52 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 54 cross-module
+  invariants (54 `check_` functions); run it before pushing.
 - **Every new guard gets falsified** — deliberately broken to confirm it fails
   with the right message. That pass found six dead fixtures in the #20–#25 run;
   tests that cannot fail are the default outcome, not the exception. Do not skip
