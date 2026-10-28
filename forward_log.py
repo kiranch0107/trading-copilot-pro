@@ -960,6 +960,11 @@ HEADLINE_BUCKET = "pool"  # THE POPULATION THE PRE-REGISTERED QUESTION IS ASKED 
                           # the by-basis reading and the 349-episode gate read
                           # the pool; the live bucket is the alerting view,
                           # recorded and reported in full, never gating.
+RANK_TIER_K = 5           # H1 RE-POSED (amendment 2026-10-28 D): the top K taken
+                          # pool rows per scan bar by HQ-nearness are the "rank
+                          # tier", a tag computed at read time. K is the pool
+                          # alert cap (scanner.POOL_ALERT_CAP), pinned equal by
+                          # consistency_check. Chosen for arrival rate, not edge.
 EPISODE_GAP_DAYS = 4      # a run of bars on the same (ticker, trend) is one episode
                           # while consecutive rows are at most this many calendar
                           # days apart: a Friday-to-Monday pair is 3, a holiday
@@ -1007,6 +1012,46 @@ def episodes(rows: list, outcomes: dict | None = None) -> list[dict]:
             else:
                 cur["rows"] += 1
     return out
+
+
+def rank_score(row: dict) -> tuple:
+    """
+    Higher sorts first: fewest failed HQ legs, then higher signal-bar ADX,
+    then higher R:R, then ticker (reversed so that A sorts before B when
+    the tuple is sorted descending). All from the recorded setup; a row
+    without `hq_fail` (none exist in the pool) ranks last.
+    """
+    st = row.get("setup") or {}
+    hf = st.get("hq_fail")
+    legs = -len(hf) if isinstance(hf, list) else -99
+    try:
+        adx = float(st.get("adx") or 0.0)
+    except (TypeError, ValueError):
+        adx = 0.0
+    try:
+        rr = float(st.get("rr") or 0.0)
+    except (TypeError, ValueError):
+        rr = 0.0
+    tk = str(row.get("ticker") or "")
+    return (legs, adx, rr, tuple(-ord(c) for c in tk))
+
+
+def rank_tier(rows: list, k: int = RANK_TIER_K, bucket: str = HEADLINE_BUCKET) -> set:
+    """
+    The seqs of the rank tier (amendment 2026-10-28 D): on each scan bar,
+    the top `k` TAKEN rows of `bucket` by rank_score(). A row of any other
+    bucket is never in it. Pure, deterministic, nothing fetched.
+    """
+    by_bar: dict = {}
+    for r in rows:
+        if r.get("kind") != "signal" or not counts_as_taken(r) or bucket_of(r) != bucket:
+            continue
+        by_bar.setdefault(str(r.get("bar_date")), []).append(r)
+    tier = set()
+    for lst in by_bar.values():
+        for r in sorted(lst, key=rank_score, reverse=True)[:k]:
+            tier.add(r.get("seq"))
+    return tier
 
 
 def _episode_stats(eps: list) -> dict:
@@ -1076,10 +1121,18 @@ def summary(path: Path | None = None) -> dict:
     eps = episodes(taken, sd_out)
     by_episode = {b: _episode_stats([e for e in eps if e["bucket"] == b])
                   for b in sorted({e["bucket"] for e in eps})}
+    # H1' (amendment 2026-10-28 D): the rank tier against the rest of the
+    # headline bucket, by episode; membership by the episode's FIRST row.
+    tier = rank_tier(taken)
+    head_eps = [e for e in eps if e["bucket"] == HEADLINE_BUCKET]
+    h1 = {"k": RANK_TIER_K,
+          "tier": _episode_stats([e for e in head_eps if e["seq"] in tier]),
+          "rest": _episode_stats([e for e in head_eps if e["seq"] not in tier])}
     return {
         "headline_bucket": HEADLINE_BUCKET,
         "by_episode": by_episode,
         "gate_settled_episodes": by_episode.get(HEADLINE_BUCKET, {}).get("settled", 0),
+        "h1_rank": h1,
         "rows": len(rows), "scans": len(scans),
         "bars_scanned": len({x.get("bar_date") for x in scans}),
         "signals": len(sigs), "taken": len(taken),
@@ -1122,6 +1175,12 @@ def report(path: Path | None = None) -> int:
             print(f"  {'':12}  EPISODES {eb['episodes']} ({eb['rows']} rows)   "
                   f"settled {eb['settled']}   open {eb['open']}   void {eb['void']}   "
                   f"mean R {_fmt(eb['mean_r'])} ({eb['wins']} wins)  <- the pre-registered unit")
+            if b == s["headline_bucket"]:
+                h = s["h1_rank"]
+                print(f"  {'':12}  H1' rank tier (top {h['k']}/bar by HQ-nearness, amendment 2026-10-28 D): "
+                      f"tier {h['tier']['episodes']} ep, {h['tier']['settled']} settled, mean R {_fmt(h['tier']['mean_r'])}  |  "
+                      f"rest {h['rest']['episodes']} ep, {h['rest']['settled']} settled, mean R {_fmt(h['rest']['mean_r'])}")
+                print(f"  {'':12}  MDE at the 349 gate ~ +0.37 R; +0.15 R needs ~2,070 settled pool episodes")
     print(f"  by basis — the {s['headline_bucket'].upper()} bucket, the pre-registered population "
           f"(amendment 2026-10-28); the live bucket is the alerting view and never gates")
     for basis, b in s["by_basis"].items():
@@ -1556,6 +1615,57 @@ def selftest() -> int:
     assert "live bucket is the alerting view and never gates" in _buf.getvalue(), _buf.getvalue()
     print("episodes         : consecutive bars = one observation, first row graded; "
           "report prints the episode count under the gate line")
+
+    # ── H1' RANK TIER (amendment 2026-10-28 D): top K per bar by HQ-nearness ──
+    _rt = Path(tempfile.mkdtemp()) / "rt.jsonl"
+    def _rrow(tk, bar, fails, adx, rr=2.0, bucket="pool", decision="taken"):
+        st = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": rr,
+              "adx": adx, "hq_fail": fails}
+        return record_signal(tk, "Bullish", st, decision, "" if decision == "taken" else "x",
+                             cfg, bar_date=bar, path=_rt, hq=not fails, bucket=bucket)
+    # One bar, seven pool rows: 0-leg HQ first, then 1-leg by ADX, then 2-leg.
+    _r = {}
+    _r["HQ"] = _rrow("HQ", "2026-10-20", [], 36.0)
+    _r["A1"] = _rrow("A1", "2026-10-20", ["not Strong"], 40.0)
+    _r["A2"] = _rrow("A2", "2026-10-20", ["ADX Trend Strength"], 30.0)
+    _r["B1"] = _rrow("B1", "2026-10-20", ["ADX Trend Strength", "not Strong"], 33.0, rr=3.0)
+    _r["B2"] = _rrow("B2", "2026-10-20", ["ADX Trend Strength", "not Strong"], 33.0, rr=1.0)
+    _r["B3"] = _rrow("B3", "2026-10-20", ["ADX Trend Strength", "not Strong"], 20.0)
+    _r["C1"] = _rrow("C1", "2026-10-20", ["ADX Trend Strength", "not Strong", "rr<1"], 50.0)
+    _r["SK"] = _rrow("SK", "2026-10-20", [], 99.0, decision="skipped")          # skipped: never
+    _r["LV"] = _rrow("LV", "2026-10-20", [], 99.0, bucket="live")               # live: never
+    _rows = read_all(_rt)
+    _t = rank_tier(_rows)
+    _in = {tk for tk, r in _r.items() if r["seq"] in _t}
+    assert _in == {"HQ", "A1", "A2", "B1", "B2"}, _in
+    assert rank_score(_r["A1"]) > rank_score(_r["A2"]) > rank_score(_r["B1"]) > rank_score(_r["B2"]), \
+        "fewest failed legs, then ADX, then R:R"
+    # Ticker breaks a full tie deterministically: AA before AB.
+    _rrow("AB", "2026-10-21", ["x"], 30.0); _rrow("AA", "2026-10-21", ["x"], 30.0)
+    _t2 = rank_tier(read_all(_rt), k=1)
+    assert any(r["seq"] in _t2 and r["ticker"] == "AA" for r in read_all(_rt) if r.get("bar_date") == "2026-10-21"), \
+        "tie broken by ticker, AA first"
+    # By episode: membership follows the FIRST row. B3's next-bar row would
+    # rank top on a bar of its own, but B3's episode started off the tier.
+    _rrow("B3", "2026-10-21", [], 60.0)
+    _rrow("HQ", "2026-10-21", [], 60.0)
+    record_outcome(_r["HQ"]["seq"], "win", 1.0, "stop_distance", path=_rt)
+    record_outcome(_r["B3"]["seq"], "loss", -1.0, "stop_distance", path=_rt)
+    _h = summary(_rt)["h1_rank"]
+    assert _h["k"] == RANK_TIER_K == 5
+    # Tier episodes: HQ, A1, A2, B1, B2 (bar 1) and AA, AB (bar 2: four rows,
+    # all inside k). Rest: C1 and B3 — B3's bar-2 row is top of its bar, but
+    # its episode is read by its FIRST row, which was off the tier.
+    assert (_h["tier"]["episodes"], _h["tier"]["settled"], _h["tier"]["rows"]) == (7, 1, 8) \
+        and abs(_h["tier"]["mean_r"] - 1.0) < 1e-9, _h
+    assert (_h["rest"]["episodes"], _h["rest"]["settled"], _h["rest"]["rows"]) == (2, 1, 3) \
+        and abs(_h["rest"]["mean_r"] + 1.0) < 1e-9, (_h, "B3 and C1 are the rest; B3 by its first row")
+    _buf = _io.StringIO()
+    with _ctx.redirect_stdout(_buf):
+        report(_rt)
+    assert "H1' rank tier (top 5/bar" in _buf.getvalue() and "tier 7 ep, 1 settled" in _buf.getvalue(), _buf.getvalue()
+    print("H1' rank tier    : top 5 per bar by fewest failed legs, ADX, R:R, ticker; "
+          "episode membership by first row; skipped and live rows never")
 
     # ── ALERT ROWS: what was sent, whether it arrived; never a signal, scan or outcome ──
     al = Path(tempfile.mkdtemp()) / "al.jsonl"

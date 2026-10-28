@@ -2629,6 +2629,10 @@ def check_pool_bucket_wired() -> None:
     src = Path("scanner.py").read_text(encoding="utf-8")
     assert '"--force-pool"' in src and "def pool_tickers" in src and "def pool_due" in src
     assert "POOL_ALERT_CAP   = 5" in src and scanner.POOL_ALERT_CAP == 5, "the cap is five"
+    import forward_log as _fl
+    assert _fl.RANK_TIER_K == scanner.POOL_ALERT_CAP == 5, (
+        "the H1' rank tier (forward_record_preregistration.md, amendment 2026-10-28 D) is "
+        "the top POOL_ALERT_CAP rows a bar; the two constants must stay equal")
     assert 'bucket="pool"' in src and "def compose_alert" in src
     doc = Path("results/forward_record_preregistration.md").read_text(encoding="utf-8")
     assert "## Amendment 2026-10-13" in doc and "**at most five a session**" in doc \
