@@ -2288,17 +2288,36 @@ FAIL unchanged, −0.112 R on 579 trades; the raw output
 (13 cached / 0 fetched) and 92 of 579 trades gapped through a level (61
 stops filled at the open), the mechanism behind the move from run 2.
 
-**Still pending, in blocking order:** the first scan under amendments F
-and G (fingerprint `4ddd12a3095f` on its scan row; the HQ tag and the alert
-tier now fire on about one taken row in nine, ~1.5 a pool bar, so the
-first Telegram alerts of the record are due and the pool's cap of five a
-day may bind on a busy bar); the first signal trade logged under BACKLOG
-32's rules (21–45 DTE, +200 / −50 / 7, with its signal bar), which starts
-the premium-basis reading; the
-first forward spread reading at 6 graded cycles per arm (~6 months,
-BACKLOG 34 E) and the result at 12; the first `spread arms:` lines in the
-post-close log (eight cycles opened, or the reason not); journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
-the 11-09/11-10 post-close logs (F5).
+**Still pending, in blocking order (review 2026-10-28, item 38):** tomorrow's
+scans, the first under `4ddd12a3095f`: the first alerts of the record (the
+in-session scans alert; the pool cap of five may bind) and the first
+`spread arms:` cycles in the post-close log; the first signal trade logged
+under BACKLOG 32's rules (starts the premium-basis reading); the app's
+contract window ceiling (item 38 F1) and the H1 report cut (F3), both
+small; the 11-09/11-10 post-close logs (first IV premium rows, F5); token
+rotation by 2026-12-16; the forward clocks (spread arm at 6 graded cycles
+per arm, RS basket at 26 weeks, the pool gate at 349 settled episodes,
+all around March–April 2027).
+
+---
+
+## 38. Progress review 2026-10-28: every pending decision of the 10-26 review decided and built the same day; the first alerts, spread cycles and the new fingerprint are due tomorrow — ASSESSED 2026-10-28
+
+`results/progress_review_2026-10-28.md`. Eighteen merges in one day
+(#146–#163): amendments C, D, A, B, E, F, G; BACKLOG 36 groups A, B, C with
+every owed re-run folded in; BACKLOG 23, 32, 33, 34 E. Harness 48 / 59 /
+clean; ~130 mutants falsified. Every scan today ran code from before the
+merges (post-close pass on 5536198), so the record holds no row produced
+by an undeclared rule; the first scan under `4ddd12a3095f` is tomorrow's
+11:07. The record: pool 42 episodes / 26 settled / −0.332 R (gate 26 of
+349); live 18 / 16 / −0.246; pullback 9 / 4 / −0.517; H1′ tier 7 settled
+at −0.924 R against the rest −0.114 (not a reading; the sign is noted);
+first 2 control rows. Findings: F1 the app's contract window has no
+ceiling (the journal now refuses > 45 DTE); F2 the first alerts are due
+and the pool cap will be tested; F3 `report()` does not yet cut H1/H1′ at
+amendment F; F4 the spread arm's after-close quote quality is the unknown;
+F5 IV premium rows 11-09; F6 two stale doc notes (fixed); F7 token
+rotation 12-16. No engine, rule or threshold changed.
 
 ---
 
