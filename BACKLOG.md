@@ -1784,6 +1784,15 @@ timed out); all 16 target hits are resistance-capped targets under 1.5 R.
 The live geometry's realised payoff needs a 51 % win rate; the live bucket
 has 42 %.
 
+**Decision 2026-10-28 (owner: "go with option 1, pool only"):** amendment
+C is declared in `results/forward_record_preregistration.md` (amendment
+2026-10-28): the pool is the population for H0/H1 and the 349-episode
+gate; the live bucket is the alerting view, recorded and reported in
+full, never gating. `forward_log.HEADLINE_BUCKET = "pool"`; the by-basis
+reading, the gate count and the report's gate line read the pool;
+pinned by selftest and consistency check. The episode reading (finding 1)
+landed the same day (item 37). A, B and D remain undecided.
+
 **Proposed, as pre-registrations:** (A) a forward random-entry control row
 beside every taken signal, graded by the same resolver, read as signal
 minus control; (B) a weekly basket row for the 8 selected names against
@@ -2002,9 +2011,11 @@ position, skip and alert ids carry a 16-hex-character suffix. Every guard
 falsified. Readings after the change (not results): live 18 episodes, 15
 settled, −0.196 R; pool 42 / 26, −0.332; pullback 9 / 4, −0.517.
 
-**Still pending, in blocking order:** BACKLOG 34 decisions (amendment C
-naming the pool as the population, D re-posing H1) and the unrounded-gate
-declaration — the owner's, since each moves what the record records;
+**Amendment C declared 2026-10-28** (owner: "option 1, pool only"; item
+34): the pool is the population, the live bucket the alerting view.
+
+**Still pending, in blocking order:** BACKLOG 34 D (re-posing H1) and A/B;
+the unrounded-gate declaration — the owner's, since each moves what the record records;
 group B and the option re-runs (owner's laptop); group C app paths;
 journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
 the 11-09/11-10 post-close logs (F5).

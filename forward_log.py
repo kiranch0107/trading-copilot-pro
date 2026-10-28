@@ -954,6 +954,12 @@ def _mean_r(settled: list, sigs: list, hq: bool) -> float:
     return sum(rs) / len(rs) if rs else float("nan")
 
 
+HEADLINE_BUCKET = "pool"  # THE POPULATION THE PRE-REGISTERED QUESTION IS ASKED OF.
+                          # Amendment 2026-10-28 (results/forward_record_
+                          # preregistration.md, owner: "option 1, pool only"):
+                          # the by-basis reading and the 349-episode gate read
+                          # the pool; the live bucket is the alerting view,
+                          # recorded and reported in full, never gating.
 EPISODE_GAP_DAYS = 4      # a run of bars on the same (ticker, trend) is one episode
                           # while consecutive rows are at most this many calendar
                           # days apart: a Friday-to-Monday pair is 3, a holiday
@@ -1022,30 +1028,32 @@ def summary(path: Path | None = None) -> dict:
     alerts = [r for r in rows if r.get("kind") == "alert"]
     taken = [s for s in sigs if counts_as_taken(s)]
     skipped = [s for s in sigs if not counts_as_taken(s)]
-    # THE HEADLINE READING IS THE LIVE BUCKET'S. The pre-registered HQ-versus-
-    # base question (BACKLOG 24) was asked of the watchlist; the pool and
-    # pullback buckets are other populations and are read in by_bucket below.
-    # Folding them in here would let a pullback row (no hq field) sit in the
-    # live base tier and move the 349-episode gate (review 2026-10-13).
+    # THE HEADLINE READING IS THE POOL BUCKET'S (HEADLINE_BUCKET, amendment
+    # 2026-10-28). It was the live watchlist's until then; the watchlist
+    # arrives at ~0.6 episodes a bar and rotates weekly, the pool at ~3.7 and
+    # is fixed. Other buckets are read in by_bucket below and never fold in:
+    # a pullback row (no hq field) would sit in the base tier and move the
+    # 349-episode gate (review 2026-10-13).
     live_taken = [s for s in taken if bucket_of(s) == "live"]
-    live_seqs = {s.get("seq") for s in live_taken}
-    taken_hq = [s for s in live_taken if _is_hq(s)]
+    head_taken = [s for s in taken if bucket_of(s) == HEADLINE_BUCKET]
+    head_seqs = {s.get("seq") for s in head_taken}
+    taken_hq = [s for s in head_taken if _is_hq(s)]
     configs = sorted({s.get("config") for s in sigs if s.get("config")})
     # BY BASIS, AND ONLY BY BASIS. A premium R and a stop-distance R are
     # different denominators; there is no pooled mean here on purpose.
     by_basis = {}
     for basis in ("premium", "stop_distance"):
         outs_b = [o for o in outs if o.get("basis") == basis
-                  and o.get("ref_seq") in live_seqs]
+                  and o.get("ref_seq") in head_seqs]
         settled_b = [o for o in outs_b if o.get("r") is not None]
         by_basis[basis] = {
             "settled": len(settled_b),
             "void": sum(1 for o in outs_b if o.get("outcome") == "void"),
-            "open": len(live_taken) - len(outs_b),
+            "open": len(head_taken) - len(outs_b),
             "mean_r": (sum(o["r"] for o in settled_b) / len(settled_b)
                        if settled_b else float("nan")),
-            "mean_r_hq": _mean_r(settled_b, live_taken, True),
-            "mean_r_base": _mean_r(settled_b, live_taken, False),
+            "mean_r_hq": _mean_r(settled_b, head_taken, True),
+            "mean_r_base": _mean_r(settled_b, head_taken, False),
         }
     # BY BUCKET (BACKLOG 30): the live watchlist and the wider pool are two
     # populations and the HQ-versus-base question is asked of each. Stop-
@@ -1069,11 +1077,14 @@ def summary(path: Path | None = None) -> dict:
     by_episode = {b: _episode_stats([e for e in eps if e["bucket"] == b])
                   for b in sorted({e["bucket"] for e in eps})}
     return {
+        "headline_bucket": HEADLINE_BUCKET,
         "by_episode": by_episode,
+        "gate_settled_episodes": by_episode.get(HEADLINE_BUCKET, {}).get("settled", 0),
         "rows": len(rows), "scans": len(scans),
         "bars_scanned": len({x.get("bar_date") for x in scans}),
         "signals": len(sigs), "taken": len(taken),
-        "taken_hq": len(taken_hq), "taken_base": len(live_taken) - len(taken_hq),
+        "taken_headline": len(head_taken),
+        "taken_hq": len(taken_hq), "taken_base": len(head_taken) - len(taken_hq),
         "taken_live": len(live_taken),
         "skipped": len(skipped), "outcomes": len(outs),
         "by_basis": by_basis, "by_bucket": by_bucket,
@@ -1097,8 +1108,9 @@ def report(path: Path | None = None) -> int:
         return 0
     print(f"  {s['rows']} rows: {s['signals']} signals, {s['outcomes']} outcomes, "
           f"{s['scans']} scans, {s['alerts']} alerts ({s['alerts_delivered']} delivered)")
-    print(f"  taken {s['taken']} (live bucket {s['taken_live']}: hq {s['taken_hq']}, "
-          f"base {s['taken_base']})   skipped {s['skipped']}")
+    print(f"  taken {s['taken']} ({s['headline_bucket']} bucket, the population: "
+          f"{s['taken_headline']}: hq {s['taken_hq']}, base {s['taken_base']}; "
+          f"live alerting view {s['taken_live']})   skipped {s['skipped']}")
     def _fmt(x):
         return "no HQ rows" if x != x else f"{x:+.3f}"
     for b, bb in s["by_bucket"].items():
@@ -1110,7 +1122,8 @@ def report(path: Path | None = None) -> int:
             print(f"  {'':12}  EPISODES {eb['episodes']} ({eb['rows']} rows)   "
                   f"settled {eb['settled']}   open {eb['open']}   void {eb['void']}   "
                   f"mean R {_fmt(eb['mean_r'])} ({eb['wins']} wins)  <- the pre-registered unit")
-    print("  by basis — the LIVE bucket only, the pre-registered reading; other buckets above")
+    print(f"  by basis — the {s['headline_bucket'].upper()} bucket, the pre-registered population "
+          f"(amendment 2026-10-28); the live bucket is the alerting view and never gates")
     for basis, b in s["by_basis"].items():
         if not (b["settled"] or b["void"]):
             continue
@@ -1118,11 +1131,10 @@ def report(path: Path | None = None) -> int:
               f"open {b['open']}   mean R {b['mean_r']:+.4f} "
               f"(hq {_fmt(b['mean_r_hq'])} / base {_fmt(b['mean_r_base'])})  [rows]")
     if any(b["settled"] for b in s["by_basis"].values()):
-        _le = s["by_episode"].get("live", {"settled": 0})
-        print(f"  NOT a result. It becomes one at 349 settled EPISODES on one")
-        print(f"  basis (results/forward_record_preregistration.md): the live")
-        print(f"  bucket has {_le['settled']} settled episode(s). The two bases")
-        print(f"  are different denominators and are never summed.")
+        print(f"  NOT a result. It becomes one at 349 settled EPISODES of the")
+        print(f"  {s['headline_bucket'].upper()} bucket on one basis (results/forward_record_preregistration.md):")
+        print(f"  the {s['headline_bucket']} bucket has {s['gate_settled_episodes']} settled episode(s). The two")
+        print(f"  bases are different denominators and are never summed.")
     if s["skip_reasons"]:
         print(f"  skipped because:")
         for reason, n in sorted(s["skip_reasons"].items(), key=lambda kv: -kv[1]):
@@ -1457,7 +1469,10 @@ def selftest() -> int:
     assert _hq_rows["HQA"]["hq"] is False and _hq_rows["HQB"]["hq"] is True
     assert "hq" not in _hq_rows["HQC"], "no tag given -> no field invented"
     _hs = summary(ao_hq)
-    assert (_hs["taken"], _hs["taken_hq"], _hs["taken_base"]) == (3, 2, 1), _hs
+    _hl = _hs["by_bucket"]["live"]
+    assert (_hs["taken"], _hl["taken_hq"], _hl["taken"] - _hl["taken_hq"]) == (3, 2, 1), _hs
+    assert (_hs["taken_headline"], _hs["taken_hq"], _hs["taken_base"]) == (0, 0, 0), \
+        "the headline split is the POOL's (amendment 2026-10-28); these rows are live"
     print("hq tag           : on the row when given; summary splits taken "
           "2 hq / 1 base, legacy rows read from setup")
 
@@ -1493,10 +1508,14 @@ def selftest() -> int:
     assert abs(_bs["live"]["mean_r_base"] + 1.0) < 1e-9 and abs(_bs["pool"]["mean_r_hq"] - 2.0) < 1e-9
     assert _bs["live"]["mean_r_hq"] != _bs["live"]["mean_r_hq"], "no hq rows in live -> nan"
     _sb = summary(bk)
-    assert (_sb["taken"], _sb["taken_live"], _sb["taken_hq"], _sb["taken_base"]) == (2, 1, 0, 1), _sb
+    assert _sb["headline_bucket"] == HEADLINE_BUCKET == "pool", _sb["headline_bucket"]
+    assert (_sb["taken"], _sb["taken_live"], _sb["taken_headline"], _sb["taken_hq"], _sb["taken_base"]) \
+        == (2, 1, 1, 1, 0), _sb
     assert _sb["by_basis"]["stop_distance"]["settled"] == 1 and \
-        abs(_sb["by_basis"]["stop_distance"]["mean_r"] + 1.0) < 1e-9, \
-        "the headline by-basis reading is the live bucket's alone (the pool's +2.0 R stays out)"
+        abs(_sb["by_basis"]["stop_distance"]["mean_r"] - 2.0) < 1e-9, \
+        "the headline by-basis reading is the POOL bucket's alone (the live's -1.0 R stays out; amendment 2026-10-28)"
+    assert _sb["gate_settled_episodes"] == 1 and _sb["by_episode"]["live"]["settled"] == 1, \
+        "the gate counts pool episodes; the live episode is reported, not gated"
     _r0 = append("note", {"x": 1}, path=bk, now=datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc))
     assert _r0["ts"] == "2026-01-02T03:04:05+00:00", "append() stamps the given instant, in UTC"
     print("buckets          : rows name live/pool (legacy = live); pool scans are not "
@@ -1515,11 +1534,16 @@ def selftest() -> int:
     record_signal("EP2", "Bullish", _eps, "taken", "", cfg, bar_date="2026-10-06", path=_ep, hq=False, bucket="pool")
     record_outcome(_e1["seq"], "win", 2.0, "stop_distance", path=_ep)
     record_outcome(_e2["seq"], "loss", -1.0, "stop_distance", path=_ep)   # 2nd row: NOT counted
+    _e5 = next(r for r in read_all(_ep) if r.get("ticker") == "EP2")
+    record_outcome(_e5["seq"], "win", 1.5, "stop_distance", path=_ep)
+    _e6 = record_signal("EP3", "Bullish", _eps, "taken", "", cfg, bar_date="2026-10-08", path=_ep, hq=False, bucket="pool")
+    record_outcome(_e6["seq"], "loss", -1.0, "stop_distance", path=_ep)
     _es = summary(_ep)["by_episode"]
     assert set(_es) == {"live", "pool"}, _es
     assert (_es["live"]["episodes"], _es["live"]["rows"], _es["live"]["settled"], _es["live"]["open"]) == (2, 4, 1, 1), _es["live"]
     assert abs(_es["live"]["mean_r"] - 2.0) < 1e-9, "the episode's R is its FIRST row's, not the rows' mean"
-    assert (_es["pool"]["episodes"], _es["pool"]["settled"]) == (1, 0), _es["pool"]
+    assert (_es["pool"]["episodes"], _es["pool"]["settled"]) == (2, 2), _es["pool"]
+    assert summary(_ep)["gate_settled_episodes"] == 2, "the gate counts POOL episodes (2), not live (1)"
     _el = episodes([r for r in read_all(_ep) if counts_as_taken(r)])
     assert [e["bar_date"] for e in _el if e["ticker"] == "EP1"] == ["2026-10-05", "2026-10-16"], _el
     _buf = _io.StringIO()
@@ -1527,7 +1551,9 @@ def selftest() -> int:
         report(_ep)
     assert "EPISODES 2 (4 rows)" in _buf.getvalue(), _buf.getvalue()
     assert "no HQ rows" in _buf.getvalue() and "nan" not in _buf.getvalue(), _buf.getvalue()
-    assert "has 1 settled episode(s)" in _buf.getvalue(), _buf.getvalue()
+    assert "EPISODES of the\n  POOL bucket" in _buf.getvalue() and \
+        "the pool bucket has 2 settled episode(s)" in _buf.getvalue(), _buf.getvalue()
+    assert "live bucket is the alerting view and never gates" in _buf.getvalue(), _buf.getvalue()
     print("episodes         : consecutive bars = one observation, first row graded; "
           "report prints the episode count under the gate line")
 
@@ -1566,7 +1592,8 @@ def selftest() -> int:
     record_signal("TMO", "Bearish", setup, "skipped", "direction gate", cfg,
                   bar_date="2026-09-30", path=ao_leg)
     _ls = summary(ao_leg)
-    assert (_ls["taken"], _ls["taken_base"], _ls["skipped"]) == (1, 1, 1), _ls
+    assert (_ls["taken"], _ls["by_bucket"]["live"]["taken"] - _ls["by_bucket"]["live"]["taken_hq"],
+            _ls["skipped"]) == (1, 1, 1), _ls
     record_outcome(1, "loss", -1.2, "stop_distance", path=ao_leg)     # legacy row: allowed
     try:
         record_outcome(2, "loss", -1.0, "stop_distance", path=ao_leg)
@@ -1681,9 +1708,9 @@ def selftest() -> int:
     ag = Path(tempfile.mkdtemp()) / "ag.jsonl"
     _gsetup = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0}
     g1 = record_signal("GA", "Bullish", _gsetup, "taken", "", cfg,
-                       bar_date="2026-09-01", path=ag, hq=True)
+                       bar_date="2026-09-01", path=ag, bucket="pool", hq=True)
     g2 = record_signal("GB", "Bullish", _gsetup, "taken", "", cfg,
-                       bar_date="2026-09-01", path=ag, hq=False)
+                       bar_date="2026-09-01", path=ag, bucket="pool", hq=False)
     record_signal("GC", "Bearish", _gsetup, "skipped", "direction gate", cfg,
                   bar_date="2026-09-01", path=ag)
     _feeds = {"GA": _bars(_sig, _flat(_days[0]), (_days[1], 90.0, 91.0, 89.0, 90.5)),

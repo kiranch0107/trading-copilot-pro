@@ -5,6 +5,56 @@ and tagging HQ"). Written and committed BEFORE the first row under the new rule
 is recorded.** Everything below is fixed. Nothing here may be changed after a
 result is seen; the timestamp on this file in git is the point of it.
 
+## Amendment 2026-10-28 — the POOL is the population for the base-signal question (BACKLOG 34 C). READING CHANGE: which bucket the stopping rule reads; no rule, gate, threshold or recording changes
+
+**Owner's decision 2026-10-28 ("go with option 1, pool only"), written
+before the next scan row.** Nothing about what is recorded, how a row is
+graded, or what is alerted changes. What changes is which bucket the
+pre-registered QUESTION is asked of.
+
+**Why.** The arrival rates measured on the committed scans
+(`results/progress_review_2026-10-26.md`, F1): the live watchlist
+produces about 0.61 episodes a bar, so its 349-episode gate is ~2.3 years
+away, which this document already predicted ("about three years at the
+current universe size"); the pool produces about 3.7 a bar, so its gate is
+~4.5 months away. The live watchlist is also a rotating population: the
+weekly snapshot swapped 3–4 of its 8 names each week in October, so "the
+watchlist" names whichever eight the snapshot chose that week. The pool
+(`universe.CANDIDATE_POOL`, fixed, every reserved tranche excluded) is the
+population that is both stable and large enough to answer anything.
+
+**What is declared.**
+
+- **The population for H0 and H1 is the pool bucket.** The 349-settled-
+  episode stopping rule, the episode unit, the bases, the dust floor and
+  the resolver are exactly as written below and apply to `bucket: pool`
+  rows. `forward_log.summary()` reports the headline by-basis reading and
+  the gate on the pool; `report()` says so on the gate line.
+- **The live bucket is the alerting view.** It is still recorded in full,
+  still graded, still reported per bucket and per episode, and it NEVER
+  gates: no mean R from the live bucket is reported as a result, at any
+  sample size, under this document. It is the record of what was alerted.
+- **The pullback bucket is unchanged** (its own pre-registration).
+- **H1 stands as written** (the HQ tier adds ≥ +0.15 R per episode over
+  base, on the pool). Re-posing it for a tier that has fired 0 times in
+  243 taken rows (BACKLOG 34 D) is a separate decision and is NOT made
+  here.
+
+**What was known when this was declared, stated so it cannot be read as
+selection.** Pool rows have been recorded since 2026-10-12, and at
+declaration the pool read 42 episodes, 26 settled, mean −0.332 R (18
+rows graded stop-first), the live bucket 18 / 15 / −0.196 R. The
+decision is driven by arrival rate and population stability, both of
+which were in this document's own power paragraph before any pool row
+existed ("~6 months at ~50 names"); the observed sign is negative on both
+buckets and the amendment does not favour either. Neither number is a
+result; the gate is 349 settled pool episodes.
+
+**Enforcement.** `forward_log.HEADLINE_BUCKET = "pool"`; the selftest
+asserts the by-basis reading and the gate count come from the pool and
+that a live-bucket outcome moves neither; `consistency_check` reads the
+same.
+
 ## Amendment 2026-10-19 — settled bars only, and a fingerprint that names every rule (BACKLOG 35). READING CHANGES: no rule changes
 
 Two corrections from the external review of 2026-10-19, declared before the
