@@ -2932,6 +2932,72 @@ def check_research_config_choice_declared() -> None:
     print("  live_cfg() == scanner's params; record keeps bt.DEFAULTS; --config live; run() names it; one builder")
 
 
+def check_journal_hygiene() -> None:
+    """
+    BACKLOG 32, decided 2026-10-28. (1) A SIGNAL option entry is logged only
+    in the measured structure (21-45 DTE at the trade date, +200 / -50, out
+    at 7), from one dict in risk_params that the scanner's chain window and
+    the app's defaults also read. (3) No discretionary option entry is
+    logged as live money. (4) No fixture row sits in the committed journal
+    or positions. The app catches every refusal at every call site.
+    """
+    import json as _json
+    import risk_params as rp
+    import scanner
+    import journal_store as js
+    m = rp.MEASURED_OPTION_STRUCTURE
+    assert (scanner.OPT_MIN_DTE, scanner.OPT_MAX_DTE) == (m["min_dte"], m["max_dte"]), \
+        "the scanner's chain window must be the measured structure's"
+    app = Path("app.py").read_text(encoding="utf-8", errors="replace")
+    for needle in ('value=int(risk_params.MEASURED_OPTION_STRUCTURE["min_dte"])',
+                   'value=int(risk_params.MEASURED_OPTION_STRUCTURE["tp_pct"])',
+                   'value=int(risk_params.MEASURED_OPTION_STRUCTURE["sl_pct"])',
+                   'value=int(risk_params.MEASURED_OPTION_STRUCTURE["dte_exit"])'):
+        assert needle in app, f"app.py default no longer reads the structure: {needle}"
+    import re as _re
+    sites = [m.start() for m in _re.finditer(r"open_option_position\(\n", app)]
+    assert len(sites) >= 3, "app.py must log positions from the quick log, the manual form and the checker"
+    for i in sites:
+        before, after = app[max(0, i - 300):i], app[i:i + 3200]
+        assert _re.search(r"try:\s*\n\s*$", before) and _re.search(r"except (ValueError|Exception)\b", after), \
+            f"app.py call site at offset {i} does not catch journal_store's refusal (ValueError) with try/except"
+    for f, fields in (("trade_journal.json", ("ticker", "id")), ("open_positions.json", ("ticker", "id"))):
+        for row in _json.loads(Path(f).read_text(encoding="utf-8") or "[]"):
+            vals = " ".join(str(row.get(k, "")) for k in fields)
+            assert "ZZZ" not in vals and not str(row.get("id", "")).startswith("zr-"), \
+                f"{f} carries a fixture row: {vals}"
+    # Behavioural, in memory: the refusals and the one allowed path.
+    mem = {"pos": []}
+    saved = {k: getattr(js, k) for k in ("load_positions", "save_positions")}
+    try:
+        js.load_positions = lambda: list(mem["pos"])
+        js.save_positions = lambda d: mem.__setitem__("pos", list(d))
+        rules = {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "max_hold_bars": 20}
+        for kw, needle in ((dict(source="discretionary", mode="live"), "discretionary"),
+                           (dict(source="signal", signal_key="X|Bullish|2026-10-07",
+                                 traded_at="2026-10-07 10:00 ET", expiry="2026-10-16"), "9 DTE"),
+                           (dict(source="signal", signal_key="X|Bullish|2026-10-07",
+                                 traded_at="2026-10-07 10:00 ET", rules=dict(rules, sl_pct=30)), "stop loss 30")):
+            args = dict(ticker="X", right="CALL", strike=10.0, expiry="2026-11-20", contracts=1,
+                        entry_premium=0.5, rules=rules)
+            args.update(kw)
+            try:
+                js.open_option_position(**args)
+                raise AssertionError(f"journal_store must refuse {kw}")
+            except ValueError as e:
+                assert needle in str(e) and (needle == "discretionary" or "BACKLOG 32" in str(e)), str(e)
+        ok = js.open_option_position("X", "CALL", 10.0, "2026-11-20", 1, 0.5, rules, source="signal",
+                                     signal_key="X|Bullish|2026-10-07", traded_at="2026-10-28 10:00 ET")
+        assert ok["mode"] == "live" and len(mem["pos"]) == 1
+        pp = js.open_option_position("X", "CALL", 10.0, "2026-11-05", 1, 0.5, {"tp_pct": 50}, mode="paper")
+        assert pp["mode"] == "paper" and pp["source"] == "discretionary"
+    finally:
+        for k, v in saved.items():
+            setattr(js, k, v)
+    print("  signal entries only in the measured structure (one dict; scanner window and app defaults read it); "
+          "no discretionary live entry; no fixture row committed; every app call site catches the refusal")
+
+
 def check_intraday_rules_match_preregistration() -> None:
     """
     intraday_rules.py's constants are the numbers its pre-registration fixed.
@@ -3276,6 +3342,7 @@ CHECKS = [
     ("spread arm pre-registered and wired",      check_spread_arm_preregistered),
     ("HQ tier legs declared (F, G)",             check_hq_tier_legs_declared),
     ("research config choice (BACKLOG 23)",      check_research_config_choice_declared),
+    ("journal hygiene (BACKLOG 32)",             check_journal_hygiene),
 ]
 
 

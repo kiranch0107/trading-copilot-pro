@@ -1712,7 +1712,7 @@ rule changes.
 
 ---
 
-## 32. Journal review: the trades traded are not the structure tested — ASSESSED 2026-10-13, DECISIONS OPEN
+## 32. Journal review: the trades traded are not the structure tested — ASSESSED 2026-10-13; DECIDED 2026-10-28, THE JOURNAL ENFORCES (1), (3) AND (4)
 
 **Owner's question 2026-10-13** ("review our trade journal including
 skipped signals; right vs wrong"), answered in
@@ -1752,6 +1752,28 @@ and marks the ones whose key appears on a journal row as acted on. The app's
 own scan alerts list is unchanged below it. The single-writer check names
 `record_alert`. Still the owner's: delete the ZZZ row, take or note the two
 stops, and enter the signal bar date when logging.
+
+**DECIDED 2026-10-28 (owner: "go with BACKLOG 32 as well, journal
+hygiene").** (1) **Only the measured structure**, in code:
+`risk_params.MEASURED_OPTION_STRUCTURE` (21–45 DTE at the trade date,
++200 % / −50 % on the premium, out at 7 DTE) is one dict;
+`journal_store.open_option_position()` refuses a SIGNAL entry outside it,
+naming the leg and ending with the review's words ("a name where that is
+unaffordable at this account size is not tradeable here"); the scanner's
+chain window (`OPT_MIN_DTE` / `OPT_MAX_DTE`) and the app's Min-DTE and
+exit-rule defaults read the dict (the app's Min DTE default was 12, under
+the floor). (2) The two stops were resolved before this (NVDA expired
+worthless −1.0 R, PFE closed; progress review 2026-10-26). (3) **No
+discretionary option entry is logged as live money**: it is a paper trade
+(where it is graded) or a system signal with its signal bar; the app's
+source selector says so and every call site catches the refusal. (4)
+The ZZZ test row (`zr-1`) is deleted from `trade_journal.json` (14 rows
+remain, all pre-rule: no key, no stop; `attach_outcomes` already refuses
+them); trade time and signal bar were built 10-13 / 10-26. One check
+(59, `check_journal_hygiene`: the dict is the scanner's window and the
+app's defaults, the refusals behave in memory, no fixture row is
+committed, every app call site is guarded). Falsified. The premium-basis
+reading starts with the first signal trade logged under these rules.
 
 ## 33. ADX 30 instead of 35, on the config the scanner runs — RUN 1 DONE 2026-10-14: NOT ESTABLISHED; DECIDED 2026-10-28: 30, AS AN INTAKE CHOICE
 
@@ -2270,7 +2292,9 @@ stops filled at the open), the mechanism behind the move from run 2.
 and G (fingerprint `4ddd12a3095f` on its scan row; the HQ tag and the alert
 tier now fire on about one taken row in nine, ~1.5 a pool bar, so the
 first Telegram alerts of the record are due and the pool's cap of five a
-day may bind on a busy bar); the
+day may bind on a busy bar); the first signal trade logged under BACKLOG
+32's rules (21–45 DTE, +200 / −50 / 7, with its signal bar), which starts
+the premium-basis reading; the
 first forward spread reading at 6 graded cycles per arm (~6 months,
 BACKLOG 34 E) and the result at 12; the first `spread arms:` lines in the
 post-close log (eight cycles opened, or the reason not); journal hygiene beyond F4 (BACKLOG 32); BACKLOG 33 and 23 decisions; read
@@ -2280,8 +2304,8 @@ the 11-09/11-10 post-close logs (F5).
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 58 cross-module
-  invariants (58 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 59 cross-module
+  invariants (59 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on

@@ -132,7 +132,10 @@ def source_selector(key: str) -> str:
         horizontal=True, key=f"src_{key}",
         help="System signal = the scanner or watchlist flagged it and it "
              "passed the filters. Your own idea = anything else, including a "
-             "setup the system showed but rejected.") == "A system signal" \
+             "setup the system showed but rejected. Since 2026-10-28 (BACKLOG 32) "
+             "your own idea is logged as a PAPER trade only, and a system signal "
+             "only in the measured structure: 21-45 DTE, +200% / -50%, out at 7 DTE."
+             ) == "A system signal" \
         else "discretionary"
 
 
@@ -390,10 +393,11 @@ BUDGET_MAX    = st.sidebar.number_input("Budget max (option mid, per share)",
                         "budget in risk_params (5% of the account); this one "
                         "only labels a contract as a budget pick, it gates "
                         "nothing. size_gate() is the gate.")
-MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",   value=12,   min_value=1,
-    help="Minimum days-to-expiry to consider. Your swing target (2.5× ATR) usually needs "
-         "~8 sessions to play out — a 1-2 DTE contract will lose to theta even if the "
-         "trade thesis is correct. 7+ is a sane floor for swing trades."))
+MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",
+    value=int(risk_params.MEASURED_OPTION_STRUCTURE["min_dte"]), min_value=1,
+    help="Minimum days-to-expiry to consider. The default is the measured structure's "
+         "floor (21 DTE; BACKLOG 32): a signal trade is logged only inside 21-45 DTE, "
+         "so a shorter window here shows contracts the journal will refuse."))
 MIN_RR        = st.sidebar.number_input("Min Reward/Risk",           value=float(_D.min_rr),  min_value=0.1,  step=0.1)
 HQ_MIN_RR     = st.sidebar.number_input("High-Quality R:R threshold", value=float(_D.hq_min_rr), min_value=0.2, step=0.1,
     help="R:R needed to qualify as a 🔥 HIGH QUALITY setup (these trigger Telegram alerts). "
@@ -2108,6 +2112,7 @@ with TAB_STOCK:
                                             if st.button("📍 Confirm — start monitoring",
                                                         type="primary",
                                                         key=f"qbuy_confirm_{_qkey}"):
+                                              try:
                                                 open_option_position(
                                                     mode=_q_mode, source=_q_src,
                                                     # Exactly this signal (BACKLOG 28):
@@ -2128,6 +2133,10 @@ with TAB_STOCK:
                                                            "invalidate_ema": q_thesis},
                                                     notes=q_notes,
                                                     entry_features=capture_entry_features(ticker))
+                                              except ValueError as _qve:
+                                                # refused by journal_store (F4; BACKLOG 32):
+                                                # say why and keep the form
+                                                st.error(f"Not logged: {_qve}")
                                                 st.session_state[f"qbuy_open_{_qkey}"] = False
                                                 st.success(
                                                     f"Logged {ticker} {opt['expiry']} "
@@ -2406,7 +2415,8 @@ with TAB_POSITIONS:
     st.markdown("**Exit rules** — the monitor needs at least one of these to alert you.")
     r1, r2, r3, r4 = st.columns(4)
     with r1:
-        rule_tp = st.number_input("Take profit +%", min_value=0, value=200, step=25,
+        rule_tp = st.number_input("Take profit +%", min_value=0,
+                                  value=int(risk_params.MEASURED_OPTION_STRUCTURE["tp_pct"]), step=25,
                                   key="op_tp",
                                   help=(
                                       "Exit when the premium gains this %. 0 disables.\n\n"
@@ -2445,7 +2455,8 @@ with TAB_POSITIONS:
                                       f"+50% throws away the property that makes it work. "
                                       f"The rules limit damage — they do not create an edge."))
     with r2:
-        rule_sl = st.number_input("Stop loss −%", min_value=0, max_value=100, value=50,
+        rule_sl = st.number_input("Stop loss −%", min_value=0, max_value=100,
+                                  value=int(risk_params.MEASURED_OPTION_STRUCTURE["sl_pct"]),
                                   step=10, key="op_sl",
                                   help="Exit when the premium loses this %. 0 disables. "
                                        "Max loss on a long option is 100% regardless.\n\n"
@@ -2453,7 +2464,8 @@ with TAB_POSITIONS:
                                        "between them is what decides whether you make money: "
                                        "breakeven win rate = SL / (TP + SL).")
     with r3:
-        rule_dte = st.number_input("Time exit at DTE", min_value=0, value=7, step=1,
+        rule_dte = st.number_input("Time exit at DTE", min_value=0,
+                                   value=int(risk_params.MEASURED_OPTION_STRUCTURE["dte_exit"]), step=1,
                                    key="op_dte",
                                    help="Exit when days-to-expiry falls to this. 0 "
                                         "disables. Theta decay accelerates sharply "

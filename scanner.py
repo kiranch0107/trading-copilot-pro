@@ -222,8 +222,9 @@ POOL_ALERT_CAP   = 5
 # wait for the next pass and the log says so.
 IV_GRADE_FETCH_CAP = 20
 POOL_STATE_KEY   = "POOL:DATE"   # the ET date the pool was last scanned
-OPT_MIN_DTE      = 21
-OPT_MAX_DTE      = 45
+# The chain window is the measured structure's (risk_params, BACKLOG 32).
+OPT_MIN_DTE      = int(risk_params.MEASURED_OPTION_STRUCTURE["min_dte"])
+OPT_MAX_DTE      = int(risk_params.MEASURED_OPTION_STRUCTURE["max_dte"])
 OPT_MAX_EXPIRIES = 3        # each expiry is one chain fetch — keep it lean
 # Single-sourced from risk_params.py, not chosen here.
 #
