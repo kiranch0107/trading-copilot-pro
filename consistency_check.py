@@ -2301,7 +2301,10 @@ def check_outcome_bases_never_pooled() -> None:
     tmp = Path(tempfile.mkdtemp()) / "bases.jsonl"
     setup = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0}
     sig = fl.record_signal("CKX", "Bullish", setup, "taken", "", {"k": 1},
-                           bar_date="2026-09-01", path=tmp, hq=False)
+                           bar_date="2026-09-01", path=tmp, bucket="pool", hq=False)
+    assert fl.HEADLINE_BUCKET == "pool", (
+        "the headline population is the POOL (forward_record_preregistration.md, "
+        "amendment 2026-10-28); changing it is a new amendment, dated, before its first row")
     fl.record_outcome(sig["seq"], "loss", -1.3, "stop_distance", exit_price=97.4,
                       detail={"exit_rule": "stop"}, path=tmp)
     try:
