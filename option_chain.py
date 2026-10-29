@@ -99,8 +99,23 @@ def _fetch_chain_with_retry(stock, expiry: str):
     return None
 
 
+def in_dte_window(dte: int, min_dte: int, max_dte: int | None = None) -> bool:
+    """
+    Whether an expiry is inside the window the selector reads: at least
+    `min_dte` out and, when `max_dte` is given, at most that far. The app
+    passes the measured structure's 21-45 (risk_params, BACKLOG 32; review
+    2026-10-28 F1): without the ceiling the third listed expiry on a
+    monthly-only name could be 50-60 DTE, a contract the journal then
+    refuses to log as a signal trade. The scanner's own fetch applies the
+    same window through this function.
+    """
+    if dte < min_dte:
+        return False
+    return max_dte is None or dte <= max_dte
+
+
 @st.cache_data(ttl=900, show_spinner=False)
-def get_full_chain_data(ticker: str, min_dte: int) -> dict:
+def get_full_chain_data(ticker: str, min_dte: int, max_dte: int | None = None) -> dict:
     # BUG FIX: min_dte is part of the cache key. Previously the MIN_DTE
     # sidebar global was read as a closure, so changing Min DTE did NOT
     # invalidate this 15-minute cache — stale expiries kept being served.
@@ -154,7 +169,7 @@ def get_full_chain_data(ticker: str, min_dte: int) -> dict:
                 dte = (pd.Timestamp(expiry) - today).days
             except Exception:
                 continue
-            if dte < min_dte:
+            if not in_dte_window(dte, min_dte, max_dte):
                 continue
             checked += 1
             try:
@@ -180,7 +195,8 @@ def get_full_chain_data(ticker: str, min_dte: int) -> dict:
 def get_option_data(ticker: str, price: float, trend: str, strength: str,
                     min_dte: int, atr_tgt_mult: float, budget_max: float,
                     is_market_open, atr: float | None = None,
-                    chain_data: dict | None = None) -> dict:
+                    chain_data: dict | None = None,
+                    max_dte: int | None = None) -> dict:
     """
     Strike selection.
 
@@ -205,7 +221,7 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
     # is spent on and had NO test at all (BACKLOG 10) precisely because every
     # path needed a live Yahoo chain.
     if chain_data is None:
-        chain_data = get_full_chain_data(ticker, min_dte)
+        chain_data = get_full_chain_data(ticker, min_dte, max_dte)
     if chain_data.get("error"):
         return {"error": chain_data["error"]}
 
@@ -424,6 +440,16 @@ def _chain(rows, expiry="2026-10-16", dte=35):
 def selftest() -> int:
     print("option_chain.py selftest")
     print("=" * 70)
+    # THE WINDOW HAS A CEILING WHEN ASKED FOR (review 2026-10-28 F1): the
+    # measured structure is 21-45 DTE and the journal refuses a signal trade
+    # outside it, so the selector must not propose a 50-DTE contract.
+    assert in_dte_window(21, 21, 45) and in_dte_window(45, 21, 45)
+    assert not in_dte_window(20, 21, 45) and not in_dte_window(46, 21, 45)
+    assert in_dte_window(400, 21) and not in_dte_window(20, 21), "no ceiling without max_dte, as before"
+    import inspect as _insp
+    assert "in_dte_window(dte, min_dte, max_dte)" in _insp.getsource(get_full_chain_data), \
+        "get_full_chain_data must filter expiries through in_dte_window()"
+    print("dte window       : floor and ceiling through one function; the chain fetch reads it")
     _open = lambda: True                                        # noqa: E731
     price = 100.0
 

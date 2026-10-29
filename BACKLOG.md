@@ -2292,9 +2292,8 @@ stops filled at the open), the mechanism behind the move from run 2.
 scans, the first under `4ddd12a3095f`: the first alerts of the record (the
 in-session scans alert; the pool cap of five may bind) and the first
 `spread arms:` cycles in the post-close log; the first signal trade logged
-under BACKLOG 32's rules (starts the premium-basis reading); the app's
-contract window ceiling (item 38 F1) and the H1 report cut (F3), both
-small; the 11-09/11-10 post-close logs (first IV premium rows, F5); token
+under BACKLOG 32's rules (starts the premium-basis reading); the
+11-09/11-10 post-close logs (first IV premium rows, F5); token
 rotation by 2026-12-16; the forward clocks (spread arm at 6 graded cycles
 per arm, RS basket at 26 weeks, the pool gate at 349 settled episodes,
 all around March–April 2027).
@@ -2317,7 +2316,16 @@ ceiling (the journal now refuses > 45 DTE); F2 the first alerts are due
 and the pool cap will be tested; F3 `report()` does not yet cut H1/H1′ at
 amendment F; F4 the spread arm's after-close quote quality is the unknown;
 F5 IV premium rows 11-09; F6 two stale doc notes (fixed); F7 token
-rotation 12-16. No engine, rule or threshold changed.
+rotation 12-16. No engine, rule or threshold changed. **F1 and F3 DONE
+2026-10-29 (owner: "go with F1 and F3 as well"):** `option_chain.in_dte_window()`
+is the one window function (floor and ceiling); the app has a Max DTE
+sidebar input defaulting to the structure's 45, passes it to the selector
+and mirrors it in the contract checker; the scanner's two chain fetches
+read the same function. `forward_log.HQ_READ_EXCLUDES` (the three pre-F
+hashes) cuts H1 (hq versus base) and H1′ (the rank tier) at amendment F;
+the base question, the episode gate and every count still read every row;
+`report()` prints the read and excluded pool row counts. Selftests, the
+hygiene check extended, falsified.
 
 ---
 

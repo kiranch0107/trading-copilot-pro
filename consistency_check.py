@@ -2950,10 +2950,30 @@ def check_journal_hygiene() -> None:
         "the scanner's chain window must be the measured structure's"
     app = Path("app.py").read_text(encoding="utf-8", errors="replace")
     for needle in ('value=int(risk_params.MEASURED_OPTION_STRUCTURE["min_dte"])',
+                   'value=int(risk_params.MEASURED_OPTION_STRUCTURE["max_dte"])',
                    'value=int(risk_params.MEASURED_OPTION_STRUCTURE["tp_pct"])',
                    'value=int(risk_params.MEASURED_OPTION_STRUCTURE["sl_pct"])',
                    'value=int(risk_params.MEASURED_OPTION_STRUCTURE["dte_exit"])'):
         assert needle in app, f"app.py default no longer reads the structure: {needle}"
+    # The window has a CEILING everywhere a chain is read (review 2026-10-28
+    # F1): the app passes its max to the selector, and the selector, the
+    # scanner's chain fetch and the ATM fetch all read one window function.
+    import option_chain as oc
+    import inspect as _insp
+    assert "max_dte=MAX_DTE)" in app, "app.py must pass max_dte=MAX_DTE to get_option_data()"
+    assert "in_dte_window(dte, min_dte, max_dte)" in _insp.getsource(oc.get_full_chain_data)
+    sc_src = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
+    assert sc_src.count("option_chain.in_dte_window(dte, OPT_MIN_DTE, OPT_MAX_DTE)") == 2, \
+        "scanner's two chain fetches must read the window through option_chain.in_dte_window()"
+    assert oc.in_dte_window(45, 21, 45) and not oc.in_dte_window(46, 21, 45) and not oc.in_dte_window(20, 21, 45)
+    # H1 / H1' read from amendment F forward (review 2026-10-28 F3).
+    import forward_log as fl
+    assert fl.HQ_READ_EXCLUDES == frozenset({"e7d75b855a51", "c357a0d01ff5", "ba6b3b46afa6"}), \
+        "the HQ reading window must exclude exactly the three pre-F hashes"
+    assert all(h in fl.KNOWN_CONFIGS for h in fl.HQ_READ_EXCLUDES)
+    assert fl.hq_readable({"config": "4ddd12a3095f"}) and not fl.hq_readable({"config": "c357a0d01ff5"})
+    assert "read from amendment F (2026-10-28) forward" in Path("forward_log.py").read_text(), \
+        "report() must say the HQ lines are read from amendment F"
     import re as _re
     sites = [m.start() for m in _re.finditer(r"open_option_position\(\n", app)]
     assert len(sites) >= 3, "app.py must log positions from the quick log, the manual form and the checker"
@@ -2995,7 +3015,8 @@ def check_journal_hygiene() -> None:
         for k, v in saved.items():
             setattr(js, k, v)
     print("  signal entries only in the measured structure (one dict; scanner window and app defaults read it); "
-          "no discretionary live entry; no fixture row committed; every app call site catches the refusal")
+          "no discretionary live entry; no fixture row committed; every app call site catches the refusal; "
+          "DTE ceiling everywhere; H1/H1' read from amendment F")
 
 
 def check_intraday_rules_match_preregistration() -> None:
