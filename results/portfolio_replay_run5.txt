@@ -1,0 +1,45 @@
+====================================================================================
+LONGS ONLY, IN SHARES — what it would actually have been
+====================================================================================
+  $5,000 account, 1.0% risk per trade, position ceiling 25%
+  A MEASUREMENT, not a test. No bar, nothing searched over.
+====================================================================================
+                   total %   CAGR %  max DD %  trades   win %
+  -----------------------------------------------------------
+  idealised          +20.2     +2.0      51.8     884    36.0
+  constrained        +25.3     +2.4      17.2     644    37.3
+  SPY buy-hold      +252.4    +13.4      34.1       —       —
+
+  WHAT THE CONSTRAINT COST
+    signals skipped, no room    240
+    positions sized down        738
+    peak concurrent positions   5
+    peak capital deployed       100% of equity
+    -> 240 of 884 signals (27%) were not takeable at this account size
+
+  BY YEAR (constrained)
+    year      trades       P&L $
+    2017          49        -201
+    2018          61        +494
+    2019          58         +74
+    2020          79        +250
+    2021          85        +366
+    2022          27        -728
+    2023          80        +346
+    2024          91        -409
+    2025          63        +912
+    2026          51        +163
+
+====================================================================================
+  READING IT
+  The long side is +0.059 R on 884 trades, 95% CI [-0.069, +0.187] — it SPANS ZERO.
+  (The record was +0.085 R, and decayed +0.268 -> +0.106 -> +0.085
+  as the sample grew; results/longshort_split.md.)
+  Dropping shorts removes a measured loss; it does not add a measured
+  gain. Expectancy above has a confidence interval. The DRAWDOWN does
+  not — that is what the path did.
+
+  This returned +2.4%/yr against SPY at +13.4%/yr,
+  at 17% drawdown against 34%. Owning the index was
+  better on both axes, with no signals to follow.
+====================================================================================

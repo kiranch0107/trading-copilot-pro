@@ -1,0 +1,82 @@
+==============================================================================
+RECORD RE-CHECK — do the three recorded cuts still hold on today's code?
+==============================================================================
+
+  7t/5y  (discovery, swept)   (5y)
+  --------------------------------------------------------------------------
+    judged against the record
+                       recorded          now
+    trades                  418          413   <-- MOVED
+    avg R                +0.012       +0.015   <-- MOVED
+    long n                  260          256   <-- MOVED
+    long R               +0.268       +0.312   <-- MOVED
+    short n                 158          157   <-- MOVED
+    short R              -0.409       -0.469   <-- MOVED
+    fingerprint    v2-24b0f52e1203ecd5 v2-24b0f52e1203ecd5
+    gapped fills                           8   <-- the 09-10 scoring fix FIRED here
+    passed gates                         424
+    gapped through                        72   <-- the 10-08 gapped-stop rule FIRED here
+
+    VERDICT: CODE MOVED
+      - fingerprint is UNCHANGED, so the data is identical and these moves are the CODE:
+      - trade count 418 -> 413
+      - expectancy +0.012 -> +0.015
+      - long count 260 -> 256
+      - long avg R +0.268 -> +0.312
+      - short count 158 -> 157
+      - short avg R -0.409 -> -0.469
+
+  12t/5y (OOS set)   (5y)
+  --------------------------------------------------------------------------
+    judged against the record
+                       recorded          now
+    trades                  684          680   <-- MOVED
+    avg R                -0.012       -0.029   <-- MOVED
+    long n                  429          428   <-- MOVED
+    long R               +0.106       +0.095   <-- MOVED
+    short n                 255          252   <-- MOVED
+    short R              -0.210       -0.238   <-- MOVED
+    fingerprint    v2-6b5c07fe41849b1c v2-6b5c07fe41849b1c
+    gapped fills                          18   <-- the 09-10 scoring fix FIRED here
+    passed gates                         700
+    gapped through                       116   <-- the 10-08 gapped-stop rule FIRED here
+
+    VERDICT: CODE MOVED
+      - fingerprint is UNCHANGED, so the data is identical and these moves are the CODE:
+      - trade count 684 -> 680
+      - expectancy -0.012 -> -0.029
+      - long count 429 -> 428
+      - long avg R +0.106 -> +0.095
+      - short count 255 -> 252
+      - short avg R -0.210 -> -0.238
+
+  12t/10y (OOS set)   (10y)
+  --------------------------------------------------------------------------
+    judged against the record
+                       recorded          now
+    trades                 1386         1376   <-- MOVED
+    avg R                -0.048       -0.075   <-- MOVED
+    long n                  889          884   <-- MOVED
+    long R               +0.085       +0.059   <-- MOVED
+    short n                 497          492   <-- MOVED
+    short R              -0.287       -0.315   <-- MOVED
+    fingerprint    v2-e09e31d6eaf30233 v2-e09e31d6eaf30233
+    gapped fills                          44   <-- the 09-10 scoring fix FIRED here
+    passed gates                        1428
+    gapped through                       220   <-- the 10-08 gapped-stop rule FIRED here
+
+    VERDICT: CODE MOVED
+      - fingerprint is UNCHANGED, so the data is identical and these moves are the CODE:
+      - trade count 1386 -> 1376
+      - expectancy -0.048 -> -0.075
+      - long count 889 -> 884
+      - long avg R +0.085 -> +0.059
+      - short count 497 -> 492
+      - short avg R -0.287 -> -0.315
+
+==============================================================================
+  THE CODE MOVED under an unchanged fingerprint. The record is
+  STALE. Every hypothesis that cited it — ADX, RVOL, the
+  verifiability screen, the decision to stop — must be re-read
+  against the new numbers before being relied on again.
+==============================================================================
