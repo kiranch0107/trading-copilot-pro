@@ -3090,7 +3090,8 @@ def check_post_close_pass_hygiene() -> None:
         Path("basket_log.py").read_text(encoding="utf-8"), "report() prints the gate from its constant"
     _sp = sl.summary(Path("spread_log.jsonl"))
     assert all("open_ratio" in a for a in _sp["arms"].values()) and \
-        "open cycles at entry, market mid / model (NOT A READING" in Path("spread_log.py").read_text(encoding="utf-8"), \
+        'if _open:\n        print(f"  open cycles at entry, market mid / model (NOT A READING' in \
+        Path("spread_log.py").read_text(encoding="utf-8"), \
         "the spread report prints the open cycles' entry ratios as counts, labelled not a reading (G2)"
     assert "unquoted" in sl.summary(Path("spread_log.jsonl")) and "unquoted cycles" in \
         Path("spread_log.py").read_text(encoding="utf-8"), "spread_log reports the unquoted tally by reason"
