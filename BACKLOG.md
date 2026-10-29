@@ -2291,7 +2291,7 @@ stops filled at the open), the mechanism behind the move from run 2.
 **Still pending, in blocking order (items 38, 39):** a week of `revision`
 rows (from 2026-10-30), then the post-close slot decision on their size
 (item 39); the 16:20 ET post-close log of 10-29 for the first `spread
-arms:` cycles; the NOW trade's premium if it was a typo; the
+arms:` cycles; the
 11-09/11-10 post-close logs (first IV premium rows, F5); token
 rotation by 2026-12-16; the forward clocks (spread arm at 6 graded cycles
 per arm, RS basket at 26 weeks, the pool gate at 349 settled episodes,
@@ -2377,8 +2377,10 @@ corrected in `open_positions.json` (a taken row exists for it), and
 scan has recorded (it cannot be a signal bar whatever the deployment's
 lag) while still only warning on an unmatched earlier date; pinned in
 `check_journal_hygiene`. The trade's $0.25 premium on a 150 strike with
-the underlying at 150.13 is left as logged and flagged to the owner: if
-it is a typo the P&L is wrong from the start.
+the underlying at 150.13 was flagged to the owner and **confirmed as
+traded (2026-10-29: $0.25 a contract, $25; two contracts, $50 at risk)**.
+The row stands as logged; its +200 % target is $0.75 and its −50 % stop
+$0.125, the exit monitor's levels.
 
 ---
 
