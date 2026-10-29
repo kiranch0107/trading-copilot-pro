@@ -2325,6 +2325,18 @@ hashes) cuts H1 (hq versus base) and H1′ (the rank tier) at amendment F;
 the base question, the episode gate and every count still read every row;
 `report()` prints the read and excluded pool row counts. Selftests, the
 hygiene check extended, falsified.
+**Improvements 3, 4, 5 DONE 2026-10-29 (owner: "go with 3 as well"):**
+the post-close pass stamps its live heartbeat `pass: "post_close"` and a
+second record-only dispatch on the same ET date (the 16:20 run after a
+16:10 schedule that landed on time) is skipped on that row, `--force`
+runs it; the pass ends with one `clocks:` log line (pool settled episodes
+of 349, bar revisions, basket weeks of 52, spread cycles of 12 per arm
+with the unquoted count, IV premium graded of snapshots), each gate read
+from the constant its module owns (`forward_log.GATE_EPISODES`,
+`basket_log.RESULT_WEEKS`, `spread_log.RESULT_CYCLES`); and
+`spread_log.report()` prints the unquoted cycles by `market_reason`, the
+F4 read. `check_post_close_pass_hygiene` (61). The first stamped
+heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
 
 ---
 
@@ -2386,8 +2398,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 60 cross-module
-  invariants (60 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 61 cross-module
+  invariants (61 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on

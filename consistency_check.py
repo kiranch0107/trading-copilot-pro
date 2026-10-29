@@ -3052,6 +3052,48 @@ def check_bar_revision_note_wired() -> None:
     print("  a differing re-read writes one revision row from analyze(); one writer; never taken; counted and reported")
 
 
+def check_post_close_pass_hygiene() -> None:
+    """
+    Review 2026-10-28, improvements 3, 4, 5 (owner 2026-10-29: "go with 3
+    as well"): the post-close record pass stamps its live heartbeat
+    `pass: "post_close"`; a second record-only dispatch on the same ET date
+    is skipped on that row unless --force; the pass ends with one `clocks:`
+    line naming every forward clock, each gate read from the module that
+    owns it, not a literal; and the spread report tallies the cycles whose
+    legs could not be quoted after the close, by reason (F4).
+    """
+    import basket_log as bl
+    import forward_log as fl
+    import spread_log as sl
+    sc_src = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
+    run_body = sc_src[sc_src.find("\ndef run("):]
+    assert 'pass_kind="post_close" if record_only else None' in run_body, \
+        "the record pass must stamp its live heartbeat post_close"
+    gate = run_body.find("_dup = None if args.force else post_close_already_recorded()")
+    assert 0 < gate < run_body.find("spread_record_pass(") and "if _dup:" in run_body[gate:gate + 200] \
+        and "return 0" in run_body[gate:gate + 400], \
+        "run() must skip the repeat record pass on today's heartbeat, before any fetch, unless --force"
+    helper = sc_src[sc_src.find("def post_close_already_recorded("):sc_src.find("def clocks_line(")]
+    assert 'forward_log.last_scan(bucket="live")' in helper and 'ls.get("pass") != "post_close"' in helper \
+        and ".astimezone(ET)" in helper, "the skip reads the stamped live heartbeat on the ET date"
+    assert 'logger.info("clocks: %s", clocks_line())' in run_body and \
+        run_body.find('logger.info("clocks: %s", clocks_line())') > run_body.find('logger.info("spread arms: %s"'), \
+        "the record pass must log the clocks line after the spread arms"
+    clocks = sc_src[sc_src.find("def clocks_line("):sc_src.find("def basket_record_pass(")]
+    for ref in ("forward_log.GATE_EPISODES", "basket_log.RESULT_WEEKS", "spread_log.RESULT_CYCLES",
+                "sp['unquoted_cycles']", "iv['graded']"):
+        assert ref in clocks, f"clocks_line() must read {ref}, not a literal"
+    assert fl.GATE_EPISODES == 349 and bl.RESULT_WEEKS == 52 and bl.FIRST_READ_WEEKS == 26 \
+        and sl.RESULT_CYCLES == 12, "the forward gates"
+    fl_src = Path("forward_log.py").read_text(encoding="utf-8")
+    assert "{GATE_EPISODES} settled EPISODES" in fl_src and "{RESULT_WEEKS} graded weeks" in \
+        Path("basket_log.py").read_text(encoding="utf-8"), "report() prints the gate from its constant"
+    assert "unquoted" in sl.summary(Path("spread_log.jsonl")) and "unquoted cycles" in \
+        Path("spread_log.py").read_text(encoding="utf-8"), "spread_log reports the unquoted tally by reason"
+    print("  record pass stamps its heartbeat; a same-day repeat is skipped; clocks line reads every gate; "
+          "unquoted spread legs tallied")
+
+
 def check_intraday_rules_match_preregistration() -> None:
     """
     intraday_rules.py's constants are the numbers its pre-registration fixed.
@@ -3398,6 +3440,7 @@ CHECKS = [
     ("research config choice (BACKLOG 23)",      check_research_config_choice_declared),
     ("journal hygiene (BACKLOG 32)",             check_journal_hygiene),
     ("bar revision note wired (BACKLOG 39)",     check_bar_revision_note_wired),
+    ("post-close pass hygiene (review 10-28, 3-5)", check_post_close_pass_hygiene),
 ]
 
 

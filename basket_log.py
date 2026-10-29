@@ -43,6 +43,8 @@ NO_BARS_DAYS = 45           # a window still missing its end this long after the
 MAX_SESSION_GAP_DAYS = 4    # stdlib fallback when no calendar is injected
 SPLIT_TOL = 0.02            # recorded vs fetched anchor close beyond this -> void:split
 BENCH = "SPY"
+RESULT_WEEKS = 52           # not a result before this many graded weeks (pre-registration)
+FIRST_READ_WEEKS = 26
 
 
 # ---------------------------------------------------------------------------
@@ -322,8 +324,8 @@ def report(path: Path | None = None) -> int:
     print(f"  weekly basket - {BENCH}: mean {f(s['mean_delta'])} +/- {se_txt}   "
           f"(basket {f(s['mean_basket'])}, {BENCH} {f(s['mean_bench'])}; "
           f"{s['weeks_ahead']} of {s['graded']} weeks ahead)")
-    print("  NOT a result before 52 graded weeks (results/rs_basket_preregistration.md);")
-    print("  first reading at 26, with its SE, whatever it says.")
+    print(f"  NOT a result before {RESULT_WEEKS} graded weeks (results/rs_basket_preregistration.md);")
+    print(f"  first reading at {FIRST_READ_WEEKS}, with its SE, whatever it says.")
     if s["problems"]:
         print(f"  CHAIN BROKEN — {len(s['problems'])} problem(s):")
         for m in s["problems"]:

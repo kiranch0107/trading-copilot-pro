@@ -1115,6 +1115,62 @@ def _record_pullback(tk: str, raw_df, cdf, spy_regime, bucket_src: str,
         return False
 
 
+def post_close_already_recorded(now=None) -> dict | None:
+    """
+    TODAY's post-close heartbeat, or None (review 2026-10-28, improvement
+    4). When the schedule lands on time the 16:20 dispatch used to repeat
+    the whole record pass, every Yahoo fetch and chain call included, to
+    find everything already recorded. The record pass stamps its live
+    heartbeat `pass: "post_close"`; a repeat on the same ET date is skipped
+    on that row and `--force` runs it anyway. An in-session heartbeat (no
+    stamp) never skips: the pass must run after a day's scans.
+    """
+    now = now or datetime.now(ET)
+    try:
+        ls = forward_log.last_scan(bucket="live")
+        if not ls or ls.get("pass") != "post_close" or not ls.get("ts"):
+            return None
+        ts = datetime.fromisoformat(str(ls["ts"])).astimezone(ET)
+    except (ValueError, TypeError):
+        return None
+    return ls if ts.date() == now.date() else None
+
+
+def clocks_line() -> str:
+    """
+    Every forward clock on one line for the post-close log (review
+    2026-10-28, improvement 5): the pool gate, the RS basket, the spread
+    arm, the bar revisions and the IV premium. Never raises.
+    """
+    parts = []
+    try:
+        s = forward_log.summary()
+        parts.append(f"pool {s['gate_settled_episodes']}/{forward_log.GATE_EPISODES} settled episodes")
+        parts.append(f"bar revisions {s.get('revisions', 0)}")
+    except Exception as exc:                               # noqa: BLE001
+        parts.append(f"forward log unreadable ({exc})")
+    try:
+        b = basket_log.summary()
+        parts.append(f"basket {b['graded']}/{basket_log.RESULT_WEEKS} weeks graded "
+                     f"({b['baskets']} recorded)")
+    except Exception as exc:                               # noqa: BLE001
+        parts.append(f"basket unreadable ({exc})")
+    try:
+        sp = spread_log.summary()
+        least = min((a["graded"] for a in sp["arms"].values()), default=0)
+        parts.append(f"spread {least}/{spread_log.RESULT_CYCLES} cycles graded per arm "
+                     f"({sp['cycles']} opened, {sp['unquoted_cycles']} unquoted)")
+    except Exception as exc:                               # noqa: BLE001
+        parts.append(f"spread unreadable ({exc})")
+    try:
+        iv = iv_snapshot.summary()
+        parts.append(f"IV premium {iv['graded']} graded of {iv['snapshots']} snapshots"
+                     + (f", oldest unresolved {iv['oldest_unresolved']}" if iv.get("oldest_unresolved") else ""))
+    except Exception as exc:                               # noqa: BLE001
+        parts.append(f"IV unreadable ({exc})")
+    return "; ".join(parts)
+
+
 def basket_record_pass(closes_for, snap: dict | None) -> str:
     """
     The RS basket row for the newest universe snapshot, once per snapshot
@@ -1225,6 +1281,11 @@ def run(args) -> int:
     if record_only:
         if not args.force and not is_post_close_window():
             logger.info("Not in the post-close window — record-only run skipped.")
+            return 0
+        _dup = None if args.force else post_close_already_recorded()
+        if _dup:
+            logger.info("post-close pass already recorded today (heartbeat %s, bar %s) — "
+                        "the repeat is skipped; --force runs it", _dup.get("ts"), _dup.get("bar_date"))
             return 0
     elif not args.force and not is_market_open():
         logger.info("Market closed — skipping.")
@@ -1626,6 +1687,7 @@ def run(args) -> int:
                 return {"date": _bv[-1]["date"], "close": _bv[-1]["close"]} if _bv else None
             logger.info("spread arms: %s", spread_record_pass(
                 _closes_for, _vol_close_for, lambda tk, md: fetch_atm_chain(tk, min_dte=md)))
+            logger.info("clocks: %s", clocks_line())
         except Exception as _exc:                          # noqa: BLE001
             logger.warning("iv snapshot failed: %s", _exc)
 
@@ -1644,7 +1706,7 @@ def run(args) -> int:
     for _bar, _info in sorted(bars_scanned.items()):
         try:
             forward_log.record_scan(_bar, _info["tickers"], _info["signals"],
-                                    _scan_cfg())
+                                    _scan_cfg(), pass_kind="post_close" if record_only else None)
         except Exception as _exc:                          # noqa: BLE001
             logger.warning("forward log: scan row for %s failed: %s", _bar, _exc)
     # The pool's heartbeat, under its own bucket, AFTER the live one: it is
@@ -2279,6 +2341,32 @@ def _selftest_body() -> int:
             # Inside the window: rows + heartbeat, no alert, no state.
             _g["is_post_close_window"] = lambda now=None: True
             run(_ap3.Namespace(force=False, dry_run=False, record_only=True))
+            # THE REPEAT IS SKIPPED (review 2026-10-28, improvement 4): a
+            # second record-only run inside today's window writes nothing;
+            # --force runs it; a heartbeat from another day does not skip.
+            _n_rows = len(forward_log.read_all(_tmpl3))
+            assert post_close_already_recorded() is not None, "today's heartbeat must be found"
+            run(_ap3.Namespace(force=False, dry_run=False, record_only=True))
+            assert len(forward_log.read_all(_tmpl3)) == _n_rows, "the repeat pass must write nothing"
+            _n_got, _n_chain = len(_got), len(_chain_fetches)
+            _iv_bytes, _fl_bytes = _iv_tmp.read_bytes(), _pl2.Path(_tmpl3).read_bytes()
+            run(_ap3.Namespace(force=True, dry_run=False, record_only=True))
+            assert len(forward_log.read_all(_tmpl3)) > _n_rows and len(_got) > _n_got, \
+                "--force runs the pass past today's heartbeat"
+            # The forced repeat's rows, fetches, chain calls and IV grades are
+            # not the tests' below: all four are put back as they were.
+            del _got[_n_got:]
+            del _chain_fetches[_n_chain:]
+            _iv_tmp.write_bytes(_iv_bytes)
+            _pl2.Path(_tmpl3).write_bytes(_fl_bytes)
+            _hb = forward_log.last_scan(_tmpl3, bucket="live")
+            assert _hb.get("pass") == "post_close", (_hb, "the record pass stamps its heartbeat")
+            assert post_close_already_recorded(now=datetime.fromisoformat(_hb["ts"]).astimezone(ET)
+                                               + timedelta(days=1)) is None, \
+                "a heartbeat from another day is not today's"
+            _cl = clocks_line()
+            assert all(w in _cl for w in ("pool ", "/349", "bar revisions", "basket ", "/52", "spread ", "/12", "IV premium")), _cl
+            print("post-close repeat       : skipped on today's heartbeat; clocks line reads every forward log")
         finally:
             _g.update(_saved)
             iv_snapshot.LOG = _real_iv_log
