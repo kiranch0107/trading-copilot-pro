@@ -1329,12 +1329,24 @@ def summary(path: Path | None = None) -> dict:
                   for b in sorted({e["bucket"] for e in eps})}
     # H1' (amendment 2026-10-28 D): the rank tier against the rest of the
     # headline bucket, by episode; membership by the episode's FIRST row.
+    #
+    # EPISODES RE-ANCHORED AT THE CUT (review 2026-10-29 G1, owner: "go with
+    # G1 as well"). Amendment F reads the HQ questions from 2026-10-28; the
+    # pool had scanned daily since 10-13, so on 10-28 most names were
+    # CONTINUING an episode begun under a pre-F hash, and keeping only the
+    # episodes whose first row was readable dropped 18 of the 21 readable
+    # rows (the report printed "tier 0 episodes" with five readable rows in
+    # it). The HQ questions now form their episodes from the READABLE rows:
+    # an episode's first readable row is its first row, with that row's own
+    # outcome (every taken row is graded). The base question and the gate
+    # keep the full episodes.
     tier = rank_tier(taken)
-    readable = {s.get("seq") for s in taken if hq_readable(s)}
-    head_eps = [e for e in eps if e["bucket"] == HEADLINE_BUCKET and e["seq"] in readable]
+    head_eps = [e for e in episodes([s for s in taken if hq_readable(s)], sd_out)
+                if e["bucket"] == HEADLINE_BUCKET]
     h1 = {"k": RANK_TIER_K,
           "tier": _episode_stats([e for e in head_eps if e["seq"] in tier]),
           "rest": _episode_stats([e for e in head_eps if e["seq"] not in tier]),
+          "episodes": len(head_eps),
           "read_rows": sum(1 for s in taken if bucket_of(s) == HEADLINE_BUCKET and hq_readable(s)),
           "excluded_rows": sum(1 for s in taken if bucket_of(s) == HEADLINE_BUCKET and not hq_readable(s))}
     # A (amendment 2026-10-28 A): signal minus control, by episode. The pair
@@ -1343,11 +1355,16 @@ def summary(path: Path | None = None) -> dict:
     # taken row) and graded, but only the first row's pair is read.
     controls = [r for r in rows if r.get("kind") == "control"]
     ctl_by_ref = {r.get("ref_seq"): r for r in controls}
+    # The control arm began on 2026-10-28 (amendment A), mid-episode for
+    # most pool names; its episodes are formed from the rows that CARRY a
+    # control, re-anchored at the arm's start (review 2026-10-29 G1), so the
+    # pair is the first controlled row of the episode and its control.
+    ctl_eps = episodes([s for s in taken if s.get("seq") in ctl_by_ref], sd_out)
     by_control = {}
     for b in sorted({e["bucket"] for e in eps}):
         ctls = [c for c in controls if bucket_of(c) == b]
         pairs = []
-        for e in eps:
+        for e in ctl_eps:
             if e["bucket"] != b or e["r"] is None:
                 continue
             c = ctl_by_ref.get(e["seq"])
@@ -1433,7 +1450,8 @@ def report(path: Path | None = None) -> int:
                       f"tier {h['tier']['episodes']} ep, {h['tier']['settled']} settled, mean R {_fmt(h['tier']['mean_r'])}  |  "
                       f"rest {h['rest']['episodes']} ep, {h['rest']['settled']} settled, mean R {_fmt(h['rest']['mean_r'])}")
                 print(f"  {'':12}  MDE at the 349 gate ~ +0.37 R; +0.15 R needs ~2,070 settled pool episodes")
-                print(f"  {'':12}  H1/H1' read from amendment F (2026-10-28) forward: {h['read_rows']} taken pool rows read, "
+                print(f"  {'':12}  H1/H1' read from amendment F (2026-10-28) forward: {h['read_rows']} taken pool rows read "
+                      f"as {h['episodes']} episodes re-anchored at the cut, "
                       f"{h['excluded_rows']} under the pre-F hashes excluded (the base question reads every row)")
             bc = s["by_control"].get(b)
             if bc and bc["controls"]:
@@ -1942,6 +1960,28 @@ def selftest() -> int:
     assert (_h["tier"]["settled"] + _h["rest"]["settled"]) == 2, (_h, "the +5 R pre-F row is not in the tier or the rest")
     _sm_f = summary(_rt)
     assert _sm_f["by_episode"]["pool"]["settled"] == 3, "the base question still reads the pre-F row"
+    # AN EPISODE THAT STRADDLES THE CUT (review 2026-10-29 G1): ST signals on
+    # 10-27 under a pre-F hash (+5 R) and again on 10-28 under the current
+    # one (-1 R). The base question reads one episode dated 10-27 (+5 R);
+    # H1/H1' read one episode re-anchored at 10-28 (-1 R), not none.
+    _st1 = record_signal("ST", "Bullish", {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0,
+                                           "rr": 3.0, "adx": 31.0, "hq_fail": ["rr<1"]},
+                         "taken", "", _pre_f, bar_date="2026-10-27", path=_rt, hq=False, bucket="pool")
+    record_outcome(_st1["seq"], "win", 5.0, "stop_distance", path=_rt)
+    _st2 = record_signal("ST", "Bullish", {"price": 101.0, "entry": 101.0, "stop": 99.0, "target": 107.0,
+                                           "rr": 3.0, "adx": 31.0, "hq_fail": ["rr<1"]},
+                         "taken", "", cfg, bar_date="2026-10-28", path=_rt, hq=False, bucket="pool")
+    record_outcome(_st2["seq"], "loss", -1.0, "stop_distance", path=_rt)
+    _sm_st = summary(_rt)
+    _eps_st = [e for e in episodes([r for r in read_all(_rt) if counts_as_taken(r)]) if e["ticker"] == "ST"]
+    assert len(_eps_st) == 1 and _eps_st[0]["bar_date"] == "2026-10-27" and _eps_st[0]["rows"] == 2, _eps_st
+    _h_st = _sm_st["h1_rank"]
+    assert _h_st["episodes"] == _h["episodes"] + 1 and \
+        (_h_st["tier"]["settled"] + _h_st["rest"]["settled"]) == (_h["tier"]["settled"] + _h["rest"]["settled"]) + 1, \
+        (_h, _h_st, "the straddling episode is read once, re-anchored at the cut")
+    _rs_st = [e for e in episodes([r for r in read_all(_rt) if counts_as_taken(r) and hq_readable(r)]) if e["ticker"] == "ST"]
+    assert len(_rs_st) == 1 and _rs_st[0]["bar_date"] == "2026-10-28" and _rs_st[0]["rows"] == 1, _rs_st
+    assert _sm_st["by_episode"]["pool"]["settled"] == 4, "the base question still reads it from 10-27"
     assert abs(_sm_f["by_bucket"]["pool"]["mean_r_hq"] - 1.0) < 1e-9, (
         _sm_f["by_bucket"]["pool"]["mean_r_hq"], "H1's hq mean reads HQ's +1.0 only; the pre-F +5 R row is excluded")
     # Tier episodes: HQ, A1, A2, B1, B2 (bar 1) and AA, AB (bar 2: four rows,
@@ -1954,9 +1994,12 @@ def selftest() -> int:
     _buf = _io.StringIO()
     with _ctx.redirect_stdout(_buf):
         report(_rt)
-    assert "H1' rank tier (top 5/bar" in _buf.getvalue() and "tier 7 ep, 1 settled" in _buf.getvalue(), _buf.getvalue()
+    # ST's 10-28 row is alone on its bar, so its re-anchored episode is in
+    # the tier: 7 + 1 episodes, 1 + 1 settled (its -1 R against HQ's +1 R).
+    assert "H1' rank tier (top 5/bar" in _buf.getvalue() and "tier 8 ep, 2 settled, mean R +0.000" in _buf.getvalue() \
+        and "episodes re-anchored at the cut" in _buf.getvalue(), _buf.getvalue()
     print("H1' rank tier    : top 5 per bar by fewest failed legs, ADX, R:R, ticker; "
-          "episode membership by first row; skipped and live rows never")
+          "episode membership by first row; skipped and live rows never; episodes re-anchored at the F cut")
 
     # ── A: THE CONTROL ARM (amendment 2026-10-28 A) ──
     _ca = Path(tempfile.mkdtemp()) / "ctl.jsonl"
@@ -2017,6 +2060,16 @@ def selftest() -> int:
     record_outcome(_c2["seq"], "win", 0.5, "stop_distance", path=_ca)
     _bc2 = summary(_ca)["by_control"]["pool"]
     assert _bc2["pairs"] == 2 and _bc2["settled"] == 2 and math.isfinite(_bc2["se_delta"]) and _bc2["se_delta"] > 0, _bc2
+    # AN EPISODE THAT BEGAN BEFORE THE CONTROL ARM (review 2026-10-29 G1): CA
+    # also signalled the day before its controlled row, with no control (the
+    # arm had not started). The pair is the first CONTROLLED row's, so the
+    # pair count does not fall to one.
+    _s0 = record_signal("CA", "Bullish", {"price": 99.0, "entry": 99.0, "stop": 97.0, "target": 105.0, "rr": 3.0},
+                        "taken", "", {"k": 1}, bar_date="2026-09-30", path=_ca, hq=False, bucket="pool")
+    record_outcome(_s0["seq"], "win", 2.0, "stop_distance", path=_ca)
+    _bc3 = summary(_ca)["by_control"]["pool"]
+    assert _bc3["pairs"] == 2 and _bc3["controls"] == 2, (_bc3, "the pair re-anchors at the first controlled row")
+    assert summary(_ca)["by_episode"]["pool"]["episodes"] == 2, "the base episode starts on 09-30"
     _buf2 = _io.StringIO()
     with _ctx.redirect_stdout(_buf2):
         assert report(_ca) in (0, 1)

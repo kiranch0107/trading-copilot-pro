@@ -2290,8 +2290,7 @@ stops filled at the open), the mechanism behind the move from run 2.
 
 **Still pending, in blocking order (items 39, 40, 41):** the 10-30 11:07
 scan (first `revision` rows, the key-based suppression against the seven
-delivered alerts, whether CME alerts); G1 (re-anchor the HQ and control
-readings at the amendment F cut) with the next "go"; a week of revision
+delivered alerts, whether CME alerts); a week of revision
 rows, then the post-close slot decision (item 39, ~11-06); the 11-09/11-10
 post-close logs (first IV premium rows); the first spread settlements
 11-30 and the skew read at 6 graded cycles per arm (~April 2027); token
@@ -2362,6 +2361,15 @@ HQ rows exist unsettled. **G4** two cosmetic drifts. **G5** the grading
 pre-registration's no-amendment clause was knowingly set aside twice
 today, each time said in the amendment's first line. No engine, rule or
 threshold changed.
+**G1 DONE 2026-10-29 (owner: "go with G1 as well"):** H1/H1′ form their
+episodes from the readable rows and the control pairing from the rows
+that carry a control, both re-anchored at their arm's start; the base
+question and the gate keep the full episodes; `report()` prints the
+re-anchored episode count; a dated note under amendment F states the
+rule. On 10-29: 21 episodes (5 tier, 16 rest) where the old reading had
+3; control pairs read from the first controlled row.
+`check_hq_episodes_reanchored` (64). Selftests (a straddling fixture in
+both readings), falsified.
 
 ---
 
@@ -2499,8 +2507,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 63 cross-module
-  invariants (63 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 64 cross-module
+  invariants (64 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on
