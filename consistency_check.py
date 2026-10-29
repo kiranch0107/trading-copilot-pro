@@ -2966,6 +2966,12 @@ def check_journal_hygiene() -> None:
     assert sc_src.count("option_chain.in_dte_window(dte, OPT_MIN_DTE, OPT_MAX_DTE)") == 2, \
         "scanner's two chain fetches must read the window through option_chain.in_dte_window()"
     assert oc.in_dte_window(45, 21, 45) and not oc.in_dte_window(46, 21, 45) and not oc.in_dte_window(20, 21, 45)
+    # A signal-bar date later than the last recorded scan bar is refused by
+    # the app's form (2026-10-29: the first NOW trade was keyed to the alert's
+    # day, not the bar's, and only a warning stood in the way).
+    assert "is later than the last bar any scan has recorded" in app and \
+        app.count("        return None\n    if not _hit:") == 1, \
+        "signal_bar_input must refuse a date after the last recorded scan bar (return None)"
     # H1 / H1' read from amendment F forward (review 2026-10-28 F3).
     import forward_log as fl
     assert fl.HQ_READ_EXCLUDES == frozenset({"e7d75b855a51", "c357a0d01ff5", "ba6b3b46afa6"}), \
