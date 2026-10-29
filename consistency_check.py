@@ -3156,15 +3156,24 @@ def check_risk_floor_single_sourced() -> None:
         "the amendment names the rule, the breach of the no-amendment clause, and the rows that stand"
     assert "void_risk_floor" in fl.summary(Path("forward_log.jsonl")) and "voided at the risk floor" in \
         Path("forward_log.py").read_text(encoding="utf-8")
+    bt_src = Path("backtest.py").read_text(encoding="utf-8", errors="replace")
+    sim = bt_src[bt_src.find("def simulate_trade("):bt_src.find("\ndef ", bt_src.find("def simulate_trade(") + 1)]
+    assert "floor = risk_params.min_risk(entry)" in sim and 'cfg.get("risk_floor", True)' in sim \
+        and '"fill inside the risk floor"' in sim and sim.find("if risk < floor:") > sim.find("if gapped:") \
+        and sim.find("if risk < floor:") < sim.find("mfe = mae = 0.0"), \
+        "the research engine refuses a fill inside the floor, after the gap check and before the walk, unless risk_floor=False"
+    assert '"risk_floor": False' in Path("intraday_rules.py").read_text(encoding="utf-8"), \
+        "the intraday engine keeps its pre-registered engine (risk_floor=False), explicitly"
     ed = Path("engine_differential.py").read_text(encoding="utf-8")
-    assert 'out["void_floor"] += 1' in ed and '"fill inside the risk floor"' in ed and \
-        'assert tot["void_floor"] >= 1' in ed, "the differential reports the declared divergence as void_floor, never a mismatch"
+    assert 'out["void_floor"] += 1' in ed and '"engine floored, grader did not"' in ed and \
+        '"grader floored, engine filled"' in ed and 'assert tot["void_floor"] >= 1' in ed, \
+        "the differential counts a fill both engines refuse and reports one engine flooring alone as a mismatch"
     assert Path("results/engine_differential_run1.txt").read_text(encoding="utf-8").startswith("READ WITH the grading amendment of 2026-10-29"), \
         "run 1 of the differential carries the amendment's note until run 2 exists"
-    assert "the grader voids as `void_floor`" in doc and "has no floor at the fill" in doc, \
-        "the amendment names the research-engine divergence"
-    print("  the risk floor is one function in risk_params, read by the signal, the pullback rule and the grader; "
-          "the engine differential reports the declared divergence")
+    assert "**The research engine takes the same floor**" in doc and "`risk_floor=False`" in doc, \
+        "the amendment says the research engine floors too, and which engine does not"
+    print("  the risk floor is one function in risk_params, read by the signal, the pullback rule, the grader and "
+          "the research engine; the differential counts it in both")
 
 
 def check_intraday_rules_match_preregistration() -> None:

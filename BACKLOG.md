@@ -2379,12 +2379,26 @@ as a dated amendment at the top of `forward_grading_preregistration.md`,
 which says in its first line that it is made after 182 outcome rows against
 that document's own no-amendment clause; the three rows named stand as
 graded. `check_risk_floor_single_sourced` (63). Selftest, falsified.
-**Owed by L2:** the research engine (`backtest.simulate_trade`) has no
-floor at the fill, a divergence the amendment declares; `engine_differential`
-reports such rows as `void_floor`, never a mismatch, and
-`engine_differential_run1.txt` carries a dated note until the owner runs
-run 2 on the laptop. Whether the research engine takes the floor (and the
-re-runs that would owe) is open.
+**Research engine floor DONE 2026-10-29 (owner: "go with the research
+engine floor as well"), RE-RUNS OWED — fix and re-runs merge as ONE
+change.** `backtest.simulate_trade` refuses a fill inside
+`risk_params.min_risk(fill)` (tally "fill inside the risk floor", printed
+with the gate rejections) unless the caller passes `risk_floor=False`,
+which only `intraday_rules` does: its pre-registration declared its own
+engine and its results stand. `engine_differential` counts a fill both
+engines refuse as `void_floor` and reports one engine flooring alone as a
+mismatch. **Owed from the branch on the laptop (frozen bars), then
+merged with this change:** `oos_validate_run5` (`python oos_validate.py`),
+`portfolio_replay_run5` (`python longs_only.py`),
+`record_recheck_floor_run1` (`python record_recheck.py`; CODE MOVED
+against the 10-08 baseline is the expected verdict),
+`engine_differential_run2` (`python engine_differential.py | tee
+results/engine_differential_run2.txt`, which retires run 1's note).
+The older research files (feature_sweep, exit_ab, conditional_test,
+drift_null, inverted_arm, universe_backtest, setup_cases, outcome_taxonomy,
+rvol_confirm, atr_stop, adx_live) are readings of the engine of their day
+and are not re-run, as 36 did. The option, spread and pullback-arrival
+engines do not fill through `simulate_trade` and are untouched.
 
 ---
 

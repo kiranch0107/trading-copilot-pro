@@ -439,7 +439,12 @@ def simulate(d: pd.DataFrame, setup: dict, tally: dict | None = None) -> dict | 
         if i + 1 >= len(d):
             return None
         max_hold = HOLD_BARS
-    cfg = {"slippage_bps": SLIPPAGE_BPS, "commission": 0.0, "max_hold": max_hold}
+    # risk_floor=False: this module's engine is the one its pre-registration
+    # declared (results/intraday_rules_preregistration.md); the daily swing
+    # engine's floor at the fill (2026-10-29) is a swing-trade rule and is
+    # not applied here. Its results stand as readings of this engine.
+    cfg = {"slippage_bps": SLIPPAGE_BPS, "commission": 0.0, "max_hold": max_hold,
+           "risk_floor": False}
     r = bt.simulate_trade(d, i, {"trend": setup["trend"], "entry": setup["entry"],
                                  "stop": setup["stop"], "target": setup["target"],
                                  "rr": setup["rr"]}, cfg, tally=tally)
