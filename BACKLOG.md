@@ -34,9 +34,9 @@ landed in the repo and the removal says so in the commit.
   10-29 close). ~2026-11-06: a week of revision rows, then the post-close
   slot decision (item 39). 2026-11-09/10: the first IV premium rows.
   2026-11-30: the first spread settlements (first reading at 6 graded
-  cycles per arm). By 2026-12-16: rotate both PATs. Open decision: item 42
-  H1 (the thesis exit as part of the measured structure). Retire each line
-  as it lands.
+  cycles per arm). By 2026-12-16: rotate both PATs. (Item 42 H1, the
+  thesis exit as part of the structure, was decided and built the same
+  night.) Retire each line as it lands.
 
 ---
 
@@ -2365,6 +2365,15 @@ HOLD rule (30 sessions) cannot bind inside the structure; drop it from
 signal trades with H1. **H3** three hold lengths coexist, each declared.
 **H4** secrets scan clean; 54 remote branches, pruning cosmetic. **H5**
 dated hand-off entries added. No engine, rule or threshold changed.
+**H1 (a) and H2 DONE 2026-10-29 (owner: "go with H1 as well, option
+(a)"):** `MEASURED_OPTION_STRUCTURE["thesis"]` is True and
+`STRUCTURE_REASON` says so; `option_structure_violation()` refuses a
+signal trade without the thesis exit ("thesis exit off"); both app
+checkboxes default to the structure's field; the alert's rules line reads
+the structure ("thesis ON (EMA20 break)"); a signal trade records the
+HOLD rule off. The NOW position already carries the thesis exit; its
+hold of 30 cannot bind and is left as recorded. Pinned in
+`check_journal_hygiene`; selftests; falsified.
 
 ---
 

@@ -1056,7 +1056,11 @@ def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
         if opt["spread_pct"] > OPT_MAX_SPREAD * 0.75:
             lines.append(f"⚠️ Spread {opt['spread_pct']:.0f}% of mid — a wide "
                          f"round trip can erase the edge on its own.")
-        lines += ["", "Test rules: TP +200% · SL −50% · exit at 7 DTE · thesis OFF"]
+        # THE RULES LINE READS THE STRUCTURE (review 2026-10-29 late, H1): it
+        # said "thesis OFF" while the measurement ran with the thesis exit on.
+        _m = risk_params.MEASURED_OPTION_STRUCTURE
+        lines += ["", f"Rules (the measured structure): TP +{_m['tp_pct']:g}% · SL −{_m['sl_pct']:g}% · "
+                      f"exit at {_m['dte_exit']} DTE · thesis {'ON (EMA20 break)' if _m.get('thesis') else 'OFF'}"]
     elif SUGGEST_OPTIONS:
         lines += ["", "📄 No liquid contract found in the 21-45 DTE window "
                       "(spread/volume/OI gates). Check the chain yourself."]

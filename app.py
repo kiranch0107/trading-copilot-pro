@@ -2105,10 +2105,13 @@ with TAB_STOCK:
                                             help="Trading sessions, not calendar "
                                                  "days. 0 disables."))
                                         q_thesis = st.checkbox(
-                                            "Thesis invalidation (EMA20)", value=False,
+                                            "Thesis invalidation (EMA20)",
+                                            value=bool(risk_params.MEASURED_OPTION_STRUCTURE["thesis"]),
                                             key=f"qbuy_thesis_{_qkey}",
-                                            help="Off by default — the option backtest "
-                                                 "showed this rule cutting winners.")
+                                            help="On by default — the measured structure "
+                                                 "ran with it (thesis_exit run 3: KEEP, "
+                                                 "undetectable either way); a signal trade "
+                                                 "must carry it.")
                                     q_notes = st.text_input(
                                         "Notes", key=f"qbuy_notes_{_qkey}")
 
@@ -2497,10 +2500,12 @@ with TAB_POSITIONS:
                                              "count. 0 disables. Mirrors backtest.py "
                                              "--max-hold."))
     with r4:
-        rule_thesis = st.checkbox("Thesis invalidation", value=False, key="op_thesis",
+        rule_thesis = st.checkbox("Thesis invalidation",
+                                  value=bool(risk_params.MEASURED_OPTION_STRUCTURE["thesis"]), key="op_thesis",
                                   help="Exit if the underlying closes below EMA20 "
                                        "(CALL) or above it (PUT) — the setup that "
-                                       "justified the trade is gone.")
+                                       "justified the trade is gone. Part of the "
+                                       "measured structure: a signal trade must carry it.")
 
     # Show the arithmetic the rules imply, so a losing payoff can't be set by accident.
     if rule_tp and rule_sl:

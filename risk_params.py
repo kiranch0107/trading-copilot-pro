@@ -364,9 +364,20 @@ MEASURED_OPTION_STRUCTURE = {
     "min_dte": 21, "max_dte": 45,           # days to expiry at entry
     "tp_pct": 200.0, "sl_pct": 50.0,        # on the premium paid
     "dte_exit": 7,                          # out at this many days left
+    # THE THESIS EXIT IS PART OF THE STRUCTURE (review 2026-10-29 late, H1;
+    # owner: "option (a)"). The run that measured the structure
+    # (option_backtest_default_run3.txt) exited 65 of 395 trades on the
+    # underlying closing through EMA20: option_backtest runs with use_thesis
+    # on unless --no-thesis, thesis_exit_preregistration names ON as
+    # production and run 3 KEEPs it. A signal trade carries it on
+    # (journal rules invalidate_ema); the alert text and the app default
+    # read this field. The HOLD rule is not part of the structure: out by
+    # dte_exit a position lives at most ~27 sessions, so it cannot bind.
+    "thesis": True,
 }
 STRUCTURE_REASON = ("the measured structure is {min_dte}-{max_dte} DTE at entry, "
-                    "+{tp_pct:g}% / -{sl_pct:g}% on the premium, out at {dte_exit} DTE; "
+                    "+{tp_pct:g}% / -{sl_pct:g}% on the premium, out at {dte_exit} DTE, "
+                    "thesis exit on (EMA20 break); "
                     "a name where that is unaffordable at this account size is not "
                     "tradeable here (BACKLOG 32)").format(**MEASURED_OPTION_STRUCTURE)
 
@@ -395,6 +406,8 @@ def option_structure_violation(expiry: str, as_of: str, rules: dict | None) -> s
             got = 0.0
         if abs(got - float(m[key])) > 1e-9:
             return f"{label} {got:g} is not the measured {m[key]:g}"
+    if m.get("thesis") and not r.get("invalidate_ema"):
+        return "thesis exit off is not the measured structure (it ran with the EMA20 exit on)"
     return None
 
 DIRECTION_REASON = (
@@ -565,8 +578,10 @@ def _selftest_sweep_table() -> None:
 def _selftest_structure() -> None:
     """The measured structure is one dict and the violation reads it."""
     m = MEASURED_OPTION_STRUCTURE
-    assert (m["min_dte"], m["max_dte"], m["tp_pct"], m["sl_pct"], m["dte_exit"]) == (21, 45, 200.0, 50.0, 7)
-    ok = {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "max_hold_bars": 20}
+    assert (m["min_dte"], m["max_dte"], m["tp_pct"], m["sl_pct"], m["dte_exit"], m["thesis"]) == (21, 45, 200.0, 50.0, 7, True)
+    ok = {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "max_hold_bars": 20, "invalidate_ema": True}
+    assert "thesis exit off" in option_structure_violation("2026-11-20", "2026-10-28", dict(ok, invalidate_ema=False))
+    assert "thesis exit off" in option_structure_violation("2026-11-20", "2026-10-28", {k: v for k, v in ok.items() if k != "invalidate_ema"})
     assert option_structure_violation("2026-11-20", "2026-10-28", ok) is None            # 23 DTE
     assert option_structure_violation("2026-11-18", "2026-10-28", ok) is None            # 21 DTE, the floor
     assert "20 DTE" in option_structure_violation("2026-11-17", "2026-10-28", ok)        # one day short
@@ -575,8 +590,8 @@ def _selftest_structure() -> None:
     assert "stop loss 0" in option_structure_violation("2026-11-20", "2026-10-28", dict(ok, sl_pct=None))
     assert "time exit 0" in option_structure_violation("2026-11-20", "2026-10-28", dict(ok, dte_exit=0))
     assert "unreadable" in option_structure_violation("soon", "2026-10-28", ok)
-    assert "21-45 DTE" in STRUCTURE_REASON and "+200% / -50%" in STRUCTURE_REASON
-    print("  measured structure: 21-45 DTE, +200/-50, out at 7; every other leg named in the refusal")
+    assert "21-45 DTE" in STRUCTURE_REASON and "+200% / -50%" in STRUCTURE_REASON and "thesis exit on" in STRUCTURE_REASON
+    print("  measured structure: 21-45 DTE, +200/-50, out at 7, thesis on; every other leg named in the refusal")
 
 
 def _selftest_direction() -> None:

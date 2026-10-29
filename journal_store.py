@@ -304,6 +304,12 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
         _why = _rp.option_structure_violation(expiry, _as_of, rules)
         if _why:
             raise ValueError(f"not the measured structure ({_why}); {_rp.STRUCTURE_REASON}")
+        # THE HOLD RULE IS NOT PART OF THE STRUCTURE and cannot bind inside
+        # it (review 2026-10-29 late, H2): out by dte_exit, a position lives
+        # about 27 sessions at most, under any hold the form writes. Recorded
+        # as 0 (off) on a signal trade so the rules block names only what
+        # can act. The exit monitor reads 0 as disabled.
+        rules = {**(rules or {}), "max_hold_bars": 0}
     positions = load_positions()
     now_epoch = time.time()
     pos = {
@@ -892,11 +898,15 @@ def selftest() -> int:
         _g["load_journal"] = lambda: list(_mem["jrn"])
         _g["save_journal"] = lambda d: _mem.__setitem__("jrn", list(d))
         _rules = {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7,
-                  "max_hold_bars": 20, "invalidate_ema": False}
+                  "max_hold_bars": 20, "invalidate_ema": True}
         _pk = open_option_position("NVDA", "CALL", 250.0, "2026-11-20", 1, 3.0,
                                    _rules, source="signal",
                                    signal_key="NVDA|Bullish|2026-10-07",
                                    traded_at="2026-10-07 10:15 ET")
+        # The HOLD rule is recorded off on a signal trade (H2); the thesis
+        # exit stays on, as the structure requires (H1).
+        _nv = next(p for p in _mem["pos"] if p["ticker"] == "NVDA")
+        assert _nv["rules"]["max_hold_bars"] == 0 and _nv["rules"]["invalidate_ema"] is True, _nv["rules"]
         try:
             open_option_position("PFE", "CALL", 29.0, "2026-10-16", 1, 0.5,
                                  _rules, source="signal")
@@ -914,7 +924,9 @@ def selftest() -> int:
                 (dict(source="signal", signal_key="PFE|Bullish|2026-10-07", traded_at="2026-10-07 10:00 ET"),
                  "9 DTE"),                                             # 2026-10-16 is 9 days out
                 (dict(source="signal", signal_key="PFE|Bullish|2026-10-07", traded_at="2026-10-07 10:00 ET",
-                      expiry="2026-11-20", rules=dict(_rules, tp_pct=100)), "take profit 100")):
+                      expiry="2026-11-20", rules=dict(_rules, tp_pct=100)), "take profit 100"),
+                (dict(source="signal", signal_key="PFE|Bullish|2026-10-07", traded_at="2026-10-07 10:00 ET",
+                      expiry="2026-11-20", rules=dict(_rules, invalidate_ema=False)), "thesis exit off")):
             _args = dict(ticker="PFE", right="CALL", strike=29.0, expiry="2026-10-16", contracts=1,
                          entry_premium=0.5, rules=_rules)
             _args.update(_kw)

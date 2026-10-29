@@ -2417,7 +2417,7 @@ def check_signal_key_round_trip() -> None:
         key = fl.signal_key("NVDA", "Bullish", "2026-09-10")
         pos = js.open_option_position("NVDA", "CALL", 250.0, "2026-11-20", 1, 3.0,
                                       {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7,
-                                       "max_hold_bars": 20, "invalidate_ema": False},
+                                       "max_hold_bars": 20, "invalidate_ema": True},
                                       source="signal", signal_key=key)
         js.close_position(pos["id"], 4.5, "WIN")
     finally:
@@ -2955,6 +2955,29 @@ def check_journal_hygiene() -> None:
                    'value=int(risk_params.MEASURED_OPTION_STRUCTURE["sl_pct"])',
                    'value=int(risk_params.MEASURED_OPTION_STRUCTURE["dte_exit"])'):
         assert needle in app, f"app.py default no longer reads the structure: {needle}"
+    # THE THESIS EXIT IS PART OF THE STRUCTURE (review 2026-10-29 late, H1,
+    # owner's option (a)): the measurement ran with it on (option_backtest's
+    # command line defaults use_thesis on; default run 3 exited 65 trades
+    # on it), so the structure names it, the journal refuses a signal trade
+    # without it, both app checkboxes default to it, and the alert's rules
+    # line reads the structure instead of saying "thesis OFF". The HOLD
+    # rule is recorded off on a signal trade (H2): it cannot bind.
+    assert m["thesis"] is True and "thesis exit on" in rp.STRUCTURE_REASON
+    assert "thesis exit off" in (rp.option_structure_violation("2026-11-20", "2026-10-28",
+                                                               {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7}) or "")
+    assert rp.option_structure_violation("2026-11-20", "2026-10-28",
+                                         {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "invalidate_ema": True}) is None
+    assert app.count('value=bool(risk_params.MEASURED_OPTION_STRUCTURE["thesis"])') == 2, \
+        "both thesis checkboxes must default to the structure's thesis field"
+    _sc = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
+    assert "thesis OFF\"]" not in _sc and "_m = risk_params.MEASURED_OPTION_STRUCTURE" in _sc and \
+        "thesis {'ON (EMA20 break)' if _m.get('thesis') else 'OFF'}" in _sc, \
+        "the alert's rules line must read the structure"
+    assert "use_thesis=not a.no_thesis" in Path("option_backtest.py").read_text(encoding="utf-8"), \
+        "the option engine's command line runs the thesis exit on by default (the measurement did)"
+    import inspect as _ci
+    assert 'rules = {**(rules or {}), "max_hold_bars": 0}' in _ci.getsource(js.open_option_position), \
+        "a signal trade records the HOLD rule off (it cannot bind inside the structure)"
     # The window has a CEILING everywhere a chain is read (review 2026-10-28
     # F1): the app passes its max to the selector, and the selector, the
     # scanner's chain fetch and the ATM fetch all read one window function.
@@ -2998,8 +3021,10 @@ def check_journal_hygiene() -> None:
     try:
         js.load_positions = lambda: list(mem["pos"])
         js.save_positions = lambda d: mem.__setitem__("pos", list(d))
-        rules = {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "max_hold_bars": 20}
+        rules = {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "max_hold_bars": 20, "invalidate_ema": True}
         for kw, needle in ((dict(source="discretionary", mode="live"), "discretionary"),
+                           (dict(source="signal", signal_key="X|Bullish|2026-10-07",
+                                 traded_at="2026-10-07 10:00 ET", rules=dict(rules, invalidate_ema=False)), "thesis exit off"),
                            (dict(source="signal", signal_key="X|Bullish|2026-10-07",
                                  traded_at="2026-10-07 10:00 ET", expiry="2026-10-16"), "9 DTE"),
                            (dict(source="signal", signal_key="X|Bullish|2026-10-07",
