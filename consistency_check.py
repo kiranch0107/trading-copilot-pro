@@ -3119,6 +3119,54 @@ def check_alert_once_per_bar() -> None:
     print("  the same signal bar is never alerted twice: both loops read the delivered alert rows by key")
 
 
+def check_risk_floor_single_sourced() -> None:
+    """
+    Grading amendment 2026-10-29 (logic review L2, owner's option (a)): the
+    risk floor is ONE function, risk_params.min_risk = max($0.05, 0.3 % of
+    price), read by the signal (zero_risk), the pullback rule and the
+    grader, which VOIDs a fill inside it under gapped_before_fill with the
+    note; the amendment names the constants and the three rows that stand.
+    """
+    import inspect
+    import risk_params as rp
+    import forward_log as fl
+    assert rp.RISK_FLOOR_ABS == 0.05 and rp.RISK_FLOOR_PCT == 0.003 and rp.min_risk(10.0) == 0.05 \
+        and abs(rp.min_risk(100.0) - 0.30) < 1e-9, "the floor's constants"
+    for mod, call in (("signal_core.py", "risk_params.min_risk(price)"),
+                      ("pullback_signal.py", "risk_params.min_risk(price)"),
+                      ("forward_log.py", "risk_params.min_risk(fill)")):
+        src = Path(mod).read_text(encoding="utf-8", errors="replace")
+        assert call in src and "max(0.05, price * 0.003)" not in src and "max(0.05, price*0.003)" not in src, \
+            f"{mod} must read the floor from risk_params.min_risk, not a literal"
+    body = inspect.getsource(fl.resolve_signal)
+    assert "if risk < floor:" in body and '"note": "fill inside the risk floor"' in body \
+        and body.find("floor = risk_params.min_risk(fill)") > body.find("risk = abs(fill - stop)") \
+        and body.find("if risk < floor:") < body.find("for j, b in enumerate(after[:max_hold]):"), \
+        "the grader voids a fill inside the floor, after the fill and before the walk"
+    row = {"trend": "Bullish", "bar_date": "2026-01-05",
+           "setup": {"price": 100.0, "stop": 98.0, "target": 106.0}}
+    bars = [{"date": "2026-01-05", "open": 100, "high": 101, "low": 99, "close": 100},
+            {"date": "2026-01-06", "open": 98.05, "high": 110, "low": 98.01, "close": 108}]
+    import datetime as _dt
+    v = fl.resolve_signal(row, bars, today=_dt.date(2026, 3, 1))
+    assert v["outcome"] == "void" and v["detail"].get("note") == "fill inside the risk floor", v
+    doc = Path("results/forward_grading_preregistration.md").read_text(encoding="utf-8")
+    assert "## AMENDED 2026-10-29" in doc and "max($0.05, 0.3 % of price)" in doc \
+        and "made after 182 of them" in doc and "KO 2026-10-26" in doc and "void_risk_floor" in doc, \
+        "the amendment names the rule, the breach of the no-amendment clause, and the rows that stand"
+    assert "void_risk_floor" in fl.summary(Path("forward_log.jsonl")) and "voided at the risk floor" in \
+        Path("forward_log.py").read_text(encoding="utf-8")
+    ed = Path("engine_differential.py").read_text(encoding="utf-8")
+    assert 'out["void_floor"] += 1' in ed and '"fill inside the risk floor"' in ed and \
+        'assert tot["void_floor"] >= 1' in ed, "the differential reports the declared divergence as void_floor, never a mismatch"
+    assert Path("results/engine_differential_run1.txt").read_text(encoding="utf-8").startswith("READ WITH the grading amendment of 2026-10-29"), \
+        "run 1 of the differential carries the amendment's note until run 2 exists"
+    assert "the grader voids as `void_floor`" in doc and "has no floor at the fill" in doc, \
+        "the amendment names the research-engine divergence"
+    print("  the risk floor is one function in risk_params, read by the signal, the pullback rule and the grader; "
+          "the engine differential reports the declared divergence")
+
+
 def check_intraday_rules_match_preregistration() -> None:
     """
     intraday_rules.py's constants are the numbers its pre-registration fixed.
@@ -3467,6 +3515,7 @@ CHECKS = [
     ("bar revision note wired (BACKLOG 39)",     check_bar_revision_note_wired),
     ("post-close pass hygiene (review 10-28, 3-5)", check_post_close_pass_hygiene),
     ("one alert per signal bar (review 10-29 L1)", check_alert_once_per_bar),
+    ("risk floor single-sourced (review 10-29 L2)", check_risk_floor_single_sourced),
 ]
 
 

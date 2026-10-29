@@ -2370,6 +2370,21 @@ key"):** `scanner.alerted_on_bar(key)` reads the record's delivered alert
 rows; both alerting loops ask it after the stamp check and before the
 send; a failed delivery re-sends; a missing key never suppresses.
 `check_alert_once_per_bar` (62). Selftest, falsified.
+**L2 DONE 2026-10-29 (owner: "go with L2 as well, option (a)"):** the risk
+floor is one function, `risk_params.min_risk` = max($0.05, 0.3 % of
+price), read by the signal, the pullback rule and the grader; a fill
+inside it is VOID under `gapped_before_fill` with the note "fill inside
+the risk floor"; `summary()`/`report()` count the rows so voided. Declared
+as a dated amendment at the top of `forward_grading_preregistration.md`,
+which says in its first line that it is made after 182 outcome rows against
+that document's own no-amendment clause; the three rows named stand as
+graded. `check_risk_floor_single_sourced` (63). Selftest, falsified.
+**Owed by L2:** the research engine (`backtest.simulate_trade`) has no
+floor at the fill, a divergence the amendment declares; `engine_differential`
+reports such rows as `void_floor`, never a mismatch, and
+`engine_differential_run1.txt` carries a dated note until the owner runs
+run 2 on the laptop. Whether the research engine takes the floor (and the
+re-runs that would owe) is open.
 
 ---
 
@@ -2431,8 +2446,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 62 cross-module
-  invariants (62 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 63 cross-module
+  invariants (63 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on

@@ -45,6 +45,8 @@ from dataclasses import dataclass, asdict, replace
 from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
 
+import risk_params
+
 try:
     import pandas as pd
     import numpy as np
@@ -600,12 +602,12 @@ def evaluate(df: pd.DataFrame,
     # Relative to price, not an absolute penny: a $0.01 stop on a $100 stock is
     # 0.01% and would be taken out by any tick.
     risk = abs(entry - stop)
-    min_risk = max(0.05, price * 0.003)
+    min_risk = risk_params.min_risk(price)         # the one floor (risk_params)
     if risk < min_risk:
         return {
             "blocked": True, "block_reason": "zero_risk",
             "reason": (f"stop too close to entry (risk ${abs(entry-stop):.2f} "
-                       f"< minimum ${max(0.05, price*0.003):.2f})"),
+                       f"< minimum ${min_risk:.2f})"),
             "ticker": ticker,
             "trend": trend, "price": round(price, 2), "entry": entry,
             "stop": stop, "risk": round(risk, 2), "min_risk": round(min_risk, 2),

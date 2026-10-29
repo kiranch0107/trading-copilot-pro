@@ -106,7 +106,10 @@ floor, under `gapped_before_fill` (reason "fill inside the risk floor"),
 by amendment; (b) leave it and read the R distribution's tails at the
 gate. (a) is the same rule the signal already applies to itself. Three
 rows of 182 are affected today, all losses, so the re-read moves nothing
-yet.
+yet. **Built the same evening** (owner: "go with L2 as well, option (a)"):
+the floor is one function in `risk_params`, the grader voids inside it,
+the grading pre-registration carries the amendment and says it is made
+after the first outcome row; the three rows stand. Check 63.
 
 ### L3. The first spread cycles price the model well below the market (not a reading, noted now)
 

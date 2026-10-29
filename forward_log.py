@@ -83,6 +83,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import risk_params                       # stdlib-only; the one risk floor
+
 LOG = Path("forward_log.jsonl")
 GENESIS = "0" * 32
 
@@ -726,6 +728,19 @@ def resolve_signal(row: dict, bars: list, today=None,
                            "fill": round(fill, 4), "fill_date": after[0]["date"],
                            "stop": stop, "target": target}}
     risk = abs(fill - stop)
+    # THE RISK FLOOR (grading amendment 2026-10-29; logic review L2, owner's
+    # option (a)). A fill a few cents from the stop makes the R unit a few
+    # cents: the row books +100 R on a target or -1 R on noise and owns the
+    # mean on its own. The signal refuses such a setup at evaluate(); the
+    # grader applies the same floor to the fill. VOID, not a trade.
+    floor = risk_params.min_risk(fill)
+    if risk < floor:
+        return {"outcome": "void", "reason": "gapped_before_fill",
+                "detail": {"exit_rule": "void:gapped_before_fill",
+                           "note": "fill inside the risk floor",
+                           "fill": round(fill, 4), "fill_date": after[0]["date"],
+                           "stop": stop, "target": target,
+                           "fill_risk": round(risk, 4), "risk_floor": round(floor, 4)}}
 
     exit_rule = exit_px = level_px = None
     exit_bar = None
@@ -1260,6 +1275,8 @@ def summary(path: Path | None = None) -> dict:
     scans = [r for r in rows if r.get("kind") == "scan"]
     alerts = [r for r in rows if r.get("kind") == "alert"]
     revisions = [r for r in rows if r.get("kind") == "revision"]
+    void_floor = [o for o in outs if o.get("outcome") == "void"
+                  and (o.get("detail") or {}).get("note") == "fill inside the risk floor"]
     taken = [s for s in sigs if counts_as_taken(s)]
     skipped = [s for s in sigs if not counts_as_taken(s)]
     # THE HEADLINE READING IS THE POOL BUCKET'S (HEADLINE_BUCKET, amendment
@@ -1369,6 +1386,7 @@ def summary(path: Path | None = None) -> dict:
         # BACKLOG 39: how often the next morning's read of a recorded bar
         # differed from the row, and by how much on price.
         "revisions": len(revisions),
+        "void_risk_floor": len(void_floor),
         "revisions_price_max_pct": max((abs(float(r["fields"]["price"][1]) / float(r["fields"]["price"][0]) - 1.0) * 100.0
                                         for r in revisions if r.get("fields", {}).get("price")
                                         and r["fields"]["price"][0]), default=0.0),
@@ -1393,7 +1411,7 @@ def report(path: Path | None = None) -> int:
         return 0
     print(f"  {s['rows']} rows: {s['signals']} signals, {s['controls']} controls, "
           f"{s['outcomes']} outcomes, {s['scans']} scans, {s['alerts']} alerts "
-          f"[{s['revisions']} bar revisions] "
+          f"[{s['revisions']} bar revisions] [{s['void_risk_floor']} voided at the risk floor] "
           f"({s['alerts_delivered']} delivered)")
     print(f"  taken {s['taken']} ({s['headline_bucket']} bucket, the population: "
           f"{s['taken_headline']}: hq {s['taken_hq']}, base {s['taken_base']}; "
@@ -2152,6 +2170,18 @@ def selftest() -> int:
     # Gapped before the fill -> VOID, not a trade with an inverted stop.
     v1 = resolve_signal(_row, _bars(_sig, (_days[0], 97.0, 99.0, 96.0, 98.0)), today=_today)
     assert v1["outcome"] == "void" and v1["reason"] == "gapped_before_fill", v1
+    # THE RISK FLOOR (grading amendment 2026-10-29, L2 option (a)): a fill
+    # inside max($0.05, 0.3 % of the fill) of the stop is VOID with the note;
+    # a fill at the floor grades; the floor is risk_params' one copy.
+    _stop = float(_row["setup"]["stop"])
+    _vf = resolve_signal(_row, _bars(_sig, (_days[0], _stop + 0.05, 110.0, _stop + 0.01, 108.0)), today=_today)
+    assert _vf["outcome"] == "void" and _vf["reason"] == "gapped_before_fill" \
+        and _vf["detail"]["note"] == "fill inside the risk floor" \
+        and abs(_vf["detail"]["risk_floor"] - risk_params.min_risk(_vf["detail"]["fill"])) < 1e-3, _vf
+    _at = _stop + risk_params.min_risk(_stop + 0.35) + 0.01     # a cent above the floor after slippage
+    _ok = resolve_signal(_row, _bars(_sig, (_days[0], _at, 110.0, _at - 0.01, 108.0)), today=_today)
+    assert _ok["outcome"] == "win" and "note" not in _ok["detail"], (_ok, "at the floor grades")
+    assert risk_params.min_risk(10.0) == 0.05 and abs(risk_params.min_risk(100.0) - 0.30) < 1e-9
     # Split in the window: the fetched signal-bar close no longer matches.
     v2 = resolve_signal(_row, _bars(("2026-09-01", 49.5, 50.5, 49.2, 50.0),
                                     (_days[0], 50.0, 50.5, 49.0, 50.0)), today=_today)

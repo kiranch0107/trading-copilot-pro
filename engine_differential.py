@@ -64,7 +64,13 @@ def compare_frame(df: pd.DataFrame, n_setups: int, rng: random.Random,
     # GRADE_NO_BARS_DAYS stale, so a far-future clock would void every
     # end-of-frame setup the engine still reports as settled.
     far = d.index[-1].date() + dt.timedelta(days=1)
-    out = {"compared": 0, "void_both": 0, "unsettled_both": 0, "mismatches": []}
+    # void_floor: the engine filled and traded, the grader VOIDED the fill as
+    # inside the risk floor (grading amendment 2026-10-29, logic review L2).
+    # A DECLARED divergence, counted with the R the engine booked, never a
+    # mismatch: the research engine has no floor at the fill, so these are
+    # the rows where one row's R unit is a few cents.
+    out = {"compared": 0, "void_both": 0, "unsettled_both": 0, "void_floor": 0,
+           "floor_engine_r": [], "mismatches": []}
     hi, lo, cl = d["High"].to_numpy(float), d["Low"].to_numpy(float), d["Close"].to_numpy(float)
     for _ in range(n_setups):
         i = rng.randint(10, n - 2)
@@ -82,6 +88,10 @@ def compare_frame(df: pd.DataFrame, n_setups: int, rng: random.Random,
                 out["void_both"] += 1
             else:
                 out["mismatches"].append((dates[i], trend, "engine unfilled", got))
+            continue
+        if got and got["outcome"] == "void" and (got.get("detail") or {}).get("note") == "fill inside the risk floor":
+            out["void_floor"] += 1
+            out["floor_engine_r"].append(round(float(res["r"]), 3))
             continue
         if got is None:
             if i + 1 + fl.GRADE_MAX_HOLD > n:
@@ -120,17 +130,21 @@ def run(per_frame: int = PER_FRAME, seed: int = SEED) -> int:
         print("  no daily frames in .bar_cache; run a backtest first (they freeze the bars)")
         return 2
     rng = random.Random(seed)
-    tot = {"compared": 0, "void_both": 0, "unsettled_both": 0}
+    tot = {"compared": 0, "void_both": 0, "unsettled_both": 0, "void_floor": 0}
+    floor_r: list = []
     mism = []
     for key, df, meta in frames:
         r = compare_frame(df, per_frame, rng)
         for k in tot:
             tot[k] += r[k]
+        floor_r += r["floor_engine_r"]
         mism += [(key,) + m for m in r["mismatches"]]
         print(f"  {key:<28} rows {len(df):>5}  compared {r['compared']:>3}  void {r['void_both']:>2}  "
-              f"mismatches {len(r['mismatches'])}")
+              f"floor {r['void_floor']:>2}  mismatches {len(r['mismatches'])}")
     print(f"\n  frames {len(frames)}   fingerprint {bar_cache.fingerprint([m for _, _, m in frames])}")
     print(f"  compared {tot['compared']}   void in both {tot['void_both']}   unsettled in both {tot['unsettled_both']}")
+    print(f"  void at the risk floor (grader only, declared 2026-10-29): {tot['void_floor']}"
+          + (f"; the engine booked R {sorted(floor_r)[:3]} .. {sorted(floor_r)[-3:]} on them" if floor_r else ""))
     print(f"  mismatches {len(mism)} at {TOL_R} R")
     for m in mism[:20]:
         print(f"    {m}")
@@ -153,7 +167,7 @@ def selftest() -> int:
     print("engine_differential.py selftest")
     print("=" * 72)
     rng = random.Random(1)
-    tot = {"compared": 0, "void_both": 0, "unsettled_both": 0}
+    tot = {"compared": 0, "void_both": 0, "unsettled_both": 0, "void_floor": 0}
     mism = []
     for s in range(12):
         r = compare_frame(_synthetic(s), 50, rng)
@@ -162,8 +176,14 @@ def selftest() -> int:
         mism += r["mismatches"]
     assert tot["compared"] >= 400 and tot["void_both"] >= 1, tot
     assert not mism, mism[:3]
+    # THE DECLARED DIVERGENCE (grading amendment 2026-10-29): the seeded
+    # geometries land at least one fill inside the risk floor; the engine
+    # trades it, the grader voids it, and the comparator reports it as
+    # void_floor, not a mismatch.
+    assert tot["void_floor"] >= 1, tot
     print(f"agreement        : {tot['compared']} random setups on 12 synthetic frames, "
-          f"{tot['void_both']} gapped fills void in both, 0 mismatches")
+          f"{tot['void_both']} gapped fills void in both, {tot['void_floor']} void at the risk "
+          f"floor (grader only, declared), 0 mismatches")
     # The comparator can fail: a grader that misreports R by one cent in R is caught.
     def _skewed(row, bars, today=None):
         g = fl.resolve_signal(row, bars, today=today)
