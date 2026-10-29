@@ -36,7 +36,7 @@
     "source": "signal",
     "signal_key": "NOW|Bullish|2026-10-28",
     "traded_at": "2026-10-29 11:20 ET",
-    "last_check_epoch": 1793287833.426627,
+    "last_check_epoch": 1793289641.0264037,
     "status": "OPEN",
     "exit_alerted": false
   }
