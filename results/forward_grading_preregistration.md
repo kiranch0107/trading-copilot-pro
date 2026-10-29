@@ -44,10 +44,14 @@ tally as "fill inside the risk floor", so the two engines agree on data;
 `engine_differential.py` counts a fill both refuse as `void_floor` and
 reports an engine that floors alone as a mismatch. The intraday engine
 (`intraday_rules`) passes `risk_floor=False` and keeps the engine its own
-pre-registration declared. The committed results whose engine this is are
-re-run on the laptop and merged with the change as one (BACKLOG 40 lists
-them); the older research files are readings of the engine of their day
-and are not re-run, as BACKLOG 36 did.
+pre-registration declared. The committed results whose engine this is were
+re-run on the laptop and merged with the change as one (BACKLOG 40:
+`oos_validate_run5`, `portfolio_replay_run5`, `record_recheck_floor_run1`,
+`engine_differential_run2`; 119 of 10,569 random geometries and one to
+two trades per recorded cut sit inside the floor, every one a large loss
+on a risk unit of cents; no verdict changed); the older research files
+are readings of the engine of their day and are not re-run, as BACKLOG 36
+did.
 
 **What it does to the record.** Nothing already graded changes: one
 outcome per row, ever, and the three rows above stand as losses. The rule

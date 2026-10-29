@@ -1,3 +1,23 @@
+LONGS-ONLY REPLAY ON THE RESEARCH-ENGINE FLOOR (BACKLOG 40). Run by the owner 2026-10-29 on
+the laptop, `python longs_only.py`, branch claude/trading-code-review-wt48q8 @ 1c7a76f, the
+same cache and OOS twelve as portfolio_replay_run4.txt (10y relative to the run date), after
+backtest.simulate_trade() began refusing a fill inside risk_params.min_risk(fill).
+
+  run 4 (group B) -> run 5 (floor):
+    idealised    +0.4%/yr, 55.6% DD, 884 trades  ->  +2.0%/yr, 51.8% DD, 884 trades
+    constrained  +2.6%/yr, 17.2% DD, 645 trades  ->  +2.4%/yr, 17.2% DD, 644 trades
+    skipped, no room          239               ->  240
+    long side    +0.042 R, CI [-0.090, +0.174]  ->  +0.059 R, CI [-0.069, +0.187]
+    SPY          +13.4%/yr (observed span), 34.1% DD  (unchanged)
+
+The idealised curve gained because the rows the floor removes are the ones that book -5 to
+-15 R on a risk unit of cents (record_recheck_floor_run1.txt: one to two per cut), and the
+idealised account takes every signal at full size; the constrained account sized those
+positions down already, so it barely moved. The trade count is unchanged at 884 because
+the engine holds one position per name and a refused fill frees the name for the next
+signal. The reading is unchanged: the long side SPANS ZERO, and the index was better on
+both axes, with no signals to follow.
+
 ====================================================================================
 LONGS ONLY, IN SHARES — what it would actually have been
 ====================================================================================

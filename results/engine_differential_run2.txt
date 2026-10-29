@@ -1,3 +1,17 @@
+ENGINE DIFFERENTIAL RUN 2 (BACKLOG 40). Run by the owner 2026-10-29 on the laptop,
+`python engine_differential.py | tee results/engine_differential_run2.txt`, branch
+claude/trading-code-review-wt48q8 @ 1c7a76f, after both engines took the risk floor:
+forward_log.resolve_signal() VOIDs a fill inside risk_params.min_risk(fill) and
+backtest.simulate_trade() refuses it. Same 271 frames and fingerprint as run 1
+(v2-ef3050fc3ffb9e04), same seed and geometries.
+
+  run 1 -> run 2: compared 10569 -> 10450; void in both 212 -> 212; unsettled in both 59 -> 59;
+  void at the risk floor in both engines 119 (1.1 % of the random geometries; 175 of the 271
+  frames have none, the rest one to two); mismatches 0 -> 0. VERDICT: the engines AGREE.
+
+Run 1's note is retired by this file: the two engines agree on every row both trade and
+refuse the same 119 rows at the floor.
+
 ==============================================================================
 ENGINE DIFFERENTIAL — backtest.simulate_trade vs forward_log.resolve_signal, real bars
 ==============================================================================

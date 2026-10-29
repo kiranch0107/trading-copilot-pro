@@ -3168,8 +3168,11 @@ def check_risk_floor_single_sourced() -> None:
     assert 'out["void_floor"] += 1' in ed and '"engine floored, grader did not"' in ed and \
         '"grader floored, engine filled"' in ed and 'assert tot["void_floor"] >= 1' in ed, \
         "the differential counts a fill both engines refuse and reports one engine flooring alone as a mismatch"
-    assert Path("results/engine_differential_run1.txt").read_text(encoding="utf-8").startswith("READ WITH the grading amendment of 2026-10-29"), \
-        "run 1 of the differential carries the amendment's note until run 2 exists"
+    run2 = Path("results/engine_differential_run2.txt").read_text(encoding="utf-8")
+    assert "void at the risk floor in both engines (2026-10-29): 119" in run2 and "VERDICT: the engines AGREE" in run2 \
+        and "mismatches 0 at" in run2, "run 2 of the differential, on the floored engines, must agree"
+    assert Path("results/engine_differential_run1.txt").read_text(encoding="utf-8").startswith("SUPERSEDED by engine_differential_run2.txt"), \
+        "run 1 is the pre-floor reading and says so"
     assert "**The research engine takes the same floor**" in doc and "`risk_floor=False`" in doc, \
         "the amendment says the research engine floors too, and which engine does not"
     print("  the risk floor is one function in risk_params, read by the signal, the pullback rule, the grader and "

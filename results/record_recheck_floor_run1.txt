@@ -1,3 +1,22 @@
+THE RESEARCH-ENGINE FLOOR RE-CHECK (BACKLOG 40). Run by the owner 2026-10-29 on the laptop,
+`python record_recheck.py`, branch claude/trading-code-review-wt48q8 @ 1c7a76f, after
+backtest.simulate_trade() began refusing a fill inside risk_params.min_risk(fill).
+
+READ IT AGAINST THE RECORD, NOT THE 10-08 BASELINE, as record_recheck_groupb_run1.txt was:
+every fingerprint matches the record's own, so CODE MOVED is the sum of every engine change
+since the record. THIS TIME THE FLOOR'S OWN SHARE IS ISOLABLE: the group B re-check ran on
+the same frozen bars one day earlier, so the difference between the two files is the floor
+alone. It removes one to two trades per cut, every one a large loss on a risk unit of cents:
+
+  cut        trades (group B -> floor)   avg R              long R             short R
+  7t/5y      415 -> 413                  +0.008 -> +0.015   +0.299 -> +0.312   -0.469 -> -0.469
+  12t/5y     681 -> 680                  -0.030 -> -0.029   +0.094 -> +0.095   -0.242 -> -0.238
+  12t/10y   1377 -> 1376                 -0.086 -> -0.075   +0.042 -> +0.059   -0.315 -> -0.315
+
+The record is STALE, as the tool says, and has been since the gap-fill fix: its findings
+are signs and dose-responses that these moves do not undo (every sign is the same), and
+none of its R is on the current engine. Nothing new is decided by this file.
+
 ==============================================================================
 RECORD RE-CHECK — do the three recorded cuts still hold on today's code?
 ==============================================================================

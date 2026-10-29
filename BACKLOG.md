@@ -2399,6 +2399,20 @@ drift_null, inverted_arm, universe_backtest, setup_cases, outcome_taxonomy,
 rvol_confirm, atr_stop, adx_live) are readings of the engine of their day
 and are not re-run, as 36 did. The option, spread and pullback-arrival
 engines do not fill through `simulate_trade` and are untouched.
+**RE-RUNS DONE 2026-10-29** (owner's laptop, branch @ 1c7a76f, frozen
+bars), merged with the fix as one change: `oos_validate_run5.md` FAIL on
+all three criteria as before (579 trades; expectancy −0.112 → −0.087 R,
+PF 0.85 → 0.88, CI [−0.237, +0.013] → [−0.205, +0.031]); eleven per-ticker
+rows identical, AVGO alone −0.455 → −0.131 avg R on the same 45 trades:
+the floor removed one row of roughly −15 R, the hazard L2 named, measured
+on the held-out set. `portfolio_replay_run5.txt` long side +0.042 →
++0.059 R, still spans zero; constrained +2.6 → +2.4 %/yr at 17.2 % DD,
+idealised +0.4 → +2.0 %/yr; index better on both axes, unchanged.
+`record_recheck_floor_run1.txt` CODE MOVED as expected; the floor's own
+share is isolable against the group B re-check on the same bars: one to
+two trades per cut, every sign unchanged. `engine_differential_run2.txt`:
+271 frames, same fingerprint, compared 10,450, 119 floored in both, 0
+mismatches, the engines AGREE; run 1's note retired. No verdict changed.
 
 ---
 
