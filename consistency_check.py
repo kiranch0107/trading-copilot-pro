@@ -3025,6 +3025,33 @@ def check_journal_hygiene() -> None:
           "DTE ceiling everywhere; H1/H1' read from amendment F")
 
 
+def check_bar_revision_note_wired() -> None:
+    """
+    BACKLOG 39 (owner 2026-10-29): when a scan re-reads a bar the record
+    already holds, a differing read writes ONE `revision` row (the fields
+    that moved, the decision and tag before and after) from analyze(), by
+    the record's one writer; the recorded row stands; a revision is never
+    taken, open or an episode; summary() counts them and report() prints
+    them.
+    """
+    import forward_log as fl
+    sc_src = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
+    body = sc_src[sc_src.find("def analyze("):sc_src.find("\ndef ", sc_src.find("def analyze(") + 1)]
+    assert "forward_log.find_signal(ticker, r[\"trend\"], _bar)" in body and \
+        "forward_log.record_revision(_prev, _setup, decision, _hq)" in body, \
+        "analyze() must compare a re-read bar with its recorded row before record_signal()"
+    assert body.find("record_revision(") < body.find("forward_log.record_signal("), \
+        "the comparison must run before the (deduped) record_signal() call"
+    writers = [q.name for q in sorted(Path(".").glob("*.py"))
+               if q.name not in ("forward_log.py", "consistency_check.py")
+               and "forward_log.record_revision(" in q.read_text(encoding="utf-8", errors="replace")]
+    assert writers == ["scanner.py"], f"revision rows must have one writer, scanner.py; found {writers}"
+    rev = {"kind": "revision", "decision": ["taken", "taken"], "key": "X|Bullish|2026-10-28"}
+    assert not fl.counts_as_taken(rev), "a revision row is never taken"
+    assert "revisions" in fl.summary(Path("forward_log.jsonl")) and "bar revisions" in Path("forward_log.py").read_text()
+    print("  a differing re-read writes one revision row from analyze(); one writer; never taken; counted and reported")
+
+
 def check_intraday_rules_match_preregistration() -> None:
     """
     intraday_rules.py's constants are the numbers its pre-registration fixed.
@@ -3370,6 +3397,7 @@ CHECKS = [
     ("HQ tier legs declared (F, G)",             check_hq_tier_legs_declared),
     ("research config choice (BACKLOG 23)",      check_research_config_choice_declared),
     ("journal hygiene (BACKLOG 32)",             check_journal_hygiene),
+    ("bar revision note wired (BACKLOG 39)",     check_bar_revision_note_wired),
 ]
 
 
