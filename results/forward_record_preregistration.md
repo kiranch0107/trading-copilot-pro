@@ -78,6 +78,22 @@ carry the hash).
 
 ## Amendment 2026-10-28 (F) — the HQ tier's ADX leg is 30, not 35 (BACKLOG 33, owner's decision). THRESHOLD CHANGE on the tag and the alert tier, declared as an INTAKE choice; the fingerprint moves once and is declared
 
+**Note 2026-10-29 (review G1, owner: "go with G1 as well") — episodes
+re-anchored at the cut.** This amendment reads H1 and H1′ from 2026-10-28
+forward, and the episode is dated at its first bar. The pool had scanned
+daily since 10-13, so on 10-28 most names were continuing an episode that
+began under a pre-F hash, and reading only the episodes whose first row was
+readable dropped 18 of the 21 readable rows. From this note the HQ
+questions form their episodes from the READABLE rows: an episode's first
+readable row is its first row, with that row's own outcome (every taken
+row is graded). The same rule applies to amendment A's control pairing,
+whose arm began on 10-28 mid-episode: its episodes are formed from the
+rows that carry a control, and the pair is the first controlled row's.
+The base question, the 349-episode gate and every count keep the full
+episodes. A reading rule; no row changes. On 10-29: 21 readable pool
+rows read as 21 episodes (5 in the tier, 16 in the rest) where the old
+reading had 3.
+
 **Owner's decision 2026-10-28 ("go with BACKLOG 33 as well, ADX 30"),
 written before the first row under the new hash.** `signal_core.DEFAULTS.adx_min`
 is 30.0 from the next scan. The ADX-30 set is the ADX-35 set plus exactly

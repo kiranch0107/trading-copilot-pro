@@ -3179,6 +3179,46 @@ def check_risk_floor_single_sourced() -> None:
           "the research engine; the differential counts it in both")
 
 
+def check_hq_episodes_reanchored() -> None:
+    """
+    Review 2026-10-29 G1 (owner: "go with G1 as well"): the HQ questions
+    (H1, H1') form their episodes from the readable rows, re-anchored at the
+    amendment F cut; the control pairing from the rows that carry a control;
+    the base question and the gate keep the full episodes. Pinned on the
+    code, on a straddling fixture, and on the pre-registration's note.
+    """
+    import inspect
+    import forward_log as fl
+    src = inspect.getsource(fl.summary)
+    assert 'episodes([s for s in taken if hq_readable(s)], sd_out)' in src, \
+        "H1/H1' episodes must be formed from the readable rows"
+    assert 'episodes([s for s in taken if s.get("seq") in ctl_by_ref], sd_out)' in src and \
+        "for e in ctl_eps:" in src, "the control pairing's episodes must be formed from the controlled rows"
+    assert "eps = episodes(taken, sd_out)" in src and "_episode_stats([e for e in eps if e[\"bucket\"] == b])" in src, \
+        "the base question keeps the full episodes"
+    import tempfile
+    tmp = Path(tempfile.mkdtemp()) / "g1.jsonl"
+    pre = {"adx_min": 35.0, "min_rr": 0.5, "atr_stop_mult": 1.25, "atr_tgt_mult": 4.0, "weekly_confirm": False,
+           "longs_only": True, "hq_min_rr": 1.0, "volume_mult": 1.2, "volume_soft_mult": 0.7, "spy_regime_on": True}
+    assert fl.config_fingerprint(pre) in fl.HQ_READ_EXCLUDES
+    setup = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0, "adx": 31.0, "hq_fail": []}
+    a = fl.record_signal("ST", "Bullish", setup, "taken", "", pre, bar_date="2026-10-27", path=tmp, hq=True, bucket="pool")
+    b = fl.record_signal("ST", "Bullish", setup, "taken", "", {"x": 1}, bar_date="2026-10-28", path=tmp, hq=True, bucket="pool")
+    fl.record_outcome(a["seq"], "win", 5.0, "stop_distance", path=tmp)
+    fl.record_outcome(b["seq"], "loss", -1.0, "stop_distance", path=tmp)
+    s = fl.summary(tmp)
+    assert s["by_episode"]["pool"]["episodes"] == 1 and s["by_episode"]["pool"]["settled"] == 1 \
+        and abs(s["by_episode"]["pool"]["mean_r"] - 5.0) < 1e-9, "the base question reads the episode from 10-27"
+    h = s["h1_rank"]
+    assert h["episodes"] == 1 and h["tier"]["settled"] == 1 and abs(h["tier"]["mean_r"] + 1.0) < 1e-9, \
+        (h, "H1' reads the straddling episode once, re-anchored at 10-28 with that row's outcome")
+    doc = Path("results/forward_record_preregistration.md").read_text(encoding="utf-8")
+    assert "**Note 2026-10-29 (review G1" in doc and "re-anchored at the cut" in doc and \
+        "the pair is the first controlled row's" in doc, "the note under amendment F states the rule"
+    assert "episodes re-anchored at the cut" in Path("forward_log.py").read_text(encoding="utf-8"), "report() says so"
+    print("  H1/H1' and the control pairing form their episodes from the rows their arm can read; the base question keeps the full episodes")
+
+
 def check_intraday_rules_match_preregistration() -> None:
     """
     intraday_rules.py's constants are the numbers its pre-registration fixed.
@@ -3528,6 +3568,7 @@ CHECKS = [
     ("post-close pass hygiene (review 10-28, 3-5)", check_post_close_pass_hygiene),
     ("one alert per signal bar (review 10-29 L1)", check_alert_once_per_bar),
     ("risk floor single-sourced (review 10-29 L2)", check_risk_floor_single_sourced),
+    ("HQ episodes re-anchored at the F cut (G1)",  check_hq_episodes_reanchored),
 ]
 
 
