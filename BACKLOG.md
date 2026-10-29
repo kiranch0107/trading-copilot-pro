@@ -2340,6 +2340,39 @@ heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
 
 ---
 
+## 40. Logic review 2026-10-29 (evening): the rule boundaries hold; a cooldown race, a grading floor to decide, and the first spread cycles price the model far below the market — ASSESSED 2026-10-29, ONE FIX RECOMMENDED, ONE DECISION OPEN
+
+`results/logic_review_2026-10-29.md`. Owner: "perform thorough testing
+on our conditions, criteria, logic". About 140 boundary assertions over
+the base rules, the unrounded gates, the HQ tier, the levels, the grader,
+episodes, controls, the calendar and windows (half days, holidays, the
+DST change of 11-01), the structure refusals, the spread arithmetic, the
+exit monitor and the record's internal consistency: every declared
+boundary behaves as declared. Findings: **L1** the 4-hour alert cooldown
+equals the 11:07-to-15:07 spacing and held today by 7 and 8 seconds (ACN,
+NOW); fix recommended: suppress on a delivered alert row with the same
+signal key, keep the stamp as the outage backstop. **L2** a fill a few
+cents above the stop grades on a near-zero risk (KO 10-26 at 2.5 % of
+the recorded risk, ANET, TMO); the owner chooses between a grading-time
+risk floor by amendment and reading the tails. **L3** the first eight
+spread cycles: market mid / model credit 0.46–0.79 on every arm, below
+the 0.85 void line; the market's put skew is steeper than the linear 20
+points and the call wing far cheaper; not a reading before 6 graded
+cycles per arm (first settlement 11-30). **L4** the NOW alert's recorded
+row is hq = False under a pre-F hash (old code at the 10-28 post-close
+pass); excluded from H1 by construction. **L5** the resistance cap can
+block very low-volatility longs; left as is. **L6** the 16:20 dispatch
+after the on-time 16:10 schedule was skipped on the stamp (one second,
+nothing committed): PR #169 worked on its first day. No engine, rule or
+threshold changed.
+**L1 DONE 2026-10-29 (owner: "go with L1 as well, cooldown by signal
+key"):** `scanner.alerted_on_bar(key)` reads the record's delivered alert
+rows; both alerting loops ask it after the stamp check and before the
+send; a failed delivery re-sends; a missing key never suppresses.
+`check_alert_once_per_bar` (62). Selftest, falsified.
+
+---
+
 ## 39. The first alerts (2026-10-29): seven genuine by the rules; the post-close pass records a bar Yahoo has not finished; a journal key named the alert's day — ASSESSED 2026-10-29, TWO FIXES, ONE DECISION OPEN
 
 The 11:07 ET scan of 2026-10-29, the first under `4ddd12a3095f`, sent the
@@ -2398,8 +2431,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 61 cross-module
-  invariants (61 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 62 cross-module
+  invariants (62 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on

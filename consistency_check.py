@@ -3094,6 +3094,31 @@ def check_post_close_pass_hygiene() -> None:
           "unquoted spread legs tallied")
 
 
+def check_alert_once_per_bar() -> None:
+    """
+    Logic review 2026-10-29 L1 (owner: "cooldown by signal key"): the same
+    signal bar is never alerted twice. Both alerting loops (watchlist and
+    pool) ask the record for a DELIVERED alert row with the signal's key
+    before sending, after the 4-hour stamp check that stays as the outage
+    backstop; a failed delivery (no delivered row) is re-sent.
+    """
+    sc_src = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
+    helper = sc_src[sc_src.find("def alerted_on_bar("):sc_src.find("def recently_alerted(")]
+    assert "forward_log.alerts_sent()" in helper and 'a.get("delivered")' in helper and \
+        'a.get("key") == signal_key' in helper and "if not signal_key:" in helper, \
+        "alerted_on_bar() reads the delivered alert rows by key; no key never suppresses"
+    run_body = sc_src[sc_src.find("\ndef run("):]
+    n = run_body.count('if alerted_on_bar(r.get("signal_key")):')
+    assert n == 2, f"both alerting loops must ask alerted_on_bar() before sending (found {n})"
+    for loop in ("compose_alert(r, tk)\n", "compose_alert(r, tk, header=_hdr)"):
+        i = run_body.find(loop)
+        assert i > 0 and 'if alerted_on_bar(r.get("signal_key")):' in run_body[i - 1200:i] \
+            and "if recently_alerted(state, tk, r[\"trend\"]):" in run_body[i - 1200:i], \
+            f"the key check must sit between the stamp check and the send ({loop.strip()})"
+    assert "one alert per signal bar" in sc_src, "the selftest proves it"
+    print("  the same signal bar is never alerted twice: both loops read the delivered alert rows by key")
+
+
 def check_intraday_rules_match_preregistration() -> None:
     """
     intraday_rules.py's constants are the numbers its pre-registration fixed.
@@ -3441,6 +3466,7 @@ CHECKS = [
     ("journal hygiene (BACKLOG 32)",             check_journal_hygiene),
     ("bar revision note wired (BACKLOG 39)",     check_bar_revision_note_wired),
     ("post-close pass hygiene (review 10-28, 3-5)", check_post_close_pass_hygiene),
+    ("one alert per signal bar (review 10-29 L1)", check_alert_once_per_bar),
 ]
 
 
