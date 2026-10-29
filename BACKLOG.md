@@ -2288,14 +2288,16 @@ FAIL unchanged, −0.112 R on 579 trades; the raw output
 (13 cached / 0 fetched) and 92 of 579 trades gapped through a level (61
 stops filled at the open), the mechanism behind the move from run 2.
 
-**Still pending, in blocking order (items 38, 39):** a week of `revision`
-rows (from 2026-10-30), then the post-close slot decision on their size
-(item 39); the 16:20 ET post-close log of 10-29 for the first `spread
-arms:` cycles; the
-11-09/11-10 post-close logs (first IV premium rows, F5); token
-rotation by 2026-12-16; the forward clocks (spread arm at 6 graded cycles
-per arm, RS basket at 26 weeks, the pool gate at 349 settled episodes,
-all around March–April 2027).
+**Still pending, in blocking order (items 39, 40, 41):** the 10-30 11:07
+scan (first `revision` rows, the key-based suppression against the seven
+delivered alerts, whether CME alerts); G1 (re-anchor the HQ and control
+readings at the amendment F cut) with the next "go"; a week of revision
+rows, then the post-close slot decision (item 39, ~11-06); the 11-09/11-10
+post-close logs (first IV premium rows); the first spread settlements
+11-30 and the skew read at 6 graded cycles per arm (~April 2027); token
+rotation by 2026-12-16; the forward clocks as the `clocks:` line prints
+them (pool 32 of 349, basket 0 of 52, spread 0 of 12 per arm, IV premium
+0 of 128).
 
 ---
 
@@ -2337,6 +2339,29 @@ from the constant its module owns (`forward_log.GATE_EPISODES`,
 `spread_log.report()` prints the unquoted cycles by `market_reason`, the
 F4 read. `check_post_close_pass_hygiene` (61). The first stamped
 heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
+
+---
+
+## 41. Progress review 2026-10-29 (night): nine merges, the record's first alerts, floors and clocks all live; the H1 reading loses the post-F rows to episodes that straddle amendment F — ASSESSED 2026-10-29, ONE FIX RECOMMENDED
+
+`results/progress_review_2026-10-29.md`. Harness 47 / 63 / clean; ~60
+mutants falsified today. Every run green; DST (11-01) and the half days
+need nothing. The record: 864 rows, pool 45 episodes / 32 settled /
+−0.268 R (gate 32 of 349), live 18 / 16 / −0.246, pullback 12 / 6 /
++0.436; seven HQ rows under F+G; NOW open at −32 %, 22 DTE. Findings:
+**G1** amendment F reads from 10-28 but the episode unit dates at its
+first bar, so 18 of the 21 post-F pool rows continue a pre-F episode and
+the H1/H1′ reading and the control pairing drop them (tier 0 episodes
+printed while 5 readable rows sit in it; 1 control pair of 14 settled).
+Fix recommended: form the HQ and control episodes from the readable rows
+only (re-anchored at the cut: 21 episodes, 5 tier, 16 rest today); the
+base question and the gate keep the full episodes; a note under
+amendment F. **G2** the spread report hides the open cycles' entry ratios
+until settlement; print them as counts. **G3** "no HQ rows" wording when
+HQ rows exist unsettled. **G4** two cosmetic drifts. **G5** the grading
+pre-registration's no-amendment clause was knowingly set aside twice
+today, each time said in the amendment's first line. No engine, rule or
+threshold changed.
 
 ---
 
