@@ -369,8 +369,18 @@ def summary(path: Path | None = None) -> dict:
         rm, rse = _mean_se(ratios)
         mm, _ = _mean_se([p / ACCOUNT * 100.0 for p in model])
         km, _ = _mean_se([p / ACCOUNT * 100.0 for p in market])
+        # THE OPEN CYCLE'S ENTRY RATIO (review 2026-10-29 G2): the market
+        # quoted the legs when the cycle opened, so market mid / model is
+        # known at entry; it is printed as a COUNT for the open cycle, never
+        # read before the cycle settles (the pre-registration reads the ratio
+        # at 6 graded cycles per arm).
+        open_c = [c for c in mine if c["seq"] not in outs and c.get("market")
+                  and float((c.get("model") or {}).get("credit") or 0) > 0]
+        open_ratio = (float(open_c[-1]["market"]["credit_mid"]) / float(open_c[-1]["model"]["credit"])
+                      if open_c else float("nan"))
         arms[key] = {
             "cycles": len(mine), "graded": len(graded),
+            "open_ratio": open_ratio,
             "void": sum(1 for c in mine if c["seq"] in outs and outs[c["seq"]]["outcome"] == "void"),
             "open": sum(1 for c in mine if c["seq"] not in outs),
             "quoted": sum(1 for c in mine if c.get("market")),
@@ -423,6 +433,11 @@ def report(path: Path | None = None) -> int:
         print(f"  unquoted cycles {s['unquoted_cycles']} of {s['cycles']} (after-close quotes; by reason): {_why}")
     else:
         print(f"  every cycle quoted ({s['cycles']} of {s['cycles']})")
+    _open = [(k, a["open_ratio"]) for k, a in s["arms"].items() if a["open_ratio"] == a["open_ratio"]]
+    if _open:
+        print(f"  open cycles at entry, market mid / model (NOT A READING; counts until the cycle settles): "
+              + ", ".join(f"{k} {r:.3f}" for k, r in _open)
+              + f"; mean {sum(r for _, r in _open) / len(_open):.3f} over {len(_open)}")
     print(f"  NOT a result before {RESULT_CYCLES} graded cycles per arm (results/spread_preregistration.md);")
     print(f"  first reading at {FIRST_READ_CYCLES}, with its SE, whatever it says. The mean return is not")
     print("  a readable quantity on this record; the ratio and the path are.")
@@ -522,12 +537,28 @@ def selftest() -> int:
     assert abs(a["model_worst_pct"] - o1["pnl_model_pct"]) < 1e-6 and a["model_max_dd_pct"] > 5.0, a
     assert s["ratio_pooled_n"] == 1 and s["arms"]["SPY put_spread w5 otm5"]["ratio_n"] == 0
     assert s["unquoted"] == {"PUT 375 unquoted": 1} and s["unquoted_cycles"] == 1, s["unquoted"]
+    # THE OPEN CYCLE'S ENTRY RATIO (G2): no open quoted cycle here, so no
+    # arm carries one and the report prints no such line (asserted below).
+    assert not [k for k, a in s["arms"].items() if a["open_ratio"] == a["open_ratio"]], s["arms"]
     import io, contextlib
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         rc = report(tmp)
     assert rc == 0 and "NOT a result before 12" in buf.getvalue() and "chain intact" in buf.getvalue()
     assert "unquoted cycles 1 of 4" in buf.getvalue() and "PUT 375 unquoted: 1" in buf.getvalue(), buf.getvalue()
+    assert "open cycles at entry" not in buf.getvalue(), buf.getvalue()
+    # One quoted cycle opened: its entry ratio is carried for its arm and
+    # printed as a count, labelled NOT A READING; the graded reading does not
+    # move (ratio_pooled_n unchanged).
+    r5 = record("2027-01-05", arm, 390.0, 20.0, "2027-02-05", legs, model, mk, path=tmp)
+    s5 = summary(tmp)
+    assert abs(s5["arms"][arm_key(arm)]["open_ratio"] - mk["credit_mid"] / model["credit"]) < 1e-9, s5["arms"][arm_key(arm)]
+    assert s5["ratio_pooled_n"] == s["ratio_pooled_n"], "an open cycle's ratio is never in the reading"
+    buf5 = io.StringIO()
+    with contextlib.redirect_stdout(buf5):
+        report(tmp)
+    assert f"open cycles at entry, market mid / model (NOT A READING; counts until the cycle settles): " \
+           f"{arm_key(arm)} {mk['credit_mid'] / model['credit']:.3f}; mean" in buf5.getvalue(), buf5.getvalue()
     # tamper
     lines = tmp.read_text().splitlines()
     rec = json.loads(lines[0]); rec["spot"] = 1.0
