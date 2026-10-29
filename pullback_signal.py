@@ -38,6 +38,7 @@ import math
 import pandas as pd
 
 import signal_core as sc
+import risk_params
 
 SMA_SESSIONS = 200          # the uptrend test: close above the 200-session SMA
 BUCKET = "pullback"
@@ -111,7 +112,7 @@ def evaluate_pullback(raw_df, cdf, params, spy_regime: dict | None = None,
     # The base signal's risk-sanity gate, verbatim (signal_core.evaluate):
     # relative to price, not an absolute penny.
     risk = abs(entry - stop)
-    if risk < max(0.05, price * 0.003):
+    if risk < risk_params.min_risk(price):        # the one floor (risk_params)
         _tally(tally, "zero_risk")
         return None
     rr = round(abs(target - entry) / risk, 2)

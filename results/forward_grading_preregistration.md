@@ -8,6 +8,51 @@ is written; after that nothing here changes. Companion to
 `results/forward_record_preregistration.md`, which fixed what is RECORDED;
 this fixes how it is GRADED.
 
+## AMENDED 2026-10-29 — a fill inside the risk floor is VOID (logic review L2, owner's option (a)). RULE CHANGE, made with 182 outcome rows on file
+
+**This document said it changes nothing after the first outcome row. This
+amendment is made after 182 of them, by the owner's decision ("go with L2
+as well, option (a)"), and says so here rather than pretend otherwise.**
+Why it is made anyway: the rule it adds is one the record's own signal
+already applies to itself, the rows it would have changed are named below
+and stand as graded, and the alternative (reading the tails at the gate)
+leaves a single row able to own the mean.
+
+**The rule.** The signal refuses a setup whose |entry − stop| is below
+`risk_params.min_risk(price)` = max($0.05, 0.3 % of price)
+(`signal_core.evaluate`, "zero_risk"; the pullback rule reads the same
+function). The grader applies the same floor to the FILL: a fill whose
+|fill − stop| is below `min_risk(fill)` is **VOID, reason
+`gapped_before_fill`**, with `detail.note` "fill inside the risk floor" and
+the `fill_risk` and `risk_floor` it compared. The three rules are one copy
+in `risk_params` (`RISK_FLOOR_ABS`, `RISK_FLOOR_PCT`, `min_risk`), pinned by
+`consistency_check.check_risk_floor_single_sourced`.
+
+**Why.** The R denominator is |fill − stop|. A fill a few cents above the
+stop makes the unit a few cents: the row books about −1 R on any noise, or
++20 to +120 R if it reaches the target, and either way the row's weight in
+the mean is not the trade's. On the record at this amendment: KO 2026-10-26
+filled $0.048 above its stop (2.5 % of the recorded risk, 0.05 % of
+price), ANET 2026-10-22 at 4.5 % and TMO 2026-10-20 at 3.9 %; all three
+were stopped (−1.38, −1.36, −1.15 R). Had any reached its target it would
+have owned the pool mean on its own.
+
+**What it does to the research engine: nothing, and that is a declared
+divergence.** `backtest.simulate_trade()` has no floor at the fill, so
+every committed result keeps its rows as traded; `engine_differential.py`
+reports a fill the engine trades and the grader voids as `void_floor`,
+with the R the engine booked, never as a mismatch. Whether the research
+engine takes the same floor, and the re-runs that would owe, is a separate
+decision (BACKLOG 40). `engine_differential_run1.txt` carries a dated note
+and its run 2 is owed.
+
+**What it does to the record.** Nothing already graded changes: one
+outcome per row, ever, and the three rows above stand as losses. The rule
+applies to every row graded from this merge. `summary()` counts the rows
+voided under it (`void_risk_floor`) and `report()` prints the count, so the
+reading at the gate can say how many rows the floor removed. No research
+result is re-derived from the grader, so none moves.
+
 ## AMENDED 2026-10-08, BEFORE ANY OUTCOME ROW — implementation details, no rule changes
 
 Written with the resolver code, before it has run anywhere. Four points the

@@ -69,6 +69,21 @@ DEFAULT_ACCOUNT_SIZE = 5000
 # app.py exposes this as a sidebar input; this is the default it starts at.
 DEFAULT_RISK_PCT = 1.0
 
+# THE RISK FLOOR (one copy; logic review 2026-10-29 L2, owner: "option (a)").
+# A stop closer to the entry than this is noise, not a level: the signal
+# refuses the setup (signal_core.evaluate "zero_risk"), the pullback rule
+# refuses it the same way, and the grader VOIDs a fill that lands inside it
+# (forward_log.resolve_signal, reason gapped_before_fill), because an R
+# unit of a few cents turns one row into +100 R or -1 R on noise. Relative
+# to price, with an absolute floor for cheap names.
+RISK_FLOOR_ABS = 0.05        # dollars
+RISK_FLOOR_PCT = 0.003       # of the reference price (0.3 %)
+
+
+def min_risk(price: float) -> float:
+    """The smallest tradeable |entry - stop| at this price."""
+    return max(RISK_FLOOR_ABS, float(price) * RISK_FLOOR_PCT)
+
 # Option premium cap: percentage of the account allowed as the FULL cost of a
 # single contract, because on a debit position the premium is the max loss.
 # Used by scanner.py to decide whether a suggested contract is affordable.
