@@ -28,6 +28,15 @@ landed in the repo and the removal says so in the commit.
   The token expiry dates it carried (app PAT 2027-01-05, dispatch token
   2027-01-06, both rotated in the last week of December 2026) live on in the
   scheduler item's "FORCING FUNCTION — TWO PATs" paragraph.
+- **2026-10-29 (items 39–42), the reads that are due.** 2026-10-30 11:07 ET:
+  the first `revision` rows, the key-based alert suppression against the
+  seven delivered alerts of 10-29, whether CME alerts (recorded HQ at the
+  10-29 close). ~2026-11-06: a week of revision rows, then the post-close
+  slot decision (item 39). 2026-11-09/10: the first IV premium rows.
+  2026-11-30: the first spread settlements (first reading at 6 graded
+  cycles per arm). By 2026-12-16: rotate both PATs. Open decision: item 42
+  H1 (the thesis exit as part of the measured structure). Retire each line
+  as it lands.
 
 ---
 
@@ -2338,6 +2347,24 @@ from the constant its module owns (`forward_log.GATE_EPISODES`,
 `spread_log.report()` prints the unquoted cycles by `market_reason`, the
 F4 read. `check_post_close_pass_hygiene` (61). The first stamped
 heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
+
+---
+
+## 42. Progress review 2026-10-29 (late): the live position's exit rules against the measured structure — ASSESSED 2026-10-29, ONE DECISION OPEN
+
+`results/progress_review_2026-10-29_late.md`. Where the night review did
+not look. **H1 (owner decision):** the measured structure's own run
+(`option_backtest_default_run3.txt`, 65 THESIS exits of 395) ran with the
+thesis exit ON, as `thesis_exit_preregistration.md` names production and
+run 3 KEEPs; the scanner's alert text says "thesis OFF", the app's
+checkbox defaults off, and `option_structure_violation()` does not ask;
+the NOW position has it on because the owner ticked it. Recommended (a):
+the thesis exit joins `MEASURED_OPTION_STRUCTURE`, the check requires it
+on a signal trade, the alert text and the app default say ON. **H2** the
+HOLD rule (30 sessions) cannot bind inside the structure; drop it from
+signal trades with H1. **H3** three hold lengths coexist, each declared.
+**H4** secrets scan clean; 54 remote branches, pruning cosmetic. **H5**
+dated hand-off entries added. No engine, rule or threshold changed.
 
 ---
 
