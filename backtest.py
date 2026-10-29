@@ -98,6 +98,7 @@ import pandas as pd
 
 import signal_core as sc
 import market_context as mc
+import risk_params
 
 try:
     import data_source
@@ -464,6 +465,24 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
             key = f"gapped past {gapped} before fill"
             tally[key] = tally.get(key, 0) + 1
         return {"filled": False, "gapped": gapped}
+
+    # THE RISK FLOOR AT THE FILL (owner 2026-10-29, "go with the research
+    # engine floor as well"; grading amendment 2026-10-29, logic review L2).
+    # The signal refuses a setup whose risk is inside risk_params.min_risk
+    # at the signal bar's close; the fill is the next open, and a fill a few
+    # cents from the stop makes the R unit a few cents: +100 R on a target,
+    # -1 R on noise, either way one row owning the mean. The forward grader
+    # voids such a fill; this engine refuses it the same way, counted in the
+    # tally, so the two engines agree on data (engine_differential). A
+    # caller whose rules pre-registered their own engine (intraday_rules)
+    # passes risk_floor=False and keeps its measurement as declared.
+    if cfg.get("risk_floor", True):
+        floor = risk_params.min_risk(entry)
+        if risk < floor:
+            if tally is not None:
+                tally["fill inside the risk floor"] = tally.get("fill inside the risk floor", 0) + 1
+            return {"filled": False, "floor": True,
+                    "fill_risk": round(risk, 4), "risk_floor": round(floor, 4)}
 
     # EXCURSIONS, recorded as the trade is walked.
     #
@@ -1332,6 +1351,12 @@ def run(cfg: dict, policy: dict | None = None) -> list[dict]:
                   f"  ({_gap_stop} past the stop, {_gap_tgt} past the target)")
             print("     (the next open was already beyond the level, so the setup")
             print("      did not exist at the fill price — no trade)")
+        _floor = tally.get("fill inside the risk floor", 0)
+        if _floor:
+            print(f"  fill inside the risk floor: {_floor:>6}"
+                  f"  (|fill - stop| below max(${risk_params.RISK_FLOOR_ABS:.2f}, "
+                  f"{risk_params.RISK_FLOOR_PCT * 100:g}% of the fill) — no trade; "
+                  f"the forward grader voids the same fill)")
 
         # Levels that were gapped THROUGH after the fill and filled at the
         # open (BACKLOG 21). Printed so a run says how much of its left tail
@@ -2173,6 +2198,29 @@ def selftest() -> int:
     assert sum(_gt.values()) == 4 and len(_gt) == 2, _gt
     print(f"gapped fills            : 4 rejected (2 past stop, 2 past target), "
           f"counted not silent; ordinary stop-outs still fill at -1.00 R")
+
+    # ── THE RISK FLOOR AT THE FILL (owner 2026-10-29) ──
+    # A long with its stop at 98 that opens at 98.05 has a 5-cent R unit:
+    # refused, counted, and flagged; the same geometry at 98.35 (a cent
+    # above the $0.30 floor at $98) fills; risk_floor=False (the intraday
+    # engine's pre-registered path) fills the 98.05 open as before.
+    _ft: dict = {}
+    _fr = _gap(98.05, 97.0, 110.0, "Bullish", 98.0, 106.0, tally=_ft)
+    assert not _fr.get("filled") and _fr.get("floor") and "gapped" not in _fr \
+        and abs(_fr["risk_floor"] - risk_params.min_risk(98.05)) < 1e-3, _fr
+    assert _ft == {"fill inside the risk floor": 1}, _ft
+    _ok = _gap(98.35, 98.2, 110.0, "Bullish", 98.0, 106.0, tally=_ft)
+    assert _ok.get("filled") and _ok["outcome"] == "win", _ok
+    _off = simulate_trade(pd.DataFrame({
+        "Date": pd.bdate_range("2024-01-01", periods=3),
+        "Open": [100.0, 98.05, 98.05], "High": [100.0, 110.0, 110.0],
+        "Low": [100.0, 98.02, 98.02], "Close": [100.0, 98.05, 98.05]}), 0,
+        {"trend": "Bullish", "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0},
+        dict(_gcfg, risk_floor=False))
+    assert _off.get("filled") and _off["r"] > 100, (_off, "risk_floor=False keeps the old engine")
+    assert _ft == {"fill inside the risk floor": 1}, _ft
+    print("risk floor at the fill  : a 5-cent R unit is refused and counted; a cent above the floor fills; "
+          "risk_floor=False reproduces the pre-floor engine")
 
     # ── a level gapped THROUGH after the fill is filled at the OPEN (BACKLOG 21) ──
     # Entry bar is clean (opens 100, trades 99-101); the NEXT bar opens beyond

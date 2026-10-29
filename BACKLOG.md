@@ -2379,12 +2379,40 @@ as a dated amendment at the top of `forward_grading_preregistration.md`,
 which says in its first line that it is made after 182 outcome rows against
 that document's own no-amendment clause; the three rows named stand as
 graded. `check_risk_floor_single_sourced` (63). Selftest, falsified.
-**Owed by L2:** the research engine (`backtest.simulate_trade`) has no
-floor at the fill, a divergence the amendment declares; `engine_differential`
-reports such rows as `void_floor`, never a mismatch, and
-`engine_differential_run1.txt` carries a dated note until the owner runs
-run 2 on the laptop. Whether the research engine takes the floor (and the
-re-runs that would owe) is open.
+**Research engine floor DONE 2026-10-29 (owner: "go with the research
+engine floor as well"), RE-RUNS OWED — fix and re-runs merge as ONE
+change.** `backtest.simulate_trade` refuses a fill inside
+`risk_params.min_risk(fill)` (tally "fill inside the risk floor", printed
+with the gate rejections) unless the caller passes `risk_floor=False`,
+which only `intraday_rules` does: its pre-registration declared its own
+engine and its results stand. `engine_differential` counts a fill both
+engines refuse as `void_floor` and reports one engine flooring alone as a
+mismatch. **Owed from the branch on the laptop (frozen bars), then
+merged with this change:** `oos_validate_run5` (`python oos_validate.py`),
+`portfolio_replay_run5` (`python longs_only.py`),
+`record_recheck_floor_run1` (`python record_recheck.py`; CODE MOVED
+against the 10-08 baseline is the expected verdict),
+`engine_differential_run2` (`python engine_differential.py | tee
+results/engine_differential_run2.txt`, which retires run 1's note).
+The older research files (feature_sweep, exit_ab, conditional_test,
+drift_null, inverted_arm, universe_backtest, setup_cases, outcome_taxonomy,
+rvol_confirm, atr_stop, adx_live) are readings of the engine of their day
+and are not re-run, as 36 did. The option, spread and pullback-arrival
+engines do not fill through `simulate_trade` and are untouched.
+**RE-RUNS DONE 2026-10-29** (owner's laptop, branch @ 1c7a76f, frozen
+bars), merged with the fix as one change: `oos_validate_run5.md` FAIL on
+all three criteria as before (579 trades; expectancy −0.112 → −0.087 R,
+PF 0.85 → 0.88, CI [−0.237, +0.013] → [−0.205, +0.031]); eleven per-ticker
+rows identical, AVGO alone −0.455 → −0.131 avg R on the same 45 trades:
+the floor removed one row of roughly −15 R, the hazard L2 named, measured
+on the held-out set. `portfolio_replay_run5.txt` long side +0.042 →
++0.059 R, still spans zero; constrained +2.6 → +2.4 %/yr at 17.2 % DD,
+idealised +0.4 → +2.0 %/yr; index better on both axes, unchanged.
+`record_recheck_floor_run1.txt` CODE MOVED as expected; the floor's own
+share is isolable against the group B re-check on the same bars: one to
+two trades per cut, every sign unchanged. `engine_differential_run2.txt`:
+271 frames, same fingerprint, compared 10,450, 119 floored in both, 0
+mismatches, the engines AGREE; run 1's note retired. No verdict changed.
 
 ---
 

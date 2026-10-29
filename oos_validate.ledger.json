@@ -139,5 +139,83 @@
       "stops_at_open": 61,
       "targets_at_open": 31
     }
+  },
+  {
+    "timestamp": "2026-10-29T20:55:34.885741+00:00",
+    "config_hash": "a3c94a897f4d6f11",
+    "hash_changed": false,
+    "tickers": [
+      "GOOGL",
+      "AVGO",
+      "AMD",
+      "NFLX",
+      "CRM",
+      "ADBE",
+      "QCOM",
+      "MU",
+      "ORCL",
+      "NOW",
+      "PANW",
+      "LRCX"
+    ],
+    "n_trades": 579,
+    "expectancy": -0.087,
+    "profit_factor": 0.88,
+    "t": -1.442,
+    "p_value": 0.14922,
+    "ci": [
+      -0.2052,
+      0.0312
+    ],
+    "passed": false,
+    "fail_reasons": [
+      "expectancy -0.087 R < +0.20 R",
+      "profit factor 0.88 < 1.30",
+      "95% CI lower bound -0.205 R does not clear 0"
+    ],
+    "data_fingerprint": "data: v2-38fc8d83a7275823  (13 series, 13 cached / 0 fetched, oldest 57d)",
+    "gapped_fills": {
+      "stops_at_open": 61,
+      "targets_at_open": 31
+    }
+  },
+  {
+    "timestamp": "2026-10-29T20:58:56.760202+00:00",
+    "config_hash": "a3c94a897f4d6f11",
+    "hash_changed": false,
+    "tickers": [
+      "GOOGL",
+      "AVGO",
+      "AMD",
+      "NFLX",
+      "CRM",
+      "ADBE",
+      "QCOM",
+      "MU",
+      "ORCL",
+      "NOW",
+      "PANW",
+      "LRCX"
+    ],
+    "n_trades": 579,
+    "expectancy": -0.087,
+    "profit_factor": 0.88,
+    "t": -1.442,
+    "p_value": 0.14922,
+    "ci": [
+      -0.2052,
+      0.0312
+    ],
+    "passed": false,
+    "fail_reasons": [
+      "expectancy -0.087 R < +0.20 R",
+      "profit factor 0.88 < 1.30",
+      "95% CI lower bound -0.205 R does not clear 0"
+    ],
+    "data_fingerprint": "data: v2-38fc8d83a7275823  (13 series, 13 cached / 0 fetched, oldest 57d)",
+    "gapped_fills": {
+      "stops_at_open": 61,
+      "targets_at_open": 31
+    }
   }
 ]

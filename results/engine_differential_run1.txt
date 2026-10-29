@@ -1,10 +1,6 @@
-READ WITH the grading amendment of 2026-10-29 (results/forward_grading_preregistration.md,
-logic review L2): forward_log.resolve_signal() now VOIDs a fill inside the risk floor
-(max $0.05, 0.3 % of the fill from the stop); backtest.simulate_trade() has no floor at
-the fill. A re-run would move some rows from "compared" to a new "floor" column and
-leave "mismatches 0" as it is. The reading below (the two engines agree on every row
-both trade) stands; the re-run is owed on the laptop as run 2
-(`python engine_differential.py | tee results/engine_differential_run2.txt`).
+SUPERSEDED by engine_differential_run2.txt (2026-10-29): both engines now refuse a fill
+inside the risk floor, and run 2 reproduces this run's "mismatches 0" on the same frames
+and fingerprint with 119 rows floored in both. This file is the pre-floor reading.
 
 ==============================================================================
 ENGINE DIFFERENTIAL — backtest.simulate_trade vs forward_log.resolve_signal, real bars

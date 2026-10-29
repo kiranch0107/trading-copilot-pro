@@ -37,14 +37,21 @@ price), ANET 2026-10-22 at 4.5 % and TMO 2026-10-20 at 3.9 %; all three
 were stopped (−1.38, −1.36, −1.15 R). Had any reached its target it would
 have owned the pool mean on its own.
 
-**What it does to the research engine: nothing, and that is a declared
-divergence.** `backtest.simulate_trade()` has no floor at the fill, so
-every committed result keeps its rows as traded; `engine_differential.py`
-reports a fill the engine trades and the grader voids as `void_floor`,
-with the R the engine booked, never as a mismatch. Whether the research
-engine takes the same floor, and the re-runs that would owe, is a separate
-decision (BACKLOG 40). `engine_differential_run1.txt` carries a dated note
-and its run 2 is owed.
+**The research engine takes the same floor** (owner 2026-10-29, "go with
+the research engine floor as well"): `backtest.simulate_trade()` refuses a
+fill whose |fill − stop| is inside `min_risk(fill)`, counted in the run's
+tally as "fill inside the risk floor", so the two engines agree on data;
+`engine_differential.py` counts a fill both refuse as `void_floor` and
+reports an engine that floors alone as a mismatch. The intraday engine
+(`intraday_rules`) passes `risk_floor=False` and keeps the engine its own
+pre-registration declared. The committed results whose engine this is were
+re-run on the laptop and merged with the change as one (BACKLOG 40:
+`oos_validate_run5`, `portfolio_replay_run5`, `record_recheck_floor_run1`,
+`engine_differential_run2`; 119 of 10,569 random geometries and one to
+two trades per recorded cut sit inside the floor, every one a large loss
+on a risk unit of cents; no verdict changed); the older research files
+are readings of the engine of their day and are not re-run, as BACKLOG 36
+did.
 
 **What it does to the record.** Nothing already graded changes: one
 outcome per row, ever, and the three rows above stand as losses. The rule

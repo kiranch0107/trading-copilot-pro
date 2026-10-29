@@ -1,0 +1,65 @@
+LONGS-ONLY REPLAY ON THE RESEARCH-ENGINE FLOOR (BACKLOG 40). Run by the owner 2026-10-29 on
+the laptop, `python longs_only.py`, branch claude/trading-code-review-wt48q8 @ 1c7a76f, the
+same cache and OOS twelve as portfolio_replay_run4.txt (10y relative to the run date), after
+backtest.simulate_trade() began refusing a fill inside risk_params.min_risk(fill).
+
+  run 4 (group B) -> run 5 (floor):
+    idealised    +0.4%/yr, 55.6% DD, 884 trades  ->  +2.0%/yr, 51.8% DD, 884 trades
+    constrained  +2.6%/yr, 17.2% DD, 645 trades  ->  +2.4%/yr, 17.2% DD, 644 trades
+    skipped, no room          239               ->  240
+    long side    +0.042 R, CI [-0.090, +0.174]  ->  +0.059 R, CI [-0.069, +0.187]
+    SPY          +13.4%/yr (observed span), 34.1% DD  (unchanged)
+
+The idealised curve gained because the rows the floor removes are the ones that book -5 to
+-15 R on a risk unit of cents (record_recheck_floor_run1.txt: one to two per cut), and the
+idealised account takes every signal at full size; the constrained account sized those
+positions down already, so it barely moved. The trade count is unchanged at 884 because
+the engine holds one position per name and a refused fill frees the name for the next
+signal. The reading is unchanged: the long side SPANS ZERO, and the index was better on
+both axes, with no signals to follow.
+
+====================================================================================
+LONGS ONLY, IN SHARES — what it would actually have been
+====================================================================================
+  $5,000 account, 1.0% risk per trade, position ceiling 25%
+  A MEASUREMENT, not a test. No bar, nothing searched over.
+====================================================================================
+                   total %   CAGR %  max DD %  trades   win %
+  -----------------------------------------------------------
+  idealised          +20.2     +2.0      51.8     884    36.0
+  constrained        +25.3     +2.4      17.2     644    37.3
+  SPY buy-hold      +252.4    +13.4      34.1       —       —
+
+  WHAT THE CONSTRAINT COST
+    signals skipped, no room    240
+    positions sized down        738
+    peak concurrent positions   5
+    peak capital deployed       100% of equity
+    -> 240 of 884 signals (27%) were not takeable at this account size
+
+  BY YEAR (constrained)
+    year      trades       P&L $
+    2017          49        -201
+    2018          61        +494
+    2019          58         +74
+    2020          79        +250
+    2021          85        +366
+    2022          27        -728
+    2023          80        +346
+    2024          91        -409
+    2025          63        +912
+    2026          51        +163
+
+====================================================================================
+  READING IT
+  The long side is +0.059 R on 884 trades, 95% CI [-0.069, +0.187] — it SPANS ZERO.
+  (The record was +0.085 R, and decayed +0.268 -> +0.106 -> +0.085
+  as the sample grew; results/longshort_split.md.)
+  Dropping shorts removes a measured loss; it does not add a measured
+  gain. Expectancy above has a confidence interval. The DRAWDOWN does
+  not — that is what the path did.
+
+  This returned +2.4%/yr against SPY at +13.4%/yr,
+  at 17% drawdown against 34%. Owning the index was
+  better on both axes, with no signals to follow.
+====================================================================================
