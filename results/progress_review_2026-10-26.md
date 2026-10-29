@@ -61,9 +61,10 @@ system is a recorder today, not an alerter. BACKLOG 34 (D) stands.
 
 ## Findings
 
-*Status 2026-10-28:* F2, F3, F4, F6, F7 and BACKLOG 36 group A are fixed
-(BACKLOG 37, "Fixed 2026-10-28"). F1 and F5 stand: F1 is a
-pre-registration amendment and waits on the owner's wording; F5 is a date.
+*Status 2026-10-28 (evening):* F1 is resolved by amendment C (the pool is
+the population; owner's decision the same day). F2, F3, F4, F6, F7 and
+BACKLOG 36 group A are fixed (BACKLOG 37, "Fixed 2026-10-28"). F5 is a
+date (2026-11-09). The next review is `progress_review_2026-10-28.md`.
 
 ### F1. The live bucket cannot reach its gate; the pool can
 
