@@ -166,13 +166,25 @@ def signal_bar_input(key: str, ticker: str, right: str) -> str | None:
     # (progress review 2026-10-26, F4). The date input defaults to today,
     # which is rarely the signal bar. Read-only look-up of the copy of the
     # forward log this deployment carries; a warning, not a refusal, since
-    # that copy can lag the scanner's by a push.
+    # that copy can lag the scanner's by a push -- EXCEPT a date later than
+    # the last bar any scan has recorded, which cannot be a signal bar
+    # whatever the lag: the first NOW trade (2026-10-29) was logged with
+    # the alert's date instead of its "Signal bar: 2026-10-28", and the
+    # warning did not stop it. That is refused (None -> journal_store's F4
+    # refusal) so the form keeps the trade until the date is the bar's.
     try:
+        _rows = forward_log.read_all()
         _hit = any(r.get("kind") == "signal" and r.get("key") == _key
-                   and forward_log.counts_as_taken(r)
-                   for r in forward_log.read_all())
+                   and forward_log.counts_as_taken(r) for r in _rows)
+        _last_bar = max((str(r.get("bar_date") or "") for r in _rows if r.get("kind") == "scan"),
+                        default="")
     except Exception:  # noqa: BLE001 — an unreadable log is not this form's problem
-        _hit = True
+        _hit, _last_bar = True, ""
+    if _last_bar and str(_d) > _last_bar:
+        st.error(f"{_d} is later than the last bar any scan has recorded ({_last_bar}), so it "
+                 f"cannot be a signal bar. Enter the 'Signal bar:' date from the alert "
+                 f"(the bar BEFORE the alert's day, usually), not the alert's date.")
+        return None
     if not _hit:
         st.warning(f"No taken signal `{_key}` in this deployment's forward log. "
                    f"Check the 'Signal bar:' date in the alert; a key that names "

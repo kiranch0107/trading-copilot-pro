@@ -2288,11 +2288,10 @@ FAIL unchanged, −0.112 R on 579 trades; the raw output
 (13 cached / 0 fetched) and 92 of 579 trades gapped through a level (61
 stops filled at the open), the mechanism behind the move from run 2.
 
-**Still pending, in blocking order (review 2026-10-28, item 38):** tomorrow's
-scans, the first under `4ddd12a3095f`: the first alerts of the record (the
-in-session scans alert; the pool cap of five may bind) and the first
-`spread arms:` cycles in the post-close log; the first signal trade logged
-under BACKLOG 32's rules (starts the premium-basis reading); the
+**Still pending, in blocking order (items 38, 39):** the owner's decision on
+item 39 (move the post-close pass later, or measure bar revisions first;
+recommended: measure); the 16:20 ET post-close log of 10-29 for the first
+`spread arms:` cycles; the NOW trade's premium if it was a typo; the
 11-09/11-10 post-close logs (first IV premium rows, F5); token
 rotation by 2026-12-16; the forward clocks (spread arm at 6 graded cycles
 per arm, RS basket at 26 weeks, the pool gate at 349 settled episodes,
@@ -2326,6 +2325,48 @@ hashes) cuts H1 (hq versus base) and H1′ (the rank tier) at amendment F;
 the base question, the episode gate and every count still read every row;
 `report()` prints the read and excluded pool row counts. Selftests, the
 hygiene check extended, falsified.
+
+---
+
+## 39. The first alerts (2026-10-29): seven genuine by the rules; the post-close pass records a bar Yahoo has not finished; a journal key named the alert's day — ASSESSED 2026-10-29, TWO FIXES, ONE DECISION OPEN
+
+The 11:07 ET scan of 2026-10-29, the first under `4ddd12a3095f`, sent the
+record's first seven alerts on bar 2026-10-28: ACN and NOW (live), AMGN,
+V, SPGI, WMT, UNP (pool; 5 HQ of 75, cap 5 not binding). Every one passed
+the three declared legs (ADX 30.3–39.0, every filter, R:R 1.13–3.2). UNP
+had no contract inside the 8 % spread ceiling (tightest 13.2 %): not
+tradeable here by item 32's rule. Seven alert rows, delivered.
+
+**Finding: the post-close pass reads a bar Yahoo has not finished.** The
+16:11 ET pass of 10-28 recorded NOW on bar 10-28 with R:R 1.18 and the
+earnings blackout failing, and recorded no ACN row at all. The 11:07
+scan next morning read the SAME settled bar: NOW R:R 1.14, every filter
+passing (the blackout is dated from the scan day and cleared overnight,
+by design), and ACN a base signal (no filter blocks the base, so ACN's
+bar itself must have changed between 16:11 and 11:07: Yahoo's daily
+close and volume are revised for some time after 16:00). Consequences:
+the record's NOW row for 10-28 is pre-F with `hq: false` while an alert
+row on the same key says the tier fired; ACN's 10-28 row is dated this
+morning. Dedupe keeps the first row, so the record is append-only and
+honest, but the post-close row is of a bar that was still moving.
+**Decision for the owner:** (a) move the post-close record pass later
+(the dispatch slot is cron-job.org's; 17:30 ET would be safe), or (b)
+leave it and have the morning scan write a `bar_revised` note when the
+settled bar it reads differs from the recorded row's price/ATR, so the
+difference is measured before the slot is moved. (b) is code and
+measures the size of the problem first; recommended.
+
+**Fixed 2026-10-29 (owner: "go ahead and fix per your recommendation").**
+The first NOW trade was logged with signal bar 2026-10-29 (the alert's
+day) instead of the alert's "Signal bar: 2026-10-28"; the app warned and
+did not block, and the outcome could never have attached. The key is
+corrected in `open_positions.json` (a taken row exists for it), and
+`app.signal_bar_input` now REFUSES a date later than the last bar any
+scan has recorded (it cannot be a signal bar whatever the deployment's
+lag) while still only warning on an unmatched earlier date; pinned in
+`check_journal_hygiene`. The trade's $0.25 premium on a 150 strike with
+the underlying at 150.13 is left as logged and flagged to the owner: if
+it is a typo the P&L is wrong from the start.
 
 ---
 
