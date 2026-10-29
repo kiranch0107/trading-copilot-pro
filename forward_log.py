@@ -1052,8 +1052,23 @@ def _is_hq(row: dict) -> bool:
     return bool((row.get("setup") or {}).get("high_quality"))
 
 
+# THE HQ QUESTIONS ARE READ FROM AMENDMENT F FORWARD (2026-10-28; review
+# 2026-10-28 F3). Amendments F and G changed what the tag selects; the tier
+# fired 0 times before them, so there is no earlier HQ arm to pool with.
+# The rows written under the three pre-F hashes are excluded from H1 (hq
+# versus base) and H1' (the rank tier); the base-signal question, the
+# episode gate and every count still read every row. A fixture or a later
+# hash is read, so this is "not before F", exactly as the amendment says.
+HQ_READ_EXCLUDES = frozenset({"e7d75b855a51", "c357a0d01ff5", "ba6b3b46afa6"})
+
+
+def hq_readable(row: dict) -> bool:
+    """Whether a signal row is inside the HQ reading window (amendment F on)."""
+    return row.get("config") not in HQ_READ_EXCLUDES
+
+
 def _mean_r(settled: list, sigs: list, hq: bool) -> float:
-    by_seq = {s.get("seq"): s for s in sigs}
+    by_seq = {s.get("seq"): s for s in sigs if hq_readable(s)}
     rs = [o["r"] for o in settled
           if o.get("ref_seq") in by_seq and _is_hq(by_seq[o["ref_seq"]]) == hq]
     return sum(rs) / len(rs) if rs else float("nan")
@@ -1232,10 +1247,13 @@ def summary(path: Path | None = None) -> dict:
     # H1' (amendment 2026-10-28 D): the rank tier against the rest of the
     # headline bucket, by episode; membership by the episode's FIRST row.
     tier = rank_tier(taken)
-    head_eps = [e for e in eps if e["bucket"] == HEADLINE_BUCKET]
+    readable = {s.get("seq") for s in taken if hq_readable(s)}
+    head_eps = [e for e in eps if e["bucket"] == HEADLINE_BUCKET and e["seq"] in readable]
     h1 = {"k": RANK_TIER_K,
           "tier": _episode_stats([e for e in head_eps if e["seq"] in tier]),
-          "rest": _episode_stats([e for e in head_eps if e["seq"] not in tier])}
+          "rest": _episode_stats([e for e in head_eps if e["seq"] not in tier]),
+          "read_rows": sum(1 for s in taken if bucket_of(s) == HEADLINE_BUCKET and hq_readable(s)),
+          "excluded_rows": sum(1 for s in taken if bucket_of(s) == HEADLINE_BUCKET and not hq_readable(s))}
     # A (amendment 2026-10-28 A): signal minus control, by episode. The pair
     # is the episode's FIRST row and that row's control; both must be settled
     # on the stop-distance basis. Controls of later rows are recorded (one per
@@ -1322,6 +1340,8 @@ def report(path: Path | None = None) -> int:
                       f"tier {h['tier']['episodes']} ep, {h['tier']['settled']} settled, mean R {_fmt(h['tier']['mean_r'])}  |  "
                       f"rest {h['rest']['episodes']} ep, {h['rest']['settled']} settled, mean R {_fmt(h['rest']['mean_r'])}")
                 print(f"  {'':12}  MDE at the 349 gate ~ +0.37 R; +0.15 R needs ~2,070 settled pool episodes")
+                print(f"  {'':12}  H1/H1' read from amendment F (2026-10-28) forward: {h['read_rows']} taken pool rows read, "
+                      f"{h['excluded_rows']} under the pre-F hashes excluded (the base question reads every row)")
             bc = s["by_control"].get(b)
             if bc and bc["controls"]:
                 print(f"  {'':12}  A: signal - control (amendment 2026-10-28 A): pairs {bc['pairs']}, "
@@ -1811,8 +1831,26 @@ def selftest() -> int:
     _rrow("HQ", "2026-10-21", [], 60.0)
     record_outcome(_r["HQ"]["seq"], "win", 1.0, "stop_distance", path=_rt)
     record_outcome(_r["B3"]["seq"], "loss", -1.0, "stop_distance", path=_rt)
+    # A row under a PRE-F hash (c357a0d01ff5) is counted and in its episode,
+    # but neither H1 nor H1' reads it (amendment F; review 2026-10-28 F3).
+    _pre_f = {"adx_min": 35.0, "min_rr": 0.5, "atr_stop_mult": 1.25, "atr_tgt_mult": 4.0,
+              "weekly_confirm": False, "longs_only": True, "hq_min_rr": 1.0, "volume_mult": 1.2,
+              "volume_soft_mult": 0.7, "spy_regime_on": True}
+    assert config_fingerprint(_pre_f) in HQ_READ_EXCLUDES
+    _old = record_signal("OLD", "Bullish", {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0,
+                                            "rr": 3.0, "adx": 70.0, "hq_fail": []},
+                         "taken", "", _pre_f, bar_date="2026-10-22", path=_rt, hq=True, bucket="pool")
+    record_outcome(_old["seq"], "win", 5.0, "stop_distance", path=_rt)
+    assert not hq_readable(_old) and hq_readable(_r["HQ"])
     _h = summary(_rt)["h1_rank"]
     assert _h["k"] == RANK_TIER_K == 5
+    assert _h["excluded_rows"] == 1 and _h["read_rows"] == len([r for r in read_all(_rt) if r.get("kind") == "signal"
+                                                                 and r.get("decision") == "taken" and r.get("bucket") == "pool"]) - 1
+    assert (_h["tier"]["settled"] + _h["rest"]["settled"]) == 2, (_h, "the +5 R pre-F row is not in the tier or the rest")
+    _sm_f = summary(_rt)
+    assert _sm_f["by_episode"]["pool"]["settled"] == 3, "the base question still reads the pre-F row"
+    assert abs(_sm_f["by_bucket"]["pool"]["mean_r_hq"] - 1.0) < 1e-9, (
+        _sm_f["by_bucket"]["pool"]["mean_r_hq"], "H1's hq mean reads HQ's +1.0 only; the pre-F +5 R row is excluded")
     # Tier episodes: HQ, A1, A2, B1, B2 (bar 1) and AA, AB (bar 2: four rows,
     # all inside k). Rest: C1 and B3 — B3's bar-2 row is top of its bar, but
     # its episode is read by its FIRST row, which was off the tier.

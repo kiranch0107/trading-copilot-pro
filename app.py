@@ -398,6 +398,12 @@ MIN_DTE       = int(st.sidebar.number_input("Min DTE for options",
     help="Minimum days-to-expiry to consider. The default is the measured structure's "
          "floor (21 DTE; BACKLOG 32): a signal trade is logged only inside 21-45 DTE, "
          "so a shorter window here shows contracts the journal will refuse."))
+MAX_DTE       = int(st.sidebar.number_input("Max DTE for options",
+    value=int(risk_params.MEASURED_OPTION_STRUCTURE["max_dte"]), min_value=1,
+    help="Maximum days-to-expiry to consider. The default is the measured structure's "
+         "ceiling (45 DTE; BACKLOG 32). Without it the third listed expiry on a "
+         "monthly-only name could be 50-60 DTE, a contract the journal refuses to log "
+         "as a signal trade (review 2026-10-28 F1)."))
 MIN_RR        = st.sidebar.number_input("Min Reward/Risk",           value=float(_D.min_rr),  min_value=0.1,  step=0.1)
 HQ_MIN_RR     = st.sidebar.number_input("High-Quality R:R threshold", value=float(_D.hq_min_rr), min_value=0.2, step=0.1,
     help="R:R needed to qualify as a 🔥 HIGH QUALITY setup (these trigger Telegram alerts). "
@@ -1109,13 +1115,14 @@ def check_manual_contract(ticker: str, right: str, strike: float,
         out["error"] = f"Could not parse expiry {expiry!r} (use YYYY-MM-DD)"
         return out
 
-    # BUG FIX: this referenced a MAX_DTE that does not exist in this app. The
-    # scanner enforces a LOWER bound only (MIN_DTE) and then looks at the
-    # nearest _OPT_MAX_EXPIRIES expiries past it — there is no upper DTE rule
-    # to mirror. Inventing one here would make the checker stricter than the
-    # thing it is supposed to be checking against, which defeats the purpose.
+    # Both bounds are the measured structure's (21-45 DTE, risk_params,
+    # BACKLOG 32): the scanner's chain window and the journal's refusal read
+    # the same dict, so the checker mirrors a rule that exists. (An earlier
+    # note here said the scanner had a lower bound only; it has both.)
     add("DTE at or above minimum", dte >= MIN_DTE,
         f"{dte} DTE (minimum {MIN_DTE})")
+    add("DTE at or below maximum", dte <= MAX_DTE,
+        f"{dte} DTE (maximum {MAX_DTE}; a signal trade above it is refused by the journal)")
 
     # Informational: the scanner would never surface a contract this far out,
     # since it only looks at the nearest few expiries. Not a rule violation —
@@ -1300,7 +1307,8 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
     # irrelevant to whether the SIGNAL fired.
     r["option"] = (get_option_data(ticker, r["price"], r["trend"],
                                    r["strength"], MIN_DTE, ATR_TGT_MULT,
-                                   BUDGET_MAX, is_market_open, atr=r["atr"])
+                                   BUDGET_MAX, is_market_open, atr=r["atr"],
+                                   max_dte=MAX_DTE)
                    if fetch_options else
                    {"error": "Not fetched during scan — open the Stock "
                              "Analysis tab for options."})
@@ -1334,7 +1342,7 @@ def get_settings_key() -> str:
         f"_astop{ATR_STOP_MULT}_atgt{ATR_TGT_MULT}"
         f"_earn{EARNINGS_DAYS}_post{POST_EARNINGS_DAYS}"
         f"_wk{int(WEEKLY_CONFIRM)}_spy{int(SPY_REGIME)}"
-        f"_dte{MIN_DTE}_bud{BUDGET_MAX}_rows{MIN_ROWS}"
+        f"_dte{MIN_DTE}_mdte{MAX_DTE}_bud{BUDGET_MAX}_rows{MIN_ROWS}"
     )
 
 

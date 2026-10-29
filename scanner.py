@@ -533,7 +533,7 @@ def fetch_atm_chain(ticker: str, today=None, min_dte: int | None = None) -> dict
                 if dte >= min_dte:
                     pick = (exp, dte); break
                 continue
-            if OPT_MIN_DTE <= dte <= OPT_MAX_DTE:
+            if option_chain.in_dte_window(dte, OPT_MIN_DTE, OPT_MAX_DTE):
                 pick = (exp, dte); break
         if pick is None:
             return None
@@ -672,7 +672,7 @@ def fetch_chain_data(ticker: str) -> dict | None:
             dte = (pd.Timestamp(exp) - today).days
         except Exception:
             continue
-        if not (OPT_MIN_DTE <= dte <= OPT_MAX_DTE):
+        if not option_chain.in_dte_window(dte, OPT_MIN_DTE, OPT_MAX_DTE):
             continue
         checked += 1
         chain = None
