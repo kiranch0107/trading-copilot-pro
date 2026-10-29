@@ -87,6 +87,8 @@ carries. **Proposed fix:** suppress when an alert row with this key is
 already delivered (read from the forward log, the same chain that writes
 it), keep the 4-hour stamp only as the Telegram-outage backstop. An
 intake change, not a rule change; no amendment.
+**Built the same evening** (owner: "go with L1 as well, cooldown by
+signal key"): `scanner.alerted_on_bar()`, both loops, check 62.
 
 ### L2. A fill a few cents above the stop grades on a near-zero risk (owner decision)
 
@@ -155,9 +157,12 @@ the clamp (none has target = entry + 0.02); the effect is a silent
 block on very low-volatility names, not a false signal. Left as is; a
 fix would be a rule change on a path the pre-registration freezes.
 
-### L6. The 16:20 dispatch after an on-time 16:10 schedule
+### L6. The 16:20 dispatch after an on-time 16:10 schedule: skipped, as built
 
-Filled in below from the run that followed this review's probes.
+Run #699 (dispatch 20:20:08Z, head 4e4da3b): the record step ran one
+second (20:20:29–20:20:30) against 87 seconds for the 16:09 schedule's
+pass, fetched nothing and committed nothing ("No state change to
+commit"). PR #169's stamp did its job on its first day.
 
 ## Pending items after this review
 

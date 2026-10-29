@@ -2364,6 +2364,11 @@ pass); excluded from H1 by construction. **L5** the resistance cap can
 block very low-volatility longs; left as is. **L6** the 16:20 dispatch
 after the on-time 16:10 schedule: see the file. No engine, rule or
 threshold changed.
+**L1 DONE 2026-10-29 (owner: "go with L1 as well, cooldown by signal
+key"):** `scanner.alerted_on_bar(key)` reads the record's delivered alert
+rows; both alerting loops ask it after the stamp check and before the
+send; a failed delivery re-sends; a missing key never suppresses.
+`check_alert_once_per_bar` (62). Selftest, falsified.
 
 ---
 
@@ -2425,8 +2430,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 61 cross-module
-  invariants (61 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 62 cross-module
+  invariants (62 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on

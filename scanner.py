@@ -380,6 +380,28 @@ def is_total_outage(failed: list, watchlist: list) -> bool:
     return bool(watchlist) and len(failed) == len(watchlist)
 
 
+def alerted_on_bar(signal_key: str | None) -> bool:
+    """
+    Whether the record already holds a DELIVERED alert for this signal key
+    (logic review 2026-10-29, L1; owner: "cooldown by signal key"). The
+    4-hour stamp equals the spacing of the 11:07 and 15:07 dispatches and
+    held on 10-29 by 7 and 8 seconds; a dispatch a few seconds later would
+    have sent the same bar's alert twice. The signal's identity is its key
+    (ticker|trend|bar_date), which the alert row carries, so the same bar is
+    never alerted twice whatever the clock says. A failed delivery has no
+    delivered row and is re-sent, as before; the stamp stays as the
+    Telegram-outage backstop. A missing key (no bar date) never suppresses.
+    """
+    if not signal_key:
+        return False
+    try:
+        return any(a.get("key") == signal_key and a.get("delivered")
+                   for a in forward_log.alerts_sent())
+    except Exception as exc:                               # noqa: BLE001
+        logger.warning("alert rows unreadable (%s) — the cooldown stamp alone applies", exc)
+        return False
+
+
 def recently_alerted(state: dict, ticker: str, trend: str) -> bool:
     """
     Cooldown is keyed on ticker AND direction, so a genuine flip from Bullish
@@ -1390,6 +1412,11 @@ def run(args) -> int:
                             tk, r["trend"], ALERT_COOLDOWN_HRS)
                 skipped += 1
                 continue
+            if alerted_on_bar(r.get("signal_key")):
+                logger.info("%s %s qualifies but bar %s was already alerted (delivered "
+                            "alert row) — suppressed.", tk, r["trend"], r.get("bar_date"))
+                skipped += 1
+                continue
 
             msg = compose_alert(r, tk)
             logger.info("ALERT %s %s rr=%s", tk, r["trend"], r["rr"])
@@ -1498,6 +1525,11 @@ def run(args) -> int:
             if recently_alerted(state, tk, r["trend"]):
                 logger.info("pool: %s %s qualifies but alerted within %dh — "
                             "suppressed.", tk, r["trend"], ALERT_COOLDOWN_HRS)
+                skipped += 1
+                continue
+            if alerted_on_bar(r.get("signal_key")):
+                logger.info("pool: %s %s qualifies but bar %s was already alerted "
+                            "(delivered alert row) — suppressed.", tk, r["trend"], r.get("bar_date"))
                 skipped += 1
                 continue
             _hdr = (f"🚨 POOL ALERT (wide universe, HQ tier, RS {r['rs']:+.1f})"
@@ -2218,6 +2250,54 @@ def _selftest_body() -> int:
         assert _scans[0]["bar_date"] == str(_bars[-1].date()), _scans[0]
         print(f"run() heartbeat         : one scan row, bar {_scans[0]['bar_date']}, "
               f"2 tickers, 0 signals (written on a dry run too)")
+
+        # ── ONE ALERT PER SIGNAL BAR (logic review 2026-10-29, L1) ──
+        # The 4-hour stamp is cleared between runs here, as a late dispatch
+        # would clear it in effect; the delivered alert row still suppresses
+        # the same bar, a failed delivery does not, and a new bar alerts.
+        _tmpl.write_text("")
+        _sentk: list = []
+        _bark = str(_bars[-1].date())
+        def _hq(df, tk, spy_regime=None, tally=None, bucket="live"):
+            return {"ticker": tk, "trend": "Bullish", "strength": "Normal", "price": 100.0,
+                    "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0, "rsi": 61.0,
+                    "adx": 35.0, "atr": 2.0, "filters_pass": 4, "filters_total": 4,
+                    "bar_date": _bark, "signal_key": forward_log.signal_key(tk, "Bullish", _bark)}
+        _savedk = {k: _g[k] for k in ("get_data", "compute", "analyze", "get_spy_regime",
+                                      "save_state", "load_state", "WATCHLIST", "FETCH_GAP_SEC",
+                                      "pool_tickers", "suggest_option", "send_alert")}
+        try:
+            _g["pool_tickers"] = lambda wl: []
+            _g["get_data"] = lambda tk: _fr
+            _g["compute"] = lambda df: df
+            _g["analyze"] = _hq
+            _g["get_spy_regime"] = lambda: None
+            _g["save_state"] = lambda st: None
+            _g["suggest_option"] = lambda *a, **k: None
+            _g["WATCHLIST"] = ["AAA"]
+            _g["FETCH_GAP_SEC"] = 0
+            _g["send_alert"] = lambda m, dry_run=False: (_sentk.append(m) or True)
+            _g["load_state"] = lambda: {}                    # no stamp, every run
+            run(_ap2.Namespace(force=True, dry_run=False))
+            assert len(_sentk) == 1, "first run sends"
+            run(_ap2.Namespace(force=True, dry_run=False))
+            assert len(_sentk) == 1, "the same bar is not alerted twice once a delivered row exists"
+            assert alerted_on_bar(forward_log.signal_key("AAA", "Bullish", _bark)) and \
+                not alerted_on_bar(forward_log.signal_key("AAA", "Bullish", "2026-01-02")) and \
+                not alerted_on_bar(None), "the key, the whole key"
+            # A FAILED delivery leaves no delivered row: the next run re-sends.
+            _tmpl.write_text("")
+            _g["send_alert"] = lambda m, dry_run=False: False
+            run(_ap2.Namespace(force=True, dry_run=False))
+            assert len([r for r in forward_log.read_all(_tmpl) if r["kind"] == "alert" and not r["delivered"]]) == 1
+            _g["send_alert"] = lambda m, dry_run=False: (_sentk.append(m) or True)
+            run(_ap2.Namespace(force=True, dry_run=False))
+            assert len(_sentk) == 2, "a failed delivery does not suppress the re-send"
+            assert len([r for r in forward_log.read_all(_tmpl) if r["kind"] == "alert"]) == 2
+            print("one alert per signal bar : a delivered alert row suppresses the same key with no "
+                  "stamp; a failed delivery re-sends; another bar or no key never suppresses")
+        finally:
+            _g.update(_savedk)
     finally:
         forward_log.LOG = _real_log2
         globals()["send_alert"] = _real_send2
