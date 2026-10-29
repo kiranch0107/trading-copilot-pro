@@ -2288,10 +2288,10 @@ FAIL unchanged, −0.112 R on 579 trades; the raw output
 (13 cached / 0 fetched) and 92 of 579 trades gapped through a level (61
 stops filled at the open), the mechanism behind the move from run 2.
 
-**Still pending, in blocking order (items 38, 39):** the owner's decision on
-item 39 (move the post-close pass later, or measure bar revisions first;
-recommended: measure); the 16:20 ET post-close log of 10-29 for the first
-`spread arms:` cycles; the NOW trade's premium if it was a typo; the
+**Still pending, in blocking order (items 38, 39):** a week of `revision`
+rows (from 2026-10-30), then the post-close slot decision on their size
+(item 39); the 16:20 ET post-close log of 10-29 for the first `spread
+arms:` cycles; the NOW trade's premium if it was a typo; the
 11-09/11-10 post-close logs (first IV premium rows, F5); token
 rotation by 2026-12-16; the forward clocks (spread arm at 6 graded cycles
 per arm, RS basket at 26 weeks, the pool gate at 349 settled episodes,
@@ -2354,7 +2354,19 @@ honest, but the post-close row is of a bar that was still moving.
 leave it and have the morning scan write a `bar_revised` note when the
 settled bar it reads differs from the recorded row's price/ATR, so the
 difference is measured before the slot is moved. (b) is code and
-measures the size of the problem first; recommended.
+measures the size of the problem first; recommended. **(b) BUILT
+2026-10-29 (owner: "go with the bar revision note as well").**
+`forward_log.record_revision()` writes one `revision` row per key when a
+scan's read of a bar the record already holds differs in price, entry,
+stop, target, R:R, RSI, ADX, ATR or strength, or in the decision or the
+HQ tag: the fields that moved as [recorded, now], the decision and tag
+before and after, the recorded row's seq and time. `scanner.analyze()`
+compares before its (deduped) `record_signal()`; the recorded row stands.
+`summary()` counts revisions, the largest price move and how many moved
+the tag or decision; `report()` prints the count. A revision is never
+taken, open or an episode. One check (60). The first morning scan under it
+is 2026-10-30 11:07 ET; read `report()`'s "bar revisions" after a week
+and decide the slot on the measured size.
 
 **Fixed 2026-10-29 (owner: "go ahead and fix per your recommendation").**
 The first NOW trade was logged with signal bar 2026-10-29 (the alert's
@@ -2372,8 +2384,8 @@ it is a typo the P&L is wrong from the start.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 59 cross-module
-  invariants (59 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 60 cross-module
+  invariants (60 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on

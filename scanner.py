@@ -906,6 +906,17 @@ def analyze(df: pd.DataFrame, ticker: str,
             # per day — in a chain that is append-only and cannot be corrected.
             # record_signal() dedupes on it and returns None for a repeat.
             _bar = sc._bar_dates(df, None).max().date()
+            # THE BAR REVISION NOTE (BACKLOG 39): this bar was recorded by an
+            # earlier pass (the post-close one, ten minutes after the close).
+            # If this read of the SAME settled bar differs, one `revision` row
+            # says which fields moved; the recorded row stands (append-only).
+            _prev = forward_log.find_signal(ticker, r["trend"], _bar)
+            if _prev is not None:
+                _rev = forward_log.record_revision(_prev, _setup, decision, _hq)
+                if _rev is not None:
+                    logger.info("%s — bar %s read differently from its recorded row (seq %s): "
+                                "fields %s, decision %s, hq %s", ticker, _bar, _prev.get("seq"),
+                                _rev["fields"], _rev["decision"], _rev["hq"])
             _row = forward_log.record_signal(ticker, r["trend"], _setup, decision,
                                              reason, _cfg, bar_date=_bar,
                                              hq=_hq, bucket=bucket)
@@ -1827,6 +1838,24 @@ def _selftest_body() -> int:
             f"tally {_tally}: analyze() must count a skipped signal AND a "
             f"taken one, and not a blocked bar — n_signals on the scan row "
             f"is 'what the rules produced', not 'what was alert-worthy'")
+        # THE BAR REVISION NOTE (BACKLOG 39): ZU's bar is on the chain from
+        # the read above; the same read again writes nothing, a read whose
+        # price and R:R moved writes ONE revision row naming them, and the
+        # recorded signal row is unchanged.
+        sc.evaluate = lambda *a, **k: _canned("Bullish")
+        analyze(_frame, "ZU")
+        _rv_rows = lambda: [x for x in forward_log.read_all() if x.get("kind") == "revision"]   # noqa: E731
+        assert not _rv_rows(), "an identical re-read must not write a revision"
+        sc.evaluate = lambda *a, **k: dict(_canned("Bullish"), price=100.4, rr=2.9)
+        analyze(_frame, "ZU")
+        _rvs = _rv_rows()
+        assert len(_rvs) == 1 and _rvs[0]["ticker"] == "ZU" and _rvs[0]["fields"] == {"price": [100.0, 100.4], "rr": [3.0, 2.9]} \
+            and _rvs[0]["hq"] == [True, True], _rvs
+        analyze(_frame, "ZU")
+        assert len(_rv_rows()) == 1, "one revision per key"
+        _zu = [x for x in forward_log.read_all() if x.get("kind") == "signal" and x["ticker"] == "ZU"]
+        assert len(_zu) == 1 and _zu[0]["setup"]["price"] == 100.0, "the recorded row stands; the record is append-only"
+        print("bar revision note       : a later read that differs writes one revision row; identical reads none")
     finally:
         sc.evaluate = _real_eval
         globals()["get_weekly_trend"] = _real_wk

@@ -458,6 +458,62 @@ def alerts_sent(path: Path | None = None) -> list[dict]:
     return [r for r in read_all(path) if r.get("kind") == "alert"]
 
 
+# ── BAR REVISIONS (BACKLOG 39, owner 2026-10-29: "go with the bar revision
+# note"). The post-close pass records a bar ten minutes after the close;
+# the next morning's scan reads the SAME settled bar again and, on
+# 2026-10-28, read NOW's R:R as 1.14 where the recorded row said 1.18 and
+# found an ACN signal where the recorded pass found none: Yahoo revises a
+# daily bar for some time after 16:00. The record keeps the first row
+# (append-only, deduped on the key); this row kind MEASURES the revision so
+# the size of the problem is known before the post-close slot is moved.
+# One `revision` row per key, written by the scanner when a later read of
+# a recorded bar differs in any of these fields, the decision or the tag.
+REVISION_FIELDS = ("price", "entry", "stop", "target", "rr", "rsi", "adx", "atr", "strength")
+
+
+def find_signal(ticker: str, trend: str, bar_date, path: Path | None = None) -> dict | None:
+    """The recorded signal row for this exact bar, or None."""
+    key = signal_key(ticker, trend, bar_date)
+    for r in read_all(path):
+        if r.get("kind") == "signal" and r.get("key") == key:
+            return r
+    return None
+
+
+def record_revision(recorded: dict, setup_now: dict, decision_now: str,
+                    hq_now, path: Path | None = None) -> dict | None:
+    """
+    One `revision` row when a later read of a recorded signal bar differs
+    from the row: the fields that moved as {field: [recorded, now]}, the
+    decision and the HQ tag before and after. None when nothing differs or
+    a revision for this key is already on the chain (the first later read
+    is the measurement; three in-session scans re-read the same bar).
+    """
+    key = recorded.get("key")
+    if any(r.get("kind") == "revision" and r.get("key") == key for r in read_all(path)):
+        return None
+    old = recorded.get("setup") or {}
+    fields = {}
+    for f in REVISION_FIELDS:
+        a, b = old.get(f), (setup_now or {}).get(f)
+        try:
+            same = abs(float(a) - float(b)) < 1e-9
+        except (TypeError, ValueError):
+            same = (a == b)
+        if not same:
+            fields[f] = [a, b]
+    dec = [recorded.get("decision"), decision_now]
+    hq = [recorded.get("hq"), (None if hq_now is None else bool(hq_now))]
+    if not fields and dec[0] == dec[1] and hq[0] == hq[1]:
+        return None
+    return append("revision", {
+        "ref_seq": recorded.get("seq"), "key": key, "ticker": recorded.get("ticker"),
+        "trend": recorded.get("trend"), "bar_date": recorded.get("bar_date"),
+        "bucket": recorded.get("bucket"), "recorded_ts": recorded.get("ts"),
+        "fields": fields, "decision": dec, "hq": hq,
+    }, path=path)
+
+
 def last_scan(path: Path | None = None, bucket: str = "live") -> dict | None:
     """The most recent scan row OF THIS BUCKET, or None if the log has never
     recorded one. The coverage alarm reads the live bucket: a pool scan is
@@ -1194,6 +1250,7 @@ def summary(path: Path | None = None) -> dict:
     outs = [r for r in rows if r.get("kind") == "outcome"]
     scans = [r for r in rows if r.get("kind") == "scan"]
     alerts = [r for r in rows if r.get("kind") == "alert"]
+    revisions = [r for r in rows if r.get("kind") == "revision"]
     taken = [s for s in sigs if counts_as_taken(s)]
     skipped = [s for s in sigs if not counts_as_taken(s)]
     # THE HEADLINE READING IS THE POOL BUCKET'S (HEADLINE_BUCKET, amendment
@@ -1300,6 +1357,14 @@ def summary(path: Path | None = None) -> dict:
         "skipped": len(skipped), "outcomes": len(outs),
         "by_basis": by_basis, "by_bucket": by_bucket,
         "alerts": len(alerts), "alerts_delivered": sum(1 for a in alerts if a.get("delivered")),
+        # BACKLOG 39: how often the next morning's read of a recorded bar
+        # differed from the row, and by how much on price.
+        "revisions": len(revisions),
+        "revisions_price_max_pct": max((abs(float(r["fields"]["price"][1]) / float(r["fields"]["price"][0]) - 1.0) * 100.0
+                                        for r in revisions if r.get("fields", {}).get("price")
+                                        and r["fields"]["price"][0]), default=0.0),
+        "revisions_tag_moved": sum(1 for r in revisions if r.get("hq", [None, None])[0] != r.get("hq", [None, None])[1]
+                                   or r.get("decision", [None, None])[0] != r.get("decision", [None, None])[1]),
         "configs": configs,
         "skip_reasons": {r: sum(1 for s in skipped if s.get("reason") == r)
                          for r in sorted({s.get("reason") for s in skipped})},
@@ -1319,6 +1384,7 @@ def report(path: Path | None = None) -> int:
         return 0
     print(f"  {s['rows']} rows: {s['signals']} signals, {s['controls']} controls, "
           f"{s['outcomes']} outcomes, {s['scans']} scans, {s['alerts']} alerts "
+          f"[{s['revisions']} bar revisions] "
           f"({s['alerts_delivered']} delivered)")
     print(f"  taken {s['taken']} ({s['headline_bucket']} bucket, the population: "
           f"{s['taken_headline']}: hq {s['taken_hq']}, base {s['taken_base']}; "
@@ -1932,6 +1998,32 @@ def selftest() -> int:
           "the signal's fetch, never taken or an episode; summary pairs by episode")
 
     # ── ALERT ROWS: what was sent, whether it arrived; never a signal, scan or outcome ──
+    # ── BAR REVISIONS (BACKLOG 39): a later read of a recorded bar that
+    # differs is one row per key, naming the fields that moved; an identical
+    # read writes nothing; a revision row is never taken, open or an episode.
+    rv = Path(tempfile.mkdtemp()) / "rv.jsonl"
+    _st0 = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 106.0, "rr": 3.0,
+            "rsi": 65.0, "adx": 40.0, "atr": 2.0, "strength": "Normal"}
+    _rs = record_signal("RV", "Bullish", _st0, "taken", "", cfg, bar_date="2026-10-28",
+                        path=rv, hq=False, bucket="pool")
+    assert find_signal("RV", "Bullish", "2026-10-28", path=rv)["seq"] == _rs["seq"]
+    assert find_signal("RV", "Bullish", "2026-10-29", path=rv) is None
+    assert record_revision(_rs, dict(_st0), "taken", False, path=rv) is None, "an identical read writes nothing"
+    _r1 = record_revision(_rs, dict(_st0, price=100.4, rr=2.9), "taken", True, path=rv)
+    assert _r1 and _r1["kind"] == "revision" and _r1["ref_seq"] == _rs["seq"] and _r1["key"] == _rs["key"] \
+        and _r1["fields"] == {"price": [100.0, 100.4], "rr": [3.0, 2.9]} and _r1["hq"] == [False, True] \
+        and _r1["decision"] == ["taken", "taken"], _r1
+    assert record_revision(_rs, dict(_st0, price=100.5), "taken", True, path=rv) is None, "one revision per key"
+    assert not counts_as_taken(_r1) and all(r["kind"] == "signal" for r in open_signals(rv))
+    _sv = summary(rv)
+    assert _sv["revisions"] == 1 and abs(_sv["revisions_price_max_pct"] - 0.4) < 1e-9 and _sv["revisions_tag_moved"] == 1, _sv
+    assert _sv["by_episode"]["pool"]["episodes"] == 1 and _sv["taken"] == 1, "a revision is not a signal"
+    _bufr = _io.StringIO()
+    with _ctx.redirect_stdout(_bufr):
+        report(rv)
+    assert "1 bar revisions" in _bufr.getvalue(), _bufr.getvalue()
+    print("bar revisions    : one row per key naming the fields that moved; identical reads write nothing; never a signal")
+
     al = Path(tempfile.mkdtemp()) / "al.jsonl"
     a1 = record_alert("NVDA", "Bullish", "2026-10-13", "pool", True, "POOL", path=al)
     a2 = record_alert("NVDA", "Bullish", "2026-10-13", "pool", False, "POOL", path=al)
