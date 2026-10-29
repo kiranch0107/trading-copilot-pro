@@ -2362,7 +2362,8 @@ cycles per arm (first settlement 11-30). **L4** the NOW alert's recorded
 row is hq = False under a pre-F hash (old code at the 10-28 post-close
 pass); excluded from H1 by construction. **L5** the resistance cap can
 block very low-volatility longs; left as is. **L6** the 16:20 dispatch
-after the on-time 16:10 schedule: see the file. No engine, rule or
+after the on-time 16:10 schedule was skipped on the stamp (one second,
+nothing committed): PR #169 worked on its first day. No engine, rule or
 threshold changed.
 **L1 DONE 2026-10-29 (owner: "go with L1 as well, cooldown by signal
 key"):** `scanner.alerted_on_bar(key)` reads the record's delivered alert
