@@ -426,7 +426,7 @@ def report(per_ticker, agg, stats, run_number, hash_changed, prov=None):
     print("OUT-OF-SAMPLE VALIDATION — TRADING COPILOT ELITE")
     print("=" * W)
     print(f"Config hash   : {config_hash()}")
-    print(f"Run number    : {run_number}")
+    print(f"Run number    : {run_number}  (ledger entries; the committed readings are numbered by file)")
     print(f"Held-out      : {', '.join(FROZEN['tickers'])}")
     print(f"Params        : ADX>={FROZEN['adx_min']}  stop {FROZEN['atr_stop']}x  "
           f"tgt {FROZEN['atr_tgt']}x  hold {FROZEN['max_hold']}  "

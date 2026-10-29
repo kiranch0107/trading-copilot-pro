@@ -14,7 +14,7 @@ not a strategy's, so this measures the engines, never a signal.
 
 Run on the laptop (reads the cache only; fetches nothing):
 
-    python engine_differential.py | tee results/engine_differential_run1.txt
+    python engine_differential.py | tee results/engine_differential_run<N>.txt   # run 2 is the current reading
     python engine_differential.py --selftest        # offline, synthetic frames
 """
 from __future__ import annotations

@@ -1433,8 +1433,10 @@ def report(path: Path | None = None) -> int:
     print(f"  taken {s['taken']} ({s['headline_bucket']} bucket, the population: "
           f"{s['taken_headline']}: hq {s['taken_hq']}, base {s['taken_base']}; "
           f"live alerting view {s['taken_live']})   skipped {s['skipped']}")
-    def _fmt(x):
-        return "no HQ rows" if x != x else f"{x:+.3f}"
+    def _fmt(x, empty="none settled"):
+        # A NaN here is a mean over nothing settled yet (review 2026-10-29
+        # G3: it used to read "no HQ rows" while HQ rows existed unsettled).
+        return empty if x != x else f"{x:+.3f}"
     for b, bb in s["by_bucket"].items():
         print(f"  bucket {b:<5}: taken {bb['taken']} (hq {bb['taken_hq']})   "
               f"settled {bb['settled']} on stop distance   "
@@ -1456,7 +1458,7 @@ def report(path: Path | None = None) -> int:
             bc = s["by_control"].get(b)
             if bc and bc["controls"]:
                 print(f"  {'':12}  A: signal - control (amendment 2026-10-28 A): pairs {bc['pairs']}, "
-                      f"delta {_fmt(bc['mean_delta'])} R +/- {_fmt(bc['se_delta']).lstrip('+')} "
+                      f"delta {_fmt(bc['mean_delta'], 'no pairs')} R +/- {_fmt(bc['se_delta'], 'n/a').lstrip('+')} "
                       f"(signal {_fmt(bc['mean_signal'])} / control {_fmt(bc['mean_control'])}); "
                       f"controls recorded {bc['controls']}, settled {bc['settled']}")
     print(f"  by basis — the {s['headline_bucket'].upper()} bucket, the pre-registered population "
@@ -1895,7 +1897,8 @@ def selftest() -> int:
     with _ctx.redirect_stdout(_buf):
         report(_ep)
     assert "EPISODES 2 (4 rows)" in _buf.getvalue(), _buf.getvalue()
-    assert "no HQ rows" in _buf.getvalue() and "nan" not in _buf.getvalue(), _buf.getvalue()
+    assert "none settled" in _buf.getvalue() and "nan" not in _buf.getvalue() \
+        and "no HQ rows" not in _buf.getvalue(), _buf.getvalue()
     assert "EPISODES of the\n  POOL bucket" in _buf.getvalue() and \
         "the pool bucket has 2 settled episode(s)" in _buf.getvalue(), _buf.getvalue()
     assert "live bucket is the alerting view and never gates" in _buf.getvalue(), _buf.getvalue()

@@ -2290,8 +2290,7 @@ stops filled at the open), the mechanism behind the move from run 2.
 
 **Still pending, in blocking order (items 39, 40, 41):** the 10-30 11:07
 scan (first `revision` rows, the key-based suppression against the seven
-delivered alerts, whether CME alerts); G3/G4 (wording, cosmetic) with a
-"go"; a week of revision
+delivered alerts, whether CME alerts); a week of revision
 rows, then the post-close slot decision (item 39, ~11-06); the 11-09/11-10
 post-close logs (first IV premium rows); the first spread settlements
 11-30 and the skew read at 6 graded cycles per arm (~April 2027); token
@@ -2376,6 +2375,10 @@ carries each arm's open cycle's entry ratio (market mid / model) and
 `report()` prints them as counts on one line labelled NOT A READING; the
 reading stays at 6 graded cycles per arm. Pinned in
 `check_post_close_pass_hygiene`. Selftest, falsified.
+**G3 and G4 DONE 2026-10-29 (owner: "go with G3 and G4 as well"):** the
+report prints "none settled" (and "no pairs" / "n/a" for the control
+delta and its SE) where it printed "no HQ rows"; the differential's
+usage line and the OOS run-number line say what they count.
 
 ---
 
