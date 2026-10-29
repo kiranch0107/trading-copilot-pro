@@ -382,7 +382,16 @@ def summary(path: Path | None = None) -> dict:
             "market_max_dd_pct": _max_dd_pct(market) if market else float("nan"),
         }
     pm, pse = _mean_se(all_ratios)
+    # QUOTE QUALITY (review 2026-10-28 F4): the after-close bid/ask is the one
+    # unknown the pre-registration names. Which legs could not be quoted, and
+    # why, per reason, over every cycle recorded.
+    unquoted: dict = {}
+    for c in cycles:
+        if not c.get("market"):
+            why = str(c.get("market_reason") or "no quotes")
+            unquoted[why] = unquoted.get(why, 0) + 1
     return {"arms": arms, "cycles": len(cycles), "graded": sum(a["graded"] for a in arms.values()),
+            "unquoted": unquoted, "unquoted_cycles": sum(unquoted.values()),
             "ratio_pooled_mean": pm, "ratio_pooled_se": pse, "ratio_pooled_n": len(all_ratios),
             "first": cycles[0]["entry"] if cycles else None,
             "last": cycles[-1]["entry"] if cycles else None,
@@ -409,6 +418,11 @@ def report(path: Path | None = None) -> int:
     pse = "n/a" if s["ratio_pooled_se"] != s["ratio_pooled_se"] else f"{s['ratio_pooled_se']:.3f}"
     print(f"  credit ratio, market mid / model, pooled: {f(s['ratio_pooled_mean'], 6)} +/- {pse} "
           f"on {s['ratio_pooled_n']} quoted cycles")
+    if s["unquoted_cycles"]:
+        _why = ", ".join(f"{k}: {v}" for k, v in sorted(s["unquoted"].items(), key=lambda kv: -kv[1]))
+        print(f"  unquoted cycles {s['unquoted_cycles']} of {s['cycles']} (after-close quotes; by reason): {_why}")
+    else:
+        print(f"  every cycle quoted ({s['cycles']} of {s['cycles']})")
     print(f"  NOT a result before {RESULT_CYCLES} graded cycles per arm (results/spread_preregistration.md);")
     print(f"  first reading at {FIRST_READ_CYCLES}, with its SE, whatever it says. The mean return is not")
     print("  a readable quantity on this record; the ratio and the path are.")
@@ -507,11 +521,13 @@ def selftest() -> int:
     assert abs(a["ratio_mean"] - 1.15 / 1.20) < 1e-4 and a["ratio_se"] != a["ratio_se"]
     assert abs(a["model_worst_pct"] - o1["pnl_model_pct"]) < 1e-6 and a["model_max_dd_pct"] > 5.0, a
     assert s["ratio_pooled_n"] == 1 and s["arms"]["SPY put_spread w5 otm5"]["ratio_n"] == 0
+    assert s["unquoted"] == {"PUT 375 unquoted": 1} and s["unquoted_cycles"] == 1, s["unquoted"]
     import io, contextlib
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         rc = report(tmp)
     assert rc == 0 and "NOT a result before 12" in buf.getvalue() and "chain intact" in buf.getvalue()
+    assert "unquoted cycles 1 of 4" in buf.getvalue() and "PUT 375 unquoted: 1" in buf.getvalue(), buf.getvalue()
     # tamper
     lines = tmp.read_text().splitlines()
     rec = json.loads(lines[0]); rec["spot"] = 1.0

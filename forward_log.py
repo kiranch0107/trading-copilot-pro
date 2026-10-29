@@ -405,7 +405,8 @@ def record_control(sig_row: dict, bars_before: list,
 
 
 def record_scan(bar_date, tickers: list, n_signals: int, cfg: dict,
-                path: Path | None = None, bucket: str = "live") -> dict:
+                path: Path | None = None, bucket: str = "live",
+                pass_kind: str | None = None) -> dict:
     """
     One row per EXECUTED scan: "this bar was evaluated, on these names, and
     this many signals fired." Never deduped — every real scan is a fact.
@@ -425,13 +426,20 @@ def record_scan(bar_date, tickers: list, n_signals: int, cfg: dict,
     """
     if bucket not in BUCKETS:
         raise ValueError(f"bucket must be one of {BUCKETS}, not {bucket!r}")
-    return append("scan", {
+    row = {
         "bar_date": str(bar_date)[:10],
         "tickers": sorted(str(t) for t in tickers),
         "n_signals": int(n_signals),
         "config": config_fingerprint(cfg),
         "bucket": bucket,
-    }, path=path)
+    }
+    # WHICH PASS wrote it (review 2026-10-28, improvement 4): the post-close
+    # record pass stamps its heartbeat "post_close" so a repeat dispatch the
+    # same day can see that the pass already ran. In-session scans carry no
+    # stamp; rows from before this field have none either.
+    if pass_kind:
+        row["pass"] = str(pass_kind)
+    return append("scan", row, path=path)
 
 
 def record_alert(ticker: str, trend: str, bar_date, bucket: str, delivered: bool,
@@ -1130,6 +1138,7 @@ def _mean_r(settled: list, sigs: list, hq: bool) -> float:
     return sum(rs) / len(rs) if rs else float("nan")
 
 
+GATE_EPISODES = 349       # the pre-registered stopping rule: settled episodes of the headline bucket
 HEADLINE_BUCKET = "pool"  # THE POPULATION THE PRE-REGISTERED QUESTION IS ASKED OF.
                           # Amendment 2026-10-28 (results/forward_record_
                           # preregistration.md, owner: "option 1, pool only"):
@@ -1423,7 +1432,7 @@ def report(path: Path | None = None) -> int:
               f"open {b['open']}   mean R {b['mean_r']:+.4f} "
               f"(hq {_fmt(b['mean_r_hq'])} / base {_fmt(b['mean_r_base'])})  [rows]")
     if any(b["settled"] for b in s["by_basis"].values()):
-        print(f"  NOT a result. It becomes one at 349 settled EPISODES of the")
+        print(f"  NOT a result. It becomes one at {GATE_EPISODES} settled EPISODES of the")
         print(f"  {s['headline_bucket'].upper()} bucket on one basis (results/forward_record_preregistration.md):")
         print(f"  the {s['headline_bucket']} bucket has {s['gate_settled_episodes']} settled episode(s). The two")
         print(f"  bases are different denominators and are never summed.")
