@@ -95,8 +95,11 @@ grader voids a row `gapped_before_fill` when the next open is at or
 beyond the stop or the target; the alert path never asked, and NOW's
 10-28 row was alerted at 11:07 and voided at 16:09. Before sending, both
 alerting loops now read the first bar after the signal bar in the raw
-frame (the partial bar `drop_partial_bar()` trims during the session; the
-settled next bar the morning after a post-close record) and withhold the
+frame (today's partial bar, the one `drop_partial_bar()` trims during the
+session — the signal bar is always the last settled one, so the bar after
+it is the session in progress, whichever pass recorded it; *corrected
+2026-10-30 late: an earlier draft of this note said "the settled next bar
+the morning after a post-close record", which no run ever sees*) and withhold the
 alert when its Open, or the latest Close, is beyond the stop or the
 target. **The row is unchanged**: the signal is still recorded `taken`,
 the grader still voids it, the control row is still written — the record

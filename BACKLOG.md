@@ -32,8 +32,8 @@ landed in the repo and the removal says so in the commit.
   09:30 ET, STOP −56 % at 14:00) and log it. ~~J1/J2 (the gap-at-the-fill
   alert gate, the blackout against the signal bar's date) before Monday
   11-02's first scan~~ (merged 2026-10-30; first binds at the 11-02 11:07
-  scan — read that log for a "NOT SENT" line and the straddle wording).
-  Retire when the position is logged.
+  scan — read that log for "withheld at the fill" on the Done line and
+  any "NOT SENT" row). Retire when the position is logged.
 - **2026-10-29 (items 39–42), the reads that are due.** ~~2026-10-30 11:07
   ET: the first `revision` rows, the key-based alert suppression against
   the seven delivered alerts of 10-29, whether CME alerts~~ (read 10-30,
@@ -2357,6 +2357,34 @@ heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
 
 ---
 
+## 44. Progress review 2026-10-30 (late): J1/J2 live, the 15:07 run, NOW at −72 % — ASSESSED 2026-10-30, TWO SMALL FIXES BUILT
+
+`results/progress_review_2026-10-30_late.md`. The 15:07 ET scan was the
+first live run of the J1/J2 code: no error; CME held by the 4-hour
+stamp by 3 seconds, so the key check and the fill gate were not
+reached. NOW: STOP, −72 % at 15:30, the exit monitor correctly not
+re-sending; the owner's to close. **K1 DONE:** the scanner's Done line
+counts "withheld at the fill" separately from the cooldown;
+`forward_log.summary()` has `alerts_withheld` and `report()` prints
+"(M delivered, W withheld at the fill)" — a NOT SENT row is not a
+delivery failure. **K2 DONE:** the fill probe's docstring, the
+amendment-G note and item 43 said the bar after the signal bar is "the
+settled next bar the morning after a post-close record"; no run sees
+that bar — it is today's partial bar whichever pass recorded the signal;
+corrected, the note keeps the correction visible. **K3** the live
+fill-probe path exercised offline on a Yahoo-shaped frame (tz-aware
+index, flattened MultiIndex, today's partial bar): session → the fill
+and the withhold; post-close → no check; Monday on a Friday bar → the
+Monday partial bar. **K4** the stamp held by 3 seconds; J3 unexercised.
+**K5** the 16:20 pass, the first post-close run of J2: clean (ACN, PFE
+recorded with controls; 55 graded, 4 void at the fill; the first basket
+reading −3.02 % vs SPY; 7 of 198 live+pool rows void at the fill, 3.5 %). **K6** the gate falls open with no bar after the signal bar (by
+design). **K7** the app's alert history reads a NOT SENT row correctly.
+Pending: close NOW; Monday 11-02 11:07 is the first scan where J1 can
+bind; ~11-06 slot decision; 11-09/10 IV; 11-30 spread; 12-16 PATs.
+
+---
+
 ## 43. Progress review 2026-10-30 (14:00 ET): the first day's reads; the NOW alert fired on a bar whose next open had gapped past the stop — ASSESSED 2026-10-30, TWO FIXES RECOMMENDED
 
 `results/progress_review_2026-10-30.md`. The 11:07 scan: CME alerted
@@ -2382,10 +2410,10 @@ and V alerted on consecutive bars by design.
 `scanner.gapped_at_fill()` mirrors the grader's gap rule (next open, or
 the latest print, at or beyond the stop or the target; short mirrored);
 `fill_probe()` reads the first bar after the signal bar in the raw frame
-(the partial bar the session drops; the settled next bar the morning
-after a post-close record; nothing on the post-close pass itself). Both
-alerting loops ask it after the key check: a gapped fill sends nothing,
-counts as skipped and records ONE undelivered alert row per key with
+(today's partial bar, the one the session drops, whichever pass recorded
+the signal bar; nothing on the post-close pass itself). Both alerting
+loops ask it after the key check: a gapped fill sends nothing, counts as
+withheld on the Done line and records ONE undelivered alert row per key with
 `header="NOT SENT: <reason>"` (`withheld_on_bar()`); the signal row,
 the grader and the control row are untouched. `market_context.
 earnings_blackout_from_dates(..., bar_date=)` blocks any release with

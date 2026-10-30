@@ -1400,6 +1400,9 @@ def summary(path: Path | None = None) -> dict:
         "skipped": len(skipped), "outcomes": len(outs),
         "by_basis": by_basis, "by_bucket": by_bucket,
         "alerts": len(alerts), "alerts_delivered": sum(1 for a in alerts if a.get("delivered")),
+        # Review 2026-10-30 (late): a NOT SENT row is a withheld alert (the
+        # fill gate, J1), not a delivery failure; the report says which.
+        "alerts_withheld": sum(1 for a in alerts if str(a.get("header", "")).startswith("NOT SENT")),
         # BACKLOG 39: how often the next morning's read of a recorded bar
         # differed from the row, and by how much on price.
         "revisions": len(revisions),
@@ -1429,7 +1432,7 @@ def report(path: Path | None = None) -> int:
     print(f"  {s['rows']} rows: {s['signals']} signals, {s['controls']} controls, "
           f"{s['outcomes']} outcomes, {s['scans']} scans, {s['alerts']} alerts "
           f"[{s['revisions']} bar revisions] [{s['void_risk_floor']} voided at the risk floor] "
-          f"({s['alerts_delivered']} delivered)")
+          f"({s['alerts_delivered']} delivered, {s['alerts_withheld']} withheld at the fill)")
     print(f"  taken {s['taken']} ({s['headline_bucket']} bucket, the population: "
           f"{s['taken_headline']}: hq {s['taken_hq']}, base {s['taken_base']}; "
           f"live alerting view {s['taken_live']})   skipped {s['skipped']}")
@@ -2116,6 +2119,15 @@ def selftest() -> int:
     assert [a["seq"] for a in alerts_sent(al)] == [1, 2] and verify(al) == []
     _sa = summary(al)
     assert (_sa["alerts"], _sa["alerts_delivered"], _sa["signals"], _sa["taken"]) == (2, 1, 0, 0), _sa
+    record_alert("NVDA", "Bullish", "2026-10-14", "pool", False, "NOT SENT: fill (next open) 1.00 is beyond the stop", path=al)
+    record_alert("AMD", "Bullish", "2026-10-14", "live", False, "NOT SENT: last price 9.00 is beyond the target", path=al)
+    _sa = summary(al)
+    assert (_sa["alerts"], _sa["alerts_delivered"], _sa["alerts_withheld"]) == (4, 1, 2), \
+        "a NOT SENT row is withheld, not a failed delivery"
+    _bufa = _io.StringIO()
+    with _ctx.redirect_stdout(_bufa):
+        report(al)
+    assert "1 delivered, 2 withheld at the fill" in _bufa.getvalue(), _bufa.getvalue()
     assert grade_open_signals(lambda tk: None, path=al)["graded"] == 0, "alert rows are never graded"
     try:
         record_alert("X", "Bullish", "2026-10-13", "other", True, path=al)

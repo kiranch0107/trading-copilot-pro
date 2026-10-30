@@ -439,12 +439,13 @@ def gapped_at_fill(r: dict, open_px, last_px=None) -> str | None:
 def fill_probe(raw_df, cdf) -> tuple:
     """
     The first bar after the signal bar in the RAW frame (the one
-    drop_partial_bar() trimmed), as (open, last). That bar is today's
-    partial bar during the session and yesterday's settled bar the morning
-    after a post-close record; either way its Open is the fill the grader
-    will read and its Close is the latest print. (None, None) when the
-    frame ends on the signal bar (the post-close pass: nothing has traded
-    since, the fill is tomorrow's open and cannot be checked yet).
+    drop_partial_bar() trimmed), as (open, last). During the session that
+    is TODAY'S PARTIAL BAR, whatever pass recorded the signal bar (the
+    signal bar is always the last settled one, so the bar after it is the
+    session in progress): its Open is the fill the grader will read and
+    its Close is the latest print. (None, None) when the frame ends on the
+    signal bar (the post-close pass: nothing has traded since, the fill is
+    tomorrow's open and cannot be checked yet).
     """
     try:
         last_sig = sc._bar_dates(cdf, None).max()
@@ -1394,7 +1395,7 @@ def run(args) -> int:
     if _pruned:
         logger.info("state: pruned %d stamp(s) older than %d days",
                     _pruned, STATE_MAX_AGE_DAYS)
-    hits, skipped, failed = 0, 0, []
+    hits, skipped, withheld, failed = 0, 0, 0, []
 
     # ── ATTACH OUTCOMES TO SETTLED SIGNALS, BEFORE SCANNING ──
     #
@@ -1499,7 +1500,7 @@ def run(args) -> int:
                 logger.warning("%s %s bar %s NOT SENT: %s", tk, r["trend"], r.get("bar_date"), _gap)
                 if not withheld_on_bar(r.get("signal_key")):
                     _record_alert(tk, r, "live", False, "NOT SENT: " + _gap, args.dry_run)
-                skipped += 1
+                withheld += 1
                 continue
 
             msg = compose_alert(r, tk)
@@ -1622,7 +1623,7 @@ def run(args) -> int:
                 logger.warning("pool: %s %s bar %s NOT SENT: %s", tk, r["trend"], r.get("bar_date"), _gap)
                 if not withheld_on_bar(r.get("signal_key")):
                     _record_alert(tk, r, "pool", False, "NOT SENT: " + _gap, args.dry_run)
-                skipped += 1
+                withheld += 1
                 continue
             _hdr = (f"🚨 POOL ALERT (wide universe, HQ tier, RS {r['rs']:+.1f})"
                     if r["rs"] is not None else "🚨 POOL ALERT (wide universe, HQ tier)")
@@ -1847,8 +1848,8 @@ def run(args) -> int:
     if not args.dry_run:
         save_state(state)
 
-    logger.info("Done. %d alert(s) sent, %d suppressed by cooldown, "
-                "%d ticker(s) failed.", hits, skipped, len(failed))
+    logger.info("Done. %d alert(s) sent, %d suppressed by cooldown, %d withheld at the fill, "
+                "%d ticker(s) failed.", hits, skipped, withheld, len(failed))
     if failed:
         logger.warning("Failed tickers: %s", ", ".join(failed))
     return 0

@@ -3184,8 +3184,8 @@ def check_fill_gate_and_blackout_bar() -> None:
             f"the fill check must sit between the key check and the send ({loop.strip()})"
         gate = seg[seg.find(probe):]
         assert "if not withheld_on_bar(r.get(\"signal_key\")):" in gate and '"NOT SENT: " + _gap' in gate \
-            and "skipped += 1" in gate and "continue" in gate, \
-            f"a gapped fill records one NOT SENT row per key, counts as skipped and sends nothing ({loop.strip()})"
+            and "withheld += 1" in gate and "continue" in gate, \
+            f"a gapped fill records one NOT SENT row per key, counts as withheld and sends nothing ({loop.strip()})"
         assert "forward_log.record_signal" not in gate and "decision" not in gate, "the record is not touched by the alert gate"
     assert "fill check before alert" in sc_src, "the selftest proves it"
     # J2 — both callers pass the signal bar's date; the shared rule blocks the straddle.
