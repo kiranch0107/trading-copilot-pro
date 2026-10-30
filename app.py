@@ -1004,10 +1004,11 @@ def get_next_earnings(ticker: str) -> str | None:
         return None
 
 
-def check_earnings_blackout(ticker: str) -> tuple[bool, str]:
+def check_earnings_blackout(ticker: str, bar_date=None) -> tuple[bool, str]:
     """
     ROUTED THROUGH market_context — one implementation, as with the weekly
-    trend and the SPY regime.
+    trend and the SPY regime. `bar_date` is the signal bar's date: a release
+    between it and the fill is inside the blackout (review 2026-10-30 J2).
 
     THE DIVERGENCE THIS ENDS. This function read ONE earnings date, because
     get_next_earnings() returned a single value, while scanner.py's copy
@@ -1025,7 +1026,7 @@ def check_earnings_blackout(ticker: str) -> tuple[bool, str]:
     return market_context.get_earnings_blackout(
         ticker, _earnings_calendar,
         datetime.now(pytz.timezone("America/New_York")).date(),
-        blackout_days=EARNINGS_DAYS, post_days=POST_EARNINGS_DAYS)
+        blackout_days=EARNINGS_DAYS, post_days=POST_EARNINGS_DAYS, bar_date=bar_date)
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -1292,12 +1293,16 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
     """
     params = _signal_params()
     adx_ok, adx_val = check_adx(df)
+    try:                                               # the signal bar, for the blackout's straddle rule (J2)
+        _bar_for_earnings = signal_core._bar_dates(df, None).max().date()
+    except Exception:                                  # noqa: BLE001
+        _bar_for_earnings = None
 
     r = signal_core.evaluate(
         df, ticker, params,
         adx_value=adx_val,
         weekly_trend=get_weekly_trend(ticker) if WEEKLY_CONFIRM else None,
-        earnings=check_earnings_blackout(ticker),
+        earnings=check_earnings_blackout(ticker, bar_date=_bar_for_earnings),
         spy_regime=spy_regime,
     )
     if r["blocked"]:

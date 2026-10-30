@@ -324,7 +324,8 @@ def calendar_dates(cal) -> list:
 def earnings_blackout_from_dates(dates,
                                  today,
                                  blackout_days: int = EARNINGS_BLACKOUT_DAYS,
-                                 post_days: int = POST_EARNINGS_DAYS
+                                 post_days: int = POST_EARNINGS_DAYS,
+                                 bar_date=None,
                                  ) -> tuple[bool, str]:
     """
     (ok, detail). False when any earnings date falls inside the window
@@ -349,6 +350,20 @@ def earnings_blackout_from_dates(dates,
     """
     if not dates:
         return True, "No earnings date available — proceed with caution"
+    # THE STRADDLE (review 2026-10-30 J2). The window above is asked of
+    # TODAY; the tier needs it asked of the trade: the signal bar closes,
+    # the fill is the next open, and a release between the two is the
+    # worst case of "inside the blackout". NOW reported after the 10-28
+    # close; the 16:11 pass blocked it (release in 0 days), the 11:07 scan
+    # on 10-29 cleared it (release 1 day ago, post_days 1 ... no: the
+    # calendar's estimate had moved) and alerted a bar from before the
+    # release with the stock 27 % lower. With `bar_date` (the signal bar),
+    # any release on or after that bar and on or before today blocks.
+    if bar_date is not None:
+        for ed in dates:
+            if bar_date <= ed <= today:
+                return False, (f"Earnings {ed} falls between the signal bar {bar_date} "
+                               f"and the fill {today} — the trade would straddle the release")
     for ed in dates:
         delta = (ed - today).days
         if -post_days <= delta <= blackout_days:
@@ -411,7 +426,8 @@ def get_spy_regime(fetch, ticker: str = "SPY", now=None) -> dict:
 
 def get_earnings_blackout(ticker: str, fetch, today,
                           blackout_days: int = EARNINGS_BLACKOUT_DAYS,
-                          post_days: int = POST_EARNINGS_DAYS
+                          post_days: int = POST_EARNINGS_DAYS,
+                          bar_date=None,
                           ) -> tuple[bool, str]:
     """
     Earnings blackout with the calendar fetch injected.
@@ -429,7 +445,7 @@ def get_earnings_blackout(ticker: str, fetch, today,
     try:
         return earnings_blackout_from_dates(
             calendar_dates(fetch(ticker)), today,
-            blackout_days=blackout_days, post_days=post_days)
+            blackout_days=blackout_days, post_days=post_days, bar_date=bar_date)
     except Exception as e:
         logger.debug("Earnings check failed for %s (%s)", ticker, e)
         return True, f"Earnings check unavailable ({e}) — proceed with caution"
@@ -627,6 +643,21 @@ def selftest() -> int:
         "the fixture must actually depend on the second date, or it proves nothing"
     print("earnings, two estimates : blocks on the LATER date too "
           "(the app/scanner split)")
+    # THE STRADDLE (J2): a release between the signal bar and the fill
+    # blocks whatever the window around today says; one before the bar
+    # does not; NOW's case (bar 10-28, release 10-28 AMC, fill 10-29).
+    _ok, _why = earnings_blackout_from_dates([_dt.date(2026, 9, 14)], _t, bar_date=_dt.date(2026, 9, 14))
+    assert _ok is False and "straddle" in _why, (_ok, _why, "a release on the signal bar's date is straddled by the fill")
+    assert earnings_blackout_from_dates([_dt.date(2026, 9, 14)], _t)[0] is True, "without the bar date the window alone clears it"
+    assert earnings_blackout_from_dates([_dt.date(2026, 9, 13)], _t, bar_date=_dt.date(2026, 9, 14))[0] is True, \
+        "a release before the signal bar is not straddled"
+    assert earnings_blackout_from_dates([_dt.date(2026, 10, 28)], _dt.date(2026, 10, 29),
+                                        bar_date=_dt.date(2026, 10, 28))[0] is False, "NOW, 2026-10-29 11:07"
+    assert earnings_blackout_from_dates([_dt.date(2026, 9, 21)], _t, bar_date=_dt.date(2026, 9, 15))[0] is True, \
+        "a release after today is the window's business (5 days out: clear), not the straddle's"
+    assert get_earnings_blackout("X", lambda t: {"Earnings Date": [_dt.date(2026, 9, 14)]}, _t,
+                                 bar_date=_dt.date(2026, 9, 14))[0] is False, "the wrapper passes the bar date through"
+    print("earnings, the straddle  : a release between the signal bar and the fill blocks (J2)")
 
     # Fails OPEN, and says which kind of open it is.
     _ok, _why = earnings_blackout_from_dates([], _t)

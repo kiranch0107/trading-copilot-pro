@@ -402,6 +402,73 @@ def alerted_on_bar(signal_key: str | None) -> bool:
         return False
 
 
+def gapped_at_fill(r: dict, open_px, last_px=None) -> str | None:
+    """
+    THE FILL CHECK THE GRADER APPLIES, asked BEFORE the alert goes out
+    (review 2026-10-30, J1). The grader voids a row `gapped_before_fill`
+    when the next open is at or beyond the stop or the target, and the
+    alert path never asked: on 2026-10-29 the 11:07 scan alerted NOW's
+    10-28 bar with the stock open 27 % below the recorded stop after the
+    release, and the 16:09 pass voided the same row. The alert said "buy
+    at 149.85, stop 142.34" of a stock trading at 109. Mirrors the
+    grader's rule on the first bar after the signal bar (`open_px`, the
+    fill) and, when the run has one, the latest price (`last_px`): a stock
+    that opened inside the levels and has since run through them is the
+    same trade gone. Returns the reason to withhold, or None to send.
+    Unreadable prices never withhold (the grader still voids).
+    """
+    try:
+        stop, target = float(r["stop"]), float(r["target"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    long = r.get("trend") == "Bullish"
+    for label, px in (("fill (next open)", open_px), ("last price", last_px)):
+        try:
+            px = float(px)
+        except (TypeError, ValueError):
+            continue
+        if px != px:                                        # NaN
+            continue
+        beyond = (px <= stop or px >= target) if long else (px >= stop or px <= target)
+        if beyond:
+            return (f"{label} {px:.2f} is beyond the {'stop' if (px <= stop if long else px >= stop) else 'target'} "
+                    f"(stop {stop:.2f}, target {target:.2f}) — the grader would void this fill")
+    return None
+
+
+def fill_probe(raw_df, cdf) -> tuple:
+    """
+    The first bar after the signal bar in the RAW frame (the one
+    drop_partial_bar() trimmed), as (open, last). That bar is today's
+    partial bar during the session and yesterday's settled bar the morning
+    after a post-close record; either way its Open is the fill the grader
+    will read and its Close is the latest print. (None, None) when the
+    frame ends on the signal bar (the post-close pass: nothing has traded
+    since, the fill is tomorrow's open and cannot be checked yet).
+    """
+    try:
+        last_sig = sc._bar_dates(cdf, None).max()
+        raw_dates = sc._bar_dates(raw_df, None)
+        after = raw_df[raw_dates > last_sig]
+        if after.empty:
+            return None, None
+        return float(after.iloc[0]["Open"]), float(after.iloc[-1]["Close"])
+    except Exception:                                      # noqa: BLE001
+        return None, None
+
+
+def withheld_on_bar(signal_key: str | None) -> bool:
+    """Whether the record already holds a NOT SENT row for this key (J1): the
+    withheld alert is recorded once, not on every later run of the day."""
+    if not signal_key:
+        return False
+    try:
+        return any(a.get("key") == signal_key and str(a.get("header", "")).startswith("NOT SENT")
+                   for a in forward_log.alerts_sent())
+    except Exception:                                      # noqa: BLE001
+        return False
+
+
 def recently_alerted(state: dict, ticker: str, trend: str) -> bool:
     """
     Cooldown is keyed on ticker AND direction, so a genuine flip from Bullish
@@ -753,10 +820,11 @@ def _earnings_calendar(ticker: str):
     return yf.Ticker(ticker).calendar
 
 
-def check_earnings_blackout(ticker: str) -> tuple[bool, str]:
+def check_earnings_blackout(ticker: str, bar_date=None) -> tuple[bool, str]:
     """
     ROUTED THROUGH market_context — one implementation, as with the weekly
-    trend and the SPY regime.
+    trend and the SPY regime. `bar_date` is the signal bar's date: a release
+    between it and the fill is inside the blackout (review 2026-10-30 J2).
 
     This copy and app.py's parsed the yfinance calendar differently: app read
     only the FIRST earnings date, this one iterated all of them. yfinance
@@ -772,7 +840,7 @@ def check_earnings_blackout(ticker: str) -> tuple[bool, str]:
     """
     return market_context.get_earnings_blackout(
         ticker, _earnings_calendar, datetime.now(ET).date(),
-        blackout_days=EARNINGS_BLACKOUT_DAYS, post_days=POST_EARNINGS_DAYS)
+        blackout_days=EARNINGS_BLACKOUT_DAYS, post_days=POST_EARNINGS_DAYS, bar_date=bar_date)
 
 
 def get_spy_regime() -> dict | None:
@@ -854,10 +922,14 @@ def analyze(df: pd.DataFrame, ticker: str,
         logger.debug("%s — no signal (base)", ticker)
         return None
 
+    try:                                               # the signal bar, for the blackout's straddle rule (J2)
+        _bar_for_earnings = sc._bar_dates(df, None).max().date()
+    except Exception:                                  # noqa: BLE001
+        _bar_for_earnings = None
     r = sc.evaluate(
         df, ticker, PARAMS,
         weekly_trend=get_weekly_trend(ticker) if PARAMS.weekly_confirm else None,
-        earnings=check_earnings_blackout(ticker),
+        earnings=check_earnings_blackout(ticker, bar_date=_bar_for_earnings),
         spy_regime=spy_regime,
     )
     if r["blocked"]:
@@ -1368,6 +1440,7 @@ def run(args) -> int:
     # RAW FRAMES, kept for the grader below so a watchlist ticker with an open
     # signal is not fetched twice in one run.
     frames: dict = {}
+    pool_cdfs: dict = {}        # the settled frame each pool name signalled on (J1 fill probe)
     # THE PULLBACK BUCKET'S COUNTS for this run (signals, below_sma200,
     # insufficient_history, rr_below_min): the pre-registration says they
     # are counted, and a bucket that records nothing for weeks must be
@@ -1419,6 +1492,13 @@ def run(args) -> int:
             if alerted_on_bar(r.get("signal_key")):
                 logger.info("%s %s qualifies but bar %s was already alerted (delivered "
                             "alert row) — suppressed.", tk, r["trend"], r.get("bar_date"))
+                skipped += 1
+                continue
+            _gap = gapped_at_fill(r, *fill_probe(df, cdf))
+            if _gap:
+                logger.warning("%s %s bar %s NOT SENT: %s", tk, r["trend"], r.get("bar_date"), _gap)
+                if not withheld_on_bar(r.get("signal_key")):
+                    _record_alert(tk, r, "live", False, "NOT SENT: " + _gap, args.dry_run)
                 skipped += 1
                 continue
 
@@ -1498,6 +1578,7 @@ def run(args) -> int:
                 frames[tk] = df
                 cdf = compute(df)
                 cdf, _dropped = sc.drop_partial_bar(cdf, now=datetime.now(ET))
+                pool_cdfs[tk] = cdf
                 try:
                     _bar = str(sc._bar_dates(cdf, None).max().date())
                     pool_bars.setdefault(_bar, {"tickers": [], "signals": 0})
@@ -1534,6 +1615,13 @@ def run(args) -> int:
             if alerted_on_bar(r.get("signal_key")):
                 logger.info("pool: %s %s qualifies but bar %s was already alerted "
                             "(delivered alert row) — suppressed.", tk, r["trend"], r.get("bar_date"))
+                skipped += 1
+                continue
+            _gap = gapped_at_fill(r, *fill_probe(frames[tk], pool_cdfs.get(tk)))
+            if _gap:
+                logger.warning("pool: %s %s bar %s NOT SENT: %s", tk, r["trend"], r.get("bar_date"), _gap)
+                if not withheld_on_bar(r.get("signal_key")):
+                    _record_alert(tk, r, "pool", False, "NOT SENT: " + _gap, args.dry_run)
                 skipped += 1
                 continue
             _hdr = (f"🚨 POOL ALERT (wide universe, HQ tier, RS {r['rs']:+.1f})"
@@ -1910,7 +1998,7 @@ def _selftest_body() -> int:
     _real_wk, _real_earn = get_weekly_trend, check_earnings_blackout
     try:
         globals()["get_weekly_trend"] = lambda t: "Bullish"
-        globals()["check_earnings_blackout"] = lambda t: (True, "n/a")
+        globals()["check_earnings_blackout"] = lambda t, **k: (True, "n/a")
         sc.evaluate = lambda *a, **k: _canned("Bearish")
         assert analyze(_frame, "ZZ") is None, (
             "a high-quality BEARISH signal reached the alert path. Shorts "
@@ -1972,7 +2060,7 @@ def _selftest_body() -> int:
     try:
         forward_log.LOG = _tmp
         globals()["get_weekly_trend"] = lambda t: "Bullish"
-        globals()["check_earnings_blackout"] = lambda t: (True, "n/a")
+        globals()["check_earnings_blackout"] = lambda t, **k: (True, "n/a")
         # DISTINCT TICKERS, because a signal's identity is
         # (ticker, trend, bar date) and these are three different signals.
         # They used to share "ZZ" and one frame, which the dedupe now — quite
@@ -2092,7 +2180,7 @@ def _selftest_body() -> int:
             raise OSError("disk full")
         forward_log.record_signal = _boom
         globals()["get_weekly_trend"] = lambda t: "Bullish"
-        globals()["check_earnings_blackout"] = lambda t: (True, "n/a")
+        globals()["check_earnings_blackout"] = lambda t, **k: (True, "n/a")
         sc.evaluate = lambda *a, **k: _canned("Bullish")
         _got = analyze(_frame, "ZZ")
         assert _got is not None and _got["trend"] == "Bullish", (
@@ -2300,6 +2388,47 @@ def _selftest_body() -> int:
             assert len([r for r in forward_log.read_all(_tmpl) if r["kind"] == "alert"]) == 2
             print("one alert per signal bar : a delivered alert row suppresses the same key with no "
                   "stamp; a failed delivery re-sends; another bar or no key never suppresses")
+            # ── THE FILL CHECK BEFORE THE ALERT (review 2026-10-30, J1) ──
+            # The raw frame carries one bar AFTER the signal bar (the fill);
+            # compute() hands back the frame without it, as drop_partial_bar()
+            # does during the session. A fill beyond the stop withholds the
+            # alert and records ONE "NOT SENT" row (not one per run); a last
+            # print beyond the target withholds too; a fill inside sends.
+            _tmpl.write_text("")
+            del _sentk[:]
+            _g["compute"] = lambda df: df.iloc[:-1]
+            def _with_fill(open_px, close_px):
+                _nxt = _pd2.DataFrame({"Open": [open_px], "High": [max(open_px, close_px) + 1], "Low": [min(open_px, close_px) - 1],
+                                       "Close": [close_px], "Volume": [1e6]},
+                                      index=_pd2.bdate_range(start=_bars[-1], periods=2)[1:])
+                return _pd2.concat([_fr, _nxt])
+            _g["get_data"] = lambda tk: _with_fill(97.0, 97.5)      # opened below the stop (98)
+            run(_ap2.Namespace(force=True, dry_run=False))
+            run(_ap2.Namespace(force=True, dry_run=False))
+            _ns = [r for r in forward_log.read_all(_tmpl) if r["kind"] == "alert"]
+            assert not _sentk, "a fill beyond the stop is not alerted"
+            assert len(_ns) == 1 and not _ns[0]["delivered"] and _ns[0]["header"].startswith("NOT SENT") \
+                and "beyond the stop" in _ns[0]["header"] and _ns[0]["key"] == forward_log.signal_key("AAA", "Bullish", _bark), _ns
+            assert withheld_on_bar(_ns[0]["key"]) and not withheld_on_bar(None)
+            _g["get_data"] = lambda tk: _with_fill(100.0, 107.0)    # opened inside, ran through the target (106)
+            run(_ap2.Namespace(force=True, dry_run=False))
+            assert not _sentk and len([r for r in forward_log.read_all(_tmpl) if r["kind"] == "alert"]) == 1, \
+                "withheld again, and the key already has its NOT SENT row"
+            _tmpl.write_text("")
+            run(_ap2.Namespace(force=True, dry_run=False))
+            assert not _sentk and "last price" in [r for r in forward_log.read_all(_tmpl) if r["kind"] == "alert"][-1]["header"]
+            _g["get_data"] = lambda tk: _with_fill(100.0, 101.0)    # a fill inside the levels
+            run(_ap2.Namespace(force=True, dry_run=False))
+            assert len(_sentk) == 1, "a fill inside the levels is alerted"
+            assert gapped_at_fill({"trend": "Bearish", "stop": 102.0, "target": 94.0}, 103.0) and \
+                gapped_at_fill({"trend": "Bearish", "stop": 102.0, "target": 94.0}, 100.0, 93.0) and \
+                gapped_at_fill({"trend": "Bearish", "stop": 102.0, "target": 94.0}, 100.0, 100.0) is None and \
+                gapped_at_fill({"trend": "Bullish", "stop": 98.0, "target": 106.0}, None, None) is None and \
+                gapped_at_fill({"trend": "Bullish", "stop": 98.0, "target": 106.0}, float("nan")) is None and \
+                gapped_at_fill({"trend": "Bullish"}, 50.0) is None, "the short side mirrors; unreadable prices never withhold"
+            assert fill_probe(_fr, _fr) == (None, None), "a frame ending on the signal bar has no fill yet"
+            print("fill check before alert : a next open beyond the stop, or a last print beyond the target, "
+                  "withholds the alert and records one NOT SENT row; a fill inside sends (J1)")
         finally:
             _g.update(_savedk)
     finally:
@@ -2904,7 +3033,7 @@ def _selftest_body() -> int:
     _real_earn = globals()["check_earnings_blackout"]
     _real_wk = globals()["get_weekly_trend"]
     try:
-        globals()["check_earnings_blackout"] = lambda t: (_earn_calls.append(t), (True, "n/a"))[1]
+        globals()["check_earnings_blackout"] = lambda t, **k: (_earn_calls.append(t), (True, "n/a"))[1]
         globals()["get_weekly_trend"] = lambda t: "Bullish"
         import pandas as _pd5
         _flat = compute(_pd5.DataFrame(
