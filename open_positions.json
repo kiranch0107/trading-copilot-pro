@@ -36,13 +36,22 @@
     "source": "signal",
     "signal_key": "NOW|Bullish|2026-10-28",
     "traded_at": "2026-10-29 11:20 ET",
-    "last_check_epoch": 1793367031.2719238,
+    "last_check_epoch": 1793368836.0890043,
     "status": "EXIT_SIGNALLED",
     "exit_alerted": true,
-    "exit_reason": "THESIS",
-    "exit_detail": "NOW closed 109.67 \u2014 below EMA20 143.47. The setup that justified this CALL is no longer valid.",
-    "exit_premium": 0.16,
-    "exit_pnl_pct": -36.0,
-    "exit_detected": "2026-10-30 09:30 ET"
+    "exit_reason": "STOP",
+    "exit_detail": "Premium -56.0% (limit \u221250%)",
+    "exit_premium": 0.11,
+    "exit_pnl_pct": -56.0,
+    "exit_detected": "2026-10-30 10:00 ET",
+    "exit_history": [
+      {
+        "reason": "THESIS",
+        "detail": "NOW closed 109.67 \u2014 below EMA20 143.47. The setup that justified this CALL is no longer valid.",
+        "premium": 0.16,
+        "pnl_pct": -36.0,
+        "detected": "2026-10-30 09:30 ET"
+      }
+    ]
   }
 ]
