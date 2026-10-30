@@ -28,10 +28,16 @@ landed in the repo and the removal says so in the commit.
   The token expiry dates it carried (app PAT 2027-01-05, dispatch token
   2027-01-06, both rotated in the last week of December 2026) live on in the
   scheduler item's "FORCING FUNCTION — TWO PATs" paragraph.
-- **2026-10-29 (items 39–42), the reads that are due.** 2026-10-30 11:07 ET:
-  the first `revision` rows, the key-based alert suppression against the
-  seven delivered alerts of 10-29, whether CME alerts (recorded HQ at the
-  10-29 close). ~2026-11-06: a week of revision rows, then the post-close
+- **2026-10-30 (item 43): close the NOW position** (EXIT_SIGNALLED since
+  09:30 ET, STOP −56 % at 14:00) and log it; J1/J2 (the gap-at-the-fill
+  alert gate, the blackout against the signal bar's date) before Monday
+  11-02's first scan. Retire when the position is logged and the fixes
+  merged.
+- **2026-10-29 (items 39–42), the reads that are due.** ~~2026-10-30 11:07
+  ET: the first `revision` rows, the key-based alert suppression against
+  the seven delivered alerts of 10-29, whether CME alerts~~ (read 10-30,
+  item 43: no revision due, the 4-hour stamp held at 13:07, CME alerted).
+  ~2026-11-06: a week of revision rows, then the post-close
   slot decision (item 39). 2026-11-09/10: the first IV premium rows.
   2026-11-30: the first spread settlements (first reading at 6 graded
   cycles per arm). By 2026-12-16: rotate both PATs. (Item 42 H1, the
@@ -2347,6 +2353,30 @@ from the constant its module owns (`forward_log.GATE_EPISODES`,
 `spread_log.report()` prints the unquoted cycles by `market_reason`, the
 F4 read. `check_post_close_pass_hygiene` (61). The first stamped
 heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
+
+---
+
+## 43. Progress review 2026-10-30 (14:00 ET): the first day's reads; the NOW alert fired on a bar whose next open had gapped past the stop — ASSESSED 2026-10-30, TWO FIXES RECOMMENDED
+
+`results/progress_review_2026-10-30.md`. The 11:07 scan: CME alerted
+(live), five of eight pool HQ names alerted by RS, 13 rows graded; no
+revision row (CME's re-read matched); the 13:07 run held CME on the
+4-hour stamp. NOW: THESIS at 09:30 (closed 109.67 under EMA20 143.47),
+STOP at 14:00 (−56 %), EXIT_SIGNALLED, the owner's to close. **J1 (fix
+recommended before Monday):** NOW reported after the 10-28 close and
+opened 10-29 ~27 % lower; the 11:07 scan alerted the settled 10-28 bar
+(entry 149.85, stop 142.34) with the stock near 110; the grader voided
+the row at 16:09 as gapped_before_fill and the research engine refuses
+the same fill, but the alert path never asks. Fix: before sending, compare
+the session's open (the partial bar the scanner already drops) with the
+stop and target; a gapped fill keeps the row taken, sends nothing, and
+records an undelivered alert row with the reason. 6 of 188 graded rows so
+far (3.2 %) were void at the fill. **J2:** the earnings blackout passed
+on the morning after the release for a bar from before it; read the
+window against the signal bar's date (a release between the bar's close
+and the fill is inside the blackout); an intake note under amendment G.
+**J3** the key-based suppression is first exercised at 15:07. **J4** AMGN
+and V alerted on consecutive bars by design.
 
 ---
 
