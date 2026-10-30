@@ -118,3 +118,11 @@
 {"date": "2026-10-29", "dte": 22, "expiry": "2026-11-20", "iv": 31.6413, "kind": "iv", "rv20": 21.0731, "source": "yahoo", "spot": 29.95, "strike": 30.0, "ticker": "PFE"}
 {"date": "2026-10-29", "dte": 22, "expiry": "2026-11-20", "iv": 52.6128, "kind": "iv", "rv20": 38.6024, "source": "yahoo", "spot": 273.67, "strike": 272.5, "ticker": "PSX"}
 {"date": "2026-10-29", "dte": 22, "expiry": "2026-11-20", "iv": 30.5381, "kind": "iv", "rv20": 26.8232, "source": "yahoo", "spot": 709.29, "strike": 710.0, "ticker": "TMO"}
+{"date": "2026-10-30", "dte": 21, "expiry": "2026-11-20", "iv": 49.0667, "kind": "iv", "rv20": 26.1227, "source": "yahoo", "spot": 164.32, "strike": 165.0, "ticker": "ABNB"}
+{"date": "2026-10-30", "dte": 21, "expiry": "2026-11-20", "iv": 49.4024, "kind": "iv", "rv20": 48.4514, "source": "yahoo", "spot": 257.62, "strike": 260.0, "ticker": "ACN"}
+{"date": "2026-10-30", "dte": 21, "expiry": "2026-11-20", "iv": 28.2722, "kind": "iv", "rv20": 28.5143, "source": "yahoo", "spot": 305.44, "strike": 305.0, "ticker": "CME"}
+{"date": "2026-10-30", "dte": 21, "expiry": "2026-11-20", "iv": 58.2814, "kind": "iv", "rv20": 43.5848, "source": "yahoo", "spot": 444.73, "strike": 440.0, "ticker": "MPC"}
+{"date": "2026-10-30", "dte": 21, "expiry": "2026-11-20", "iv": 51.8315, "kind": "iv", "rv20": 119.7528, "source": "yahoo", "spot": 104.89, "strike": 105.0, "ticker": "NOW"}
+{"date": "2026-10-30", "dte": 21, "expiry": "2026-11-20", "iv": 30.9577, "kind": "iv", "rv20": 21.0337, "source": "yahoo", "spot": 30.52, "strike": 30.5, "ticker": "PFE"}
+{"date": "2026-10-30", "dte": 21, "expiry": "2026-11-20", "iv": 49.0301, "kind": "iv", "rv20": 40.1782, "source": "yahoo", "spot": 282.83, "strike": 282.5, "ticker": "PSX"}
+{"date": "2026-10-30", "dte": 21, "expiry": "2026-11-20", "iv": 34.2444, "kind": "iv", "rv20": 27.8903, "source": "yahoo", "spot": 696.974, "strike": 695.0, "ticker": "TMO"}
