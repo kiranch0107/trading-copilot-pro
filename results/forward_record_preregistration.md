@@ -76,6 +76,48 @@ rank ignores the retired leg); `consistency_check.check_hq_tier_legs_declared`
 read it, the scan config names it, this amendment and `KNOWN_CONFIGS`
 carry the hash).
 
+**Note 2026-10-30 (review J1/J2, owner: "go with J1 and J2 as well") —
+two INTAKE changes on the alert path and the earnings gate; no row kind,
+reading, rule, threshold or fingerprint changes.** *J2, the blackout
+against the signal bar's date.* The earnings gate asked its window of
+TODAY; the tier trades the signal bar's close at the next open, so the
+case it exists for — a release between the two — passed the morning after
+the release once the calendar's estimate moved (NOW: reported after the
+10-28 close, the 16:11 pass blocked it, the 10-29 11:07 scan cleared and
+alerted the 10-28 bar with the stock 27 % lower). `evaluate()` now
+receives the blackout computed with `bar_date=` the signal bar; any
+release with `bar_date <= release <= today` blocks whatever the window
+around today says; a release before the bar does not. The window itself
+(3 days before, 1 after, inclusive) is unchanged, the gate still fails
+open with no calendar, and a bar the gate blocks is recorded as before
+(blocked bars are not rows). *J1, the fill checked before the alert.* The
+grader voids a row `gapped_before_fill` when the next open is at or
+beyond the stop or the target; the alert path never asked, and NOW's
+10-28 row was alerted at 11:07 and voided at 16:09. Before sending, both
+alerting loops now read the first bar after the signal bar in the raw
+frame (the partial bar `drop_partial_bar()` trims during the session; the
+settled next bar the morning after a post-close record) and withhold the
+alert when its Open, or the latest Close, is beyond the stop or the
+target. **The row is unchanged**: the signal is still recorded `taken`,
+the grader still voids it, the control row is still written — the record
+measures the rules, and this gate sits on Telegram, not on the record. A
+withheld alert leaves ONE undelivered alert row per key with
+`header = "NOT SENT: <reason>"`, so the alert history says why nothing
+arrived; the key-based suppression (L1) reads delivered rows only, so a
+later run with a fill inside the levels still sends. The post-close pass
+has no bar after the signal bar and cannot check (the fill is tomorrow's
+open); the 11:07 scan is where the check binds. `rate_void_fill` (6 of
+188 graded live+pool rows, 3.2 %, on 2026-10-30) is the share of alerts
+this would have withheld. Enforcement: `market_context` selftest (the
+straddle: a release on the bar's date blocks, one before it does not,
+NOW's dates), `scanner.py --selftest` (a next open under the stop or a
+last print over the target withholds and records one NOT SENT row; a
+fill inside sends; the short side mirrors; unreadable prices never
+withhold), `consistency_check.check_fill_gate_and_blackout_bar` (both
+loops ask `gapped_at_fill()` between the key check and the send; the
+scanner's and the app's `evaluate()` calls pass the bar date; the stubs
+accept it).
+
 ## Amendment 2026-10-28 (F) — the HQ tier's ADX leg is 30, not 35 (BACKLOG 33, owner's decision). THRESHOLD CHANGE on the tag and the alert tier, declared as an INTAKE choice; the fingerprint moves once and is declared
 
 **Note 2026-10-29 (review G1, owner: "go with G1 as well") — episodes

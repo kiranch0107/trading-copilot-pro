@@ -2279,7 +2279,7 @@ def check_hq_tier_annotates_record() -> None:
     try:
         forward_log.LOG = Path(tempfile.mkdtemp()) / "ck.jsonl"
         scanner.get_weekly_trend = lambda t: "Bullish"
-        scanner.check_earnings_blackout = lambda t: (True, "n/a")
+        scanner.check_earnings_blackout = lambda t, **k: (True, "n/a")
         sc.evaluate = lambda *a, **k: canned("Bullish", False)
         base = scanner.analyze(frame, "CKA")
         sc.evaluate = lambda *a, **k: canned("Bullish", True)
@@ -3149,6 +3149,65 @@ def check_alert_once_per_bar() -> None:
     print("  the same signal bar is never alerted twice: both loops read the delivered alert rows by key")
 
 
+def check_fill_gate_and_blackout_bar() -> None:
+    """
+    Review 2026-10-30 J1/J2 (owner: "go with J1 and J2 as well"). J1: both
+    alerting loops ask gapped_at_fill() — the grader's gap rule on the next
+    open and the latest print — after the key check and before the send,
+    withhold on a hit and record ONE undelivered "NOT SENT" row per key;
+    the record is untouched (the row stays taken). J2: the earnings gate
+    is computed against the signal bar's date in BOTH callers of
+    evaluate(), and the shared rule blocks a release between the bar and
+    the fill.
+    """
+    import inspect as _ci
+    import datetime as _dt
+    import market_context as mc
+    sc_src = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
+    app_src = Path("app.py").read_text(encoding="utf-8", errors="replace")
+    # J1 — the helper mirrors the grader: long voids at <= stop or >= target, short mirrored.
+    import scanner as _sc
+    assert _sc.gapped_at_fill({"trend": "Bullish", "stop": 98.0, "target": 106.0}, 98.0) and \
+        _sc.gapped_at_fill({"trend": "Bullish", "stop": 98.0, "target": 106.0}, 100.0, 106.0) and \
+        _sc.gapped_at_fill({"trend": "Bearish", "stop": 102.0, "target": 94.0}, 102.0) and \
+        _sc.gapped_at_fill({"trend": "Bullish", "stop": 98.0, "target": 106.0}, 100.0, 100.0) is None and \
+        _sc.gapped_at_fill({"trend": "Bullish", "stop": 98.0, "target": 106.0}, None) is None, \
+        "gapped_at_fill() must mirror forward_log.resolve_signal's gap rule, inclusive, and never withhold on no price"
+    gr = _ci.getsource(__import__("forward_log").resolve_signal)
+    assert "gapped = ((fill <= stop or fill >= target) if long" in gr, "the grader's rule this mirrors"
+    run_body = sc_src[sc_src.find("\ndef run("):]
+    for loop, probe in (("compose_alert(r, tk)\n", "gapped_at_fill(r, *fill_probe(df, cdf))"),
+                        ("compose_alert(r, tk, header=_hdr)", "gapped_at_fill(r, *fill_probe(frames[tk], pool_cdfs.get(tk)))")):
+        i = run_body.find(loop)
+        seg = run_body[i - 1500:i]
+        assert i > 0 and probe in seg and seg.find('if alerted_on_bar(r.get("signal_key")):') < seg.find(probe), \
+            f"the fill check must sit between the key check and the send ({loop.strip()})"
+        gate = seg[seg.find(probe):]
+        assert "if not withheld_on_bar(r.get(\"signal_key\")):" in gate and '"NOT SENT: " + _gap' in gate \
+            and "skipped += 1" in gate and "continue" in gate, \
+            f"a gapped fill records one NOT SENT row per key, counts as skipped and sends nothing ({loop.strip()})"
+        assert "forward_log.record_signal" not in gate and "decision" not in gate, "the record is not touched by the alert gate"
+    assert "fill check before alert" in sc_src, "the selftest proves it"
+    # J2 — both callers pass the signal bar's date; the shared rule blocks the straddle.
+    for path, src in (("scanner.py", sc_src), ("app.py", app_src)):
+        assert "earnings=check_earnings_blackout(ticker, bar_date=_bar_for_earnings)" in src and \
+            "_bar_for_earnings = " in src and "_bar_dates(df, None).max().date()" in src, \
+            f"{path}: evaluate() must receive the blackout computed against the signal bar (J2)"
+        assert "bar_date=bar_date)" in src[src.find("def check_earnings_blackout("):][:2500], \
+            f"{path}: check_earnings_blackout() must pass bar_date through to market_context"
+    assert mc.earnings_blackout_from_dates([_dt.date(2026, 10, 28)], _dt.date(2026, 10, 29),
+                                           bar_date=_dt.date(2026, 10, 28))[0] is False, "NOW's straddle blocks"
+    assert mc.earnings_blackout_from_dates([_dt.date(2026, 10, 27)], _dt.date(2026, 10, 29),
+                                           bar_date=_dt.date(2026, 10, 28))[0] is True, "a release before the bar does not"
+    assert mc.earnings_blackout_from_dates([_dt.date(2026, 11, 5)], _dt.date(2026, 10, 29),
+                                           bar_date=_dt.date(2026, 10, 28))[0] is True, "nor a release after today, outside the window"
+    assert mc.get_earnings_blackout("X", lambda t: {"Earnings Date": [_dt.date(2026, 10, 26)]}, _dt.date(2026, 10, 29),
+                                    bar_date=_dt.date(2026, 10, 26))[0] is False, \
+        "get_earnings_blackout() passes bar_date through (the release is outside the post-window, inside the straddle)"
+    assert "the straddle" in Path("market_context.py").read_text(encoding="utf-8"), "the selftest proves it"
+    print("  alerts ask the grader's fill rule first and record NOT SENT once; the blackout reads the signal bar's date (J1/J2)")
+
+
 def check_risk_floor_single_sourced() -> None:
     """
     Grading amendment 2026-10-29 (logic review L2, owner's option (a)): the
@@ -3599,6 +3658,7 @@ CHECKS = [
     ("one alert per signal bar (review 10-29 L1)", check_alert_once_per_bar),
     ("risk floor single-sourced (review 10-29 L2)", check_risk_floor_single_sourced),
     ("HQ episodes re-anchored at the F cut (G1)",  check_hq_episodes_reanchored),
+    ("fill gate before alert, blackout vs bar (J1/J2)", check_fill_gate_and_blackout_bar),
 ]
 
 

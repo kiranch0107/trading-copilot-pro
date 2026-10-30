@@ -29,10 +29,11 @@ landed in the repo and the removal says so in the commit.
   2027-01-06, both rotated in the last week of December 2026) live on in the
   scheduler item's "FORCING FUNCTION — TWO PATs" paragraph.
 - **2026-10-30 (item 43): close the NOW position** (EXIT_SIGNALLED since
-  09:30 ET, STOP −56 % at 14:00) and log it; J1/J2 (the gap-at-the-fill
+  09:30 ET, STOP −56 % at 14:00) and log it. ~~J1/J2 (the gap-at-the-fill
   alert gate, the blackout against the signal bar's date) before Monday
-  11-02's first scan. Retire when the position is logged and the fixes
-  merged.
+  11-02's first scan~~ (merged 2026-10-30; first binds at the 11-02 11:07
+  scan — read that log for a "NOT SENT" line and the straddle wording).
+  Retire when the position is logged.
 - **2026-10-29 (items 39–42), the reads that are due.** ~~2026-10-30 11:07
   ET: the first `revision` rows, the key-based alert suppression against
   the seven delivered alerts of 10-29, whether CME alerts~~ (read 10-30,
@@ -2377,6 +2378,26 @@ window against the signal bar's date (a release between the bar's close
 and the fill is inside the blackout); an intake note under amendment G.
 **J3** the key-based suppression is first exercised at 15:07. **J4** AMGN
 and V alerted on consecutive bars by design.
+**J1 and J2 DONE 2026-10-30 (owner: "go with J1 and J2 as well"):**
+`scanner.gapped_at_fill()` mirrors the grader's gap rule (next open, or
+the latest print, at or beyond the stop or the target; short mirrored);
+`fill_probe()` reads the first bar after the signal bar in the raw frame
+(the partial bar the session drops; the settled next bar the morning
+after a post-close record; nothing on the post-close pass itself). Both
+alerting loops ask it after the key check: a gapped fill sends nothing,
+counts as skipped and records ONE undelivered alert row per key with
+`header="NOT SENT: <reason>"` (`withheld_on_bar()`); the signal row,
+the grader and the control row are untouched. `market_context.
+earnings_blackout_from_dates(..., bar_date=)` blocks any release with
+`bar_date <= release <= today` before the window around today is asked;
+`get_earnings_blackout`, both `check_earnings_blackout` wrappers and
+both `evaluate()` calls pass the signal bar's date. Pinned by the
+market_context and scanner selftests and
+`consistency_check.check_fill_gate_and_blackout_bar` (65 checks). Intake
+note under amendment G in `results/forward_record_preregistration.md`.
+NOT done: the NOW position is still the owner's to close and log; the
+post-close pass cannot check the fill (none has traded), so the 11:07
+scan is where J1 first binds — Monday 11-02.
 
 ---
 
@@ -2582,8 +2603,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 64 cross-module
-  invariants (64 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 65 cross-module
+  invariants (65 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on
