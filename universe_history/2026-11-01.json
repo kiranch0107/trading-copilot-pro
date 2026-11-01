@@ -1,0 +1,76 @@
+{
+  "as_of": "2026-11-01",
+  "taken_at": "2026-11-01T18:03:35",
+  "tickers": [
+    "ACN",
+    "MPC",
+    "PSX",
+    "LLY",
+    "TSLA",
+    "CRWD",
+    "AMGN",
+    "ADI"
+  ],
+  "passed_gates": 53,
+  "pool_size": 83,
+  "sector_mix": {
+    "Tech": 2,
+    "Energy": 2,
+    "Health": 2,
+    "ConsDisc": 1,
+    "Semis": 1
+  },
+  "rs_lookback": 63,
+  "top_n": 8,
+  "max_per_sector": 2,
+  "detail": [
+    {
+      "ticker": "ACN",
+      "rs": 56.05,
+      "price": 258.24,
+      "dollar_vol_m": 1558.7
+    },
+    {
+      "ticker": "MPC",
+      "rs": 45.11,
+      "price": 444.73,
+      "dollar_vol_m": 925.8
+    },
+    {
+      "ticker": "PSX",
+      "rs": 37.43,
+      "price": 282.83,
+      "dollar_vol_m": 689.3
+    },
+    {
+      "ticker": "LLY",
+      "rs": 26.67,
+      "price": 1417.54,
+      "dollar_vol_m": 3202.3
+    },
+    {
+      "ticker": "TSLA",
+      "rs": 24.39,
+      "price": 399.81,
+      "dollar_vol_m": 13819.7
+    },
+    {
+      "ticker": "CRWD",
+      "rs": 23.9,
+      "price": 250.43,
+      "dollar_vol_m": 2276.2
+    },
+    {
+      "ticker": "AMGN",
+      "rs": 23.26,
+      "price": 466.01,
+      "dollar_vol_m": 1129.7
+    },
+    {
+      "ticker": "ADI",
+      "rs": 15.52,
+      "price": 417.11,
+      "dollar_vol_m": 1491.3
+    }
+  ]
+}
