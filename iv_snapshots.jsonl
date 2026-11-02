@@ -126,3 +126,10 @@
 {"date": "2026-10-30", "dte": 21, "expiry": "2026-11-20", "iv": 30.9577, "kind": "iv", "rv20": 21.0337, "source": "yahoo", "spot": 30.52, "strike": 30.5, "ticker": "PFE"}
 {"date": "2026-10-30", "dte": 21, "expiry": "2026-11-20", "iv": 49.0301, "kind": "iv", "rv20": 40.1782, "source": "yahoo", "spot": 282.83, "strike": 282.5, "ticker": "PSX"}
 {"date": "2026-10-30", "dte": 21, "expiry": "2026-11-20", "iv": 34.2444, "kind": "iv", "rv20": 27.8903, "source": "yahoo", "spot": 696.974, "strike": 695.0, "ticker": "TMO"}
+{"date": "2026-11-02", "dte": 25, "expiry": "2026-11-27", "iv": 47.4279, "kind": "iv", "rv20": 47.1203, "source": "yahoo", "spot": 260.94, "strike": 260.0, "ticker": "ACN"}
+{"date": "2026-11-02", "dte": 25, "expiry": "2026-11-27", "iv": 52.7608, "kind": "iv", "rv20": 38.1287, "source": "yahoo", "spot": 412.85, "strike": 415.0, "ticker": "ADI"}
+{"date": "2026-11-02", "dte": 25, "expiry": "2026-11-27", "iv": 37.0078, "kind": "iv", "rv20": 24.5652, "source": "yahoo", "spot": 465.45, "strike": 465.0, "ticker": "AMGN"}
+{"date": "2026-11-02", "dte": 25, "expiry": "2026-11-27", "iv": 68.7015, "kind": "iv", "rv20": 60.3177, "source": "yahoo", "spot": 241.81, "strike": 240.0, "ticker": "CRWD"}
+{"date": "2026-11-02", "dte": 25, "expiry": "2026-11-27", "iv": 36.8952, "kind": "iv", "rv20": 35.9634, "source": "yahoo", "spot": 1410.99, "strike": 1420.0, "ticker": "LLY"}
+{"date": "2026-11-02", "dte": 25, "expiry": "2026-11-27", "iv": 50.9221, "kind": "iv", "rv20": 41.1779, "source": "yahoo", "spot": 275.04, "strike": 275.0, "ticker": "PSX"}
+{"date": "2026-11-02", "dte": 25, "expiry": "2026-11-27", "iv": 44.428, "kind": "iv", "rv20": 36.0391, "source": "yahoo", "spot": 403.82, "strike": 405.0, "ticker": "TSLA"}
