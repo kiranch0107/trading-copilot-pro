@@ -3124,9 +3124,10 @@ def check_bar_revision_note_wired() -> None:
     import forward_log as fl
     sc_src = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
     body = sc_src[sc_src.find("def analyze("):sc_src.find("\ndef ", sc_src.find("def analyze(") + 1)]
-    assert "forward_log.find_signal(ticker, r[\"trend\"], _bar)" in body and \
-        "forward_log.record_revision(_prev, _setup, decision, _hq)" in body, \
-        "analyze() must compare a re-read bar with its recorded row before record_signal()"
+    assert "forward_log.find_signal(ticker, r[\"trend\"], _bar)" in body and re.search(
+        r"forward_log\.record_revision\(_prev, _setup, decision, _hq,\s*"
+        r"config_now=forward_log\.config_fingerprint\(_cfg\)\)", body), \
+        "analyze() must compare a re-read bar with its recorded row before record_signal(), with the config"
     assert body.find("record_revision(") < body.find("forward_log.record_signal("), \
         "the comparison must run before the (deduped) record_signal() call"
     writers = [q.name for q in sorted(Path(".").glob("*.py"))
@@ -3136,7 +3137,45 @@ def check_bar_revision_note_wired() -> None:
     rev = {"kind": "revision", "decision": ["taken", "taken"], "key": "X|Bullish|2026-10-28"}
     assert not fl.counts_as_taken(rev), "a revision row is never taken"
     assert "revisions" in fl.summary(Path("forward_log.jsonl")) and "bar revisions" in Path("forward_log.py").read_text()
-    print("  a differing re-read writes one revision row from analyze(); one writer; never taken; counted and reported")
+    # THE BLIND SPOTS (review 2026-11-03; owner: "fix the revision counter blind
+    # spot as well"). A later read that no longer signals writes a vanished row
+    # at BOTH of analyze()'s no-signal returns; a signal the post-close pass
+    # read and did not give is counted from the chain; a tag flipped by a
+    # filter's other input or by a config change never moves the slot.
+    _b = body.replace("\r\n", "\n")
+    for marker, why in (('logger.debug("%s — no signal (base)", ticker)', "the base fast path"),
+                        ('logger.debug("%s — no signal (%s)", ticker, r.get("block_reason"))', "the evaluate block")):
+        i = _b.find(marker)
+        j = _b.find("return None", i)
+        assert 0 < i < j and "_note_vanished(df, ticker, " in _b[i:j], \
+            f"analyze() must note a vanished signal before {why}'s return"
+    _nv = sc_src.replace("\r\n", "\n")
+    _nv = _nv[_nv.find("def _note_vanished("):_nv.find("\ndef ", _nv.find("def _note_vanished(") + 1)]
+    assert "forward_log.signals_on_bar(ticker, _bd)" in _nv and "forward_log.record_vanished(" in _nv \
+        and "config_now=forward_log.config_fingerprint(_scan_cfg())" in _nv, \
+        "_note_vanished() must compare every recorded signal on the bar, with the config"
+    assert "forward_log.record_vanished(_other, _bar_now(df)" in _b, "a trend flip must note the other trend's row"
+    v_writers = [q.name for q in sorted(Path(".").glob("*.py"))
+                 if q.name not in ("forward_log.py", "consistency_check.py")
+                 and "forward_log.record_vanished(" in q.read_text(encoding="utf-8", errors="replace")]
+    assert v_writers == ["scanner.py"], f"vanished rows must have one writer, scanner.py; found {v_writers}"
+    _sig = Path("signal_core.py").read_text(encoding="utf-8")
+    for leg in fl.INPUT_LEGS:
+        assert f'filters["{leg}"]' in _sig, f"INPUT_LEGS names {leg!r}, which signal_core no longer files"
+    for leg in ("ADX Trend Strength",):
+        assert leg not in fl.INPUT_LEGS, f"{leg} is read from the bar; a flip on it is a bar revision"
+    _fl = Path("forward_log.py").read_text(encoding="utf-8")
+    _sm = _fl[_fl.find("def summary("):_fl.find("\ndef ", _fl.find("def summary(") + 1)]
+    assert '"revisions_tag_moved": len(_rev_bar) + len(_missed)' in _sm and \
+        'r.get("cause") not in ("inputs", "config")' in _sm and "_missed = missed_by_post_close(rows)" in _sm, \
+        "the slot's number counts bar-caused revisions and the post-close misses, never input or config flips"
+    _cl = sc_src[sc_src.find("def clocks_line("):sc_src.find("def basket_record_pass(")]
+    assert all(k in _cl for k in ("s.get('revisions_missed', 0)", "s.get('revisions_vanished', 0)",
+                                  "s.get('revisions_inputs', 0)", "s.get('revisions_config', 0)")), \
+        "the clocks line must print the misses, the vanished rows and what was not counted"
+    print("  a differing re-read writes one revision row from analyze(); one writer; never taken; counted and reported; "
+          "a vanished signal at both no-signal returns, a post-close miss from the chain; input and config flips "
+          "never move the slot")
 
 
 def check_post_close_pass_hygiene() -> None:

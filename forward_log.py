@@ -525,7 +525,7 @@ def find_signal(ticker: str, trend: str, bar_date, path: Path | None = None) -> 
 
 
 def record_revision(recorded: dict, setup_now: dict, decision_now: str,
-                    hq_now, path: Path | None = None) -> dict | None:
+                    hq_now, path: Path | None = None, config_now: str | None = None) -> dict | None:
     """
     One `revision` row when a later read of a recorded signal bar differs
     from the row: the fields that moved as {field: [recorded, now]}, the
@@ -550,12 +550,136 @@ def record_revision(recorded: dict, setup_now: dict, decision_now: str,
     hq = [recorded.get("hq"), (None if hq_now is None else bool(hq_now))]
     if not fields and dec[0] == dec[1] and hq[0] == hq[1]:
         return None
+    # THE CAUSE (review 2026-11-03; owner: "fix the revision counter blind
+    # spot as well"). Item 39's slot decision counts revisions that moved the
+    # decision or the tag, as evidence that the post-close pass reads a bar
+    # Yahoo has not finished. The tag can also flip with the bar's verdict
+    # unchanged: a filter fed by ANOTHER fetch moved between the reads (the
+    # earnings window is anchored on the scan day, the SPY regime or the
+    # weekly trend can be unavailable on one read), or the config changed
+    # (a deploy between the reads). Those are not bar revisions and must not
+    # move the slot. "config" when the fingerprints differ; "inputs" when the
+    # tag moved and every leg whose verdict changed is an input leg; "bar"
+    # otherwise (a decision moved, a bar leg moved, or the legs are unknown).
+    _legs = sorted(set(old.get("hq_fail") or []) ^ set((setup_now or {}).get("hq_fail") or []))
+    cause = _revision_cause(recorded, config_now, dec[0] != dec[1], hq[0] != hq[1], _legs)
     return append("revision", {
         "ref_seq": recorded.get("seq"), "key": key, "ticker": recorded.get("ticker"),
         "trend": recorded.get("trend"), "bar_date": recorded.get("bar_date"),
         "bucket": recorded.get("bucket"), "recorded_ts": recorded.get("ts"),
-        "fields": fields, "decision": dec, "hq": hq,
+        "fields": fields, "decision": dec, "hq": hq, "cause": cause, "legs": _legs,
     }, path=path)
+
+
+# The tier's legs fed by a fetch OTHER than the signal bar: their verdict can
+# flip between two reads of an unchanged bar. Named as signal_core names its
+# filters (pinned in check_bar_revision_note_wired).
+INPUT_LEGS = ("Earnings Blackout", "Macro Regime", "Multi-TF Alignment")
+
+
+def _revision_cause(recorded: dict, config_now: str | None, decision_moved: bool,
+                    tag_moved: bool, legs: list) -> str:
+    """Why a later read differs (review 2026-11-03): "config", "inputs" or
+    "bar". Only "bar" can move item 39's slot."""
+    if config_now and recorded.get("config") and recorded.get("config") != config_now:
+        return "config"
+    if tag_moved and not decision_moved and legs and all(l in INPUT_LEGS for l in legs):
+        return "inputs"
+    return "bar"
+
+
+_BAR_INDEX: dict = {}
+
+
+def signals_on_bar(ticker: str, bar_date, path: Path | None = None) -> list:
+    """The base-signal rows (live or pool, either trend) recorded for this
+    ticker's bar: what a later read of the same bar is compared with.
+
+    Asked for EVERY name a scan reads that does not signal, so the rows are
+    indexed once per state of the file (its size and mtime; the log only
+    grows) instead of parsed again for each of ~100 names."""
+    p = path or LOG
+    try:
+        st = p.stat()
+    except OSError:
+        return []
+    stamp = (st.st_mtime_ns, st.st_size)
+    hit = _BAR_INDEX.get(str(p))
+    if hit is None or hit[0] != stamp:
+        idx: dict = {}
+        for r in read_all(p):
+            if r.get("kind") == "signal" and bucket_of(r) in ("live", "pool"):
+                idx.setdefault((r.get("ticker"), str(r.get("bar_date"))[:10]), []).append(r)
+        hit = (stamp, idx)
+        _BAR_INDEX[str(p)] = hit
+    return list(hit[1].get((ticker, str(bar_date)[:10]), []))
+
+
+def record_vanished(recorded: dict, now: dict, reason: str, path: Path | None = None,
+                    config_now: str | None = None) -> dict | None:
+    """
+    A recorded signal that a LATER read of the same bar no longer produces
+    (review 2026-11-03): the post-close pass recorded a bar Yahoo then
+    revised so that it does not signal, a row the record keeps and grades.
+    record_revision() never saw it, because it runs only when the later read
+    signals too. One `revision` row per key: decision [recorded, "none"],
+    the fields of the bar that moved (`now` holds what the read has),
+    `reason` the rule that now blocks. Every block (base, zero risk, R:R) is
+    computed from the bar alone, so the cause is "bar" unless the config
+    changed between the reads.
+    """
+    key = recorded.get("key")
+    if any(r.get("kind") == "revision" and r.get("key") == key for r in read_all(path)):
+        return None
+    old = recorded.get("setup") or {}
+    fields = {}
+    for f, b in (now or {}).items():
+        a = old.get(f)
+        try:
+            same = abs(float(a) - float(b)) < 1e-9
+        except (TypeError, ValueError):
+            same = (a == b)
+        if not same:
+            fields[f] = [a, b]
+    return append("revision", {
+        "ref_seq": recorded.get("seq"), "key": key, "ticker": recorded.get("ticker"),
+        "trend": recorded.get("trend"), "bar_date": recorded.get("bar_date"),
+        "bucket": recorded.get("bucket"), "recorded_ts": recorded.get("ts"),
+        "fields": fields, "decision": [recorded.get("decision"), "none"],
+        "hq": [recorded.get("hq"), None],
+        "cause": _revision_cause(recorded, config_now, True, False, []),
+        "reason": str(reason)[:200],
+    }, path=path)
+
+
+def missed_by_post_close(rows: list) -> list:
+    """
+    The signal rows (live or pool) first recorded AFTER the post-close pass
+    had scanned that ticker's bar and found nothing on it (review
+    2026-11-03; PFE 10-29, recorded at the next morning's scan, is one): the
+    mirror of a vanished signal. Read from rows the chain already holds (the
+    stamped post-close heartbeat names the tickers it read; the scan row is
+    written after the pass, so its own signals precede it), so the count
+    covers the record from the first stamped pass (2026-10-29), not only from
+    this fix. A signal recorded under a different config from the pass's is
+    left out: the rules changed between the reads, not the bar.
+    """
+    first_pc: dict = {}
+    for r in rows:
+        if r.get("kind") == "scan" and r.get("pass") == "post_close" and bucket_of(r) == "live":
+            for tk in r.get("tickers") or []:
+                first_pc.setdefault((tk, str(r.get("bar_date"))[:10]), r)
+    out = []
+    for r in rows:
+        if r.get("kind") != "signal" or bucket_of(r) not in ("live", "pool"):
+            continue
+        pc = first_pc.get((r.get("ticker"), str(r.get("bar_date"))[:10]))
+        if pc is None or (pc.get("seq") or 0) > (r.get("seq") or 0):
+            continue
+        if pc.get("config") and r.get("config") and pc.get("config") != r.get("config"):
+            continue
+        out.append(r)
+    return out
 
 
 def last_scan(path: Path | None = None, bucket: str = "live") -> dict | None:
@@ -1339,6 +1463,10 @@ def summary(path: Path | None = None) -> dict:
     scans = [r for r in rows if r.get("kind") == "scan"]
     alerts = [r for r in rows if r.get("kind") == "alert"]
     revisions = [r for r in rows if r.get("kind") == "revision"]
+    _rev_bar = [r for r in revisions if r.get("cause") not in ("inputs", "config") and (
+        (r.get("hq") or [None, None])[0] != (r.get("hq") or [None, None])[1]
+        or (r.get("decision") or [None, None])[0] != (r.get("decision") or [None, None])[1])]
+    _missed = missed_by_post_close(rows)
     void_floor = [o for o in outs if o.get("outcome") == "void"
                   and (o.get("detail") or {}).get("note") == "fill inside the risk floor"]
     taken = [s for s in sigs if counts_as_taken(s)]
@@ -1478,8 +1606,17 @@ def summary(path: Path | None = None) -> dict:
         "revisions_price_max_pct": max((abs(float(r["fields"]["price"][1]) / float(r["fields"]["price"][0]) - 1.0) * 100.0
                                         for r in revisions if r.get("fields", {}).get("price")
                                         and r["fields"]["price"][0]), default=0.0),
-        "revisions_tag_moved": sum(1 for r in revisions if r.get("hq", [None, None])[0] != r.get("hq", [None, None])[1]
-                                   or r.get("decision", [None, None])[0] != r.get("decision", [None, None])[1]),
+        # The slot's number (item 39): a decision or the tag moved BY THE BAR,
+        # a recorded signal a later read no longer gives (vanished), or one
+        # the post-close pass read and did not give (missed, from the chain).
+        # Flips on a filter's other input or on a config change are counted
+        # apart and never move the slot (review 2026-11-03). A row from
+        # before the cause was written has none and counts, as it did.
+        "revisions_tag_moved": len(_rev_bar) + len(_missed),
+        "revisions_vanished": sum(1 for r in _rev_bar if (r.get("decision") or [None, None])[1] == "none"),
+        "revisions_missed": len(_missed),
+        "revisions_inputs": sum(1 for r in revisions if r.get("cause") == "inputs"),
+        "revisions_config": sum(1 for r in revisions if r.get("cause") == "config"),
         "configs": configs,
         "skip_reasons": {r: sum(1 for s in skipped if s.get("reason") == r)
                          for r in sorted({s.get("reason") for s in skipped})},
@@ -1499,7 +1636,10 @@ def report(path: Path | None = None) -> int:
         return 0
     print(f"  {s['rows']} rows: {s['signals']} signals, {s['controls']} controls, "
           f"{s['outcomes']} outcomes, {s['scans']} scans, {s['alerts']} alerts "
-          f"[{s['revisions']} bar revisions] [{s['void_risk_floor']} voided at the risk floor] "
+          f"[{s['revisions']} bar revisions + {s['revisions_missed']} missed by the post-close pass: "
+          f"{s['revisions_tag_moved']} moved a decision or the tag ({s['revisions_vanished']} vanished); "
+          f"not counted: {s['revisions_inputs']} filter-input flips, {s['revisions_config']} config changes] "
+          f"[{s['void_risk_floor']} voided at the risk floor] "
           f"({s['alerts_delivered']} delivered, {s['alerts_withheld']} withheld before send: "
           f"fill {s['alerts_withheld_by']['fill']}, R:R at send {s['alerts_withheld_by']['rr_at_send']}, "
           f"earnings {s['alerts_withheld_by']['earnings']}, pool cap {s['alerts_withheld_by']['pool_cap']}, "
@@ -2187,6 +2327,60 @@ def selftest() -> int:
         report(rv)
     assert "1 bar revisions" in _bufr.getvalue(), _bufr.getvalue()
     print("bar revisions    : one row per key naming the fields that moved; identical reads write nothing; never a signal")
+    # THE BLIND SPOTS (review 2026-11-03). Only the bar's own changes move the
+    # slot: a tag flipped by a filter's other input, or by a config change
+    # between the reads, is counted apart; a vanished signal and one the
+    # post-close pass missed are counted.
+    _fp = config_fingerprint(cfg)
+    _st1 = dict(_st0, hq_fail=["Earnings Blackout"])
+    _ri = record_signal("RI", "Bullish", _st1, "taken", "", cfg, bar_date="2026-10-28", path=rv, hq=False, bucket="live")
+    _rvi = record_revision(_ri, dict(_st0, hq_fail=[]), "taken", True, path=rv, config_now=_fp)
+    assert _rvi["cause"] == "inputs" and _rvi["legs"] == ["Earnings Blackout"] and _rvi["fields"] == {}, _rvi
+    # the bar moved a leg too: "bar", whatever else moved with it
+    _rb = record_signal("RB", "Bullish", dict(_st0, hq_fail=["rr<1", "Earnings Blackout"]), "taken", "", cfg,
+                        bar_date="2026-10-28", path=rv, hq=False, bucket="live")
+    _rvb = record_revision(_rb, dict(_st0, rr=1.2, hq_fail=[]), "taken", True, path=rv, config_now=_fp)
+    assert _rvb["cause"] == "bar" and _rvb["legs"] == ["Earnings Blackout", "rr<1"], _rvb
+    # a deploy between the reads: the rules changed, not the bar
+    _rc = record_signal("RC", "Bullish", dict(_st0, hq_fail=["ADX Trend Strength"]), "taken", "", cfg,
+                        bar_date="2026-10-28", path=rv, hq=False, bucket="live")
+    assert record_revision(_rc, dict(_st0, hq_fail=[]), "taken", True, path=rv,
+                           config_now="000000000000")["cause"] == "config"
+    _rx = record_signal("RX", "Bullish", _st0, "taken", "", cfg, bar_date="2026-10-28", path=rv, hq=True, bucket="live")
+    assert [x["seq"] for x in signals_on_bar("RX", "2026-10-28", path=rv)] == [_rx["seq"]] and \
+        not signals_on_bar("RX", "2026-10-29", path=rv)
+    _rx2 = record_signal("RX", "Bearish", _st0, "skipped", "direction gate", cfg, bar_date="2026-10-28", path=rv,
+                         hq=False, bucket="live")
+    assert [x["seq"] for x in signals_on_bar("RX", "2026-10-28", path=rv)] == [_rx["seq"], _rx2["seq"]], \
+        "the bar index must refresh when the log grows"
+    _rvx = record_vanished(_rx, {"price": 99.1, "rsi": 65.0}, "base: MACD not confirming the uptrend", path=rv,
+                           config_now=_fp)
+    assert _rvx["decision"] == ["taken", "none"] and _rvx["hq"] == [True, None] and _rvx["cause"] == "bar" \
+        and _rvx["fields"] == {"price": [100.0, 99.1]} and "MACD" in _rvx["reason"], _rvx
+    assert record_vanished(_rx, {"price": 98.0}, "x", path=rv) is None, "one revision per key"
+    # MISSED, read from the chain: RP was recorded by the post-close pass itself (before its
+    # heartbeat); RM after it; RQ only after an in-session scan; RD after it under other rules.
+    _rp = record_signal("RP", "Bullish", _st0, "taken", "", cfg, bar_date="2026-10-28", path=rv, hq=True, bucket="live")
+    record_scan("2026-10-28", ["RP", "RM", "RD", "OTHER"], 1, cfg, path=rv, pass_kind="post_close")
+    record_scan("2026-10-28", ["RQ"], 0, cfg, path=rv)                      # an in-session scan: not evidence
+    _rm = record_signal("RM", "Bullish", _st0, "taken", "", cfg, bar_date="2026-10-28", path=rv, hq=True, bucket="pool")
+    record_signal("RQ", "Bullish", _st0, "taken", "", cfg, bar_date="2026-10-28", path=rv, hq=True, bucket="live")
+    record_signal("RD", "Bullish", _st0, "taken", "", dict(cfg, adx_min=30), bar_date="2026-10-28", path=rv,
+                  hq=True, bucket="live")
+    record_signal("RM", "Bullish", _st0, "taken", "", cfg, bar_date="2026-10-29", path=rv, hq=True, bucket="live")
+    assert [x["seq"] for x in missed_by_post_close(read_all(rv))] == [_rm["seq"]], missed_by_post_close(read_all(rv))
+    assert _rp["seq"] < _rm["seq"]
+    _sb = summary(rv)
+    # rows: RV (bar, legs unknown), RI inputs, RB bar, RC config, RX vanished; + RM missed
+    assert (_sb["revisions"], _sb["revisions_tag_moved"], _sb["revisions_vanished"], _sb["revisions_missed"],
+            _sb["revisions_inputs"], _sb["revisions_config"]) == (5, 4, 1, 1, 1, 1), _sb
+    _bufb = _io.StringIO()
+    with _ctx.redirect_stdout(_bufb):
+        report(rv)
+    assert "5 bar revisions + 1 missed by the post-close pass: 4 moved a decision or the tag (1 vanished); " \
+        "not counted: 1 filter-input flips, 1 config changes" in _bufb.getvalue(), _bufb.getvalue()
+    print("revision blind spots : a vanished signal and one the post-close pass missed count; a tag flipped "
+          "by a filter's other input or by a config change does not move the slot")
 
     al = Path(tempfile.mkdtemp()) / "al.jsonl"
     a1 = record_alert("NVDA", "Bullish", "2026-10-13", "pool", True, "POOL", path=al)

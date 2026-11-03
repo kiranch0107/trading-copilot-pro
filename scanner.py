@@ -1168,6 +1168,7 @@ def analyze(df: pd.DataFrame, ticker: str,
     if all(c in df.columns for c in ("EMA20", "EMA50", "MACD", "Signal", "RSI")) \
             and sc.base_trend(df.iloc[-1], PARAMS) is None:
         logger.debug("%s — no signal (base)", ticker)
+        _note_vanished(df, ticker, "base condition no longer met")
         return None
 
     try:                                               # the signal bar, for the blackout's straddle rule (J2)
@@ -1182,6 +1183,7 @@ def analyze(df: pd.DataFrame, ticker: str,
     )
     if r["blocked"]:
         logger.debug("%s — no signal (%s)", ticker, r.get("block_reason"))
+        _note_vanished(df, ticker, f"{r.get('block_reason')}: {r.get('reason')}")
         return None
 
     if tally is not None:
@@ -1271,7 +1273,8 @@ def analyze(df: pd.DataFrame, ticker: str,
             # says which fields moved; the recorded row stands (append-only).
             _prev = forward_log.find_signal(ticker, r["trend"], _bar)
             if _prev is not None:
-                _rev = forward_log.record_revision(_prev, _setup, decision, _hq)
+                _rev = forward_log.record_revision(_prev, _setup, decision, _hq,
+                                                   config_now=forward_log.config_fingerprint(_cfg))
                 if _rev is not None:
                     logger.info("%s — bar %s read differently from its recorded row (seq %s): "
                                 "fields %s, decision %s, hq %s", ticker, _bar, _prev.get("seq"),
@@ -1279,6 +1282,14 @@ def analyze(df: pd.DataFrame, ticker: str,
             _row = forward_log.record_signal(ticker, r["trend"], _setup, decision,
                                              reason, _cfg, bar_date=_bar,
                                              hq=_hq, bucket=bucket)
+            # THE REVISION COUNTER'S BLIND SPOTS (review 2026-11-03): a recorded
+            # signal of the other trend this read no longer gives. (A signal
+            # the post-close pass read and did not give is counted from the
+            # chain: forward_log.missed_by_post_close().)
+            for _other in forward_log.signals_on_bar(ticker, _bar):
+                if _other.get("trend") != r["trend"]:
+                    forward_log.record_vanished(_other, _bar_now(df), f"the bar now reads {r['trend']}",
+                                                config_now=forward_log.config_fingerprint(_cfg))
             if _row is None:
                 logger.debug("%s — %s bar %s already in the forward log",
                              ticker, r["trend"], _bar)
@@ -1586,6 +1597,38 @@ def pool_gate(r: dict, tk: str, sector_n: dict) -> str | None:
     return None
 
 
+def _bar_now(df) -> dict:
+    """This read's values of the recorded fields it has, rounded as the
+    signal rounds them, for a vanished signal's revision row."""
+    out: dict = {}
+    try:
+        last = df.iloc[-1]
+        for f, col, nd in (("price", "Close", 2), ("rsi", "RSI", 1), ("adx", "ADX", 1), ("atr", "ATR", 2)):
+            if col in df.columns:
+                out[f] = round(float(last[col]), nd)
+    except Exception:                                  # noqa: BLE001
+        pass
+    return out
+
+
+def _note_vanished(df, ticker: str, reason: str) -> None:
+    """
+    A later read of a bar the record holds a signal for, that no longer
+    signals (review 2026-11-03; owner: "fix the revision counter blind spot
+    as well"): one `revision` row per key, the rule that now blocks as its
+    reason. record_revision() never saw these, because it runs only when the
+    later read signals too. Non-fatal, like every record write.
+    """
+    try:
+        _bd = sc._bar_dates(df, None).max().date()
+        for _prev in forward_log.signals_on_bar(ticker, _bd):
+            if forward_log.record_vanished(_prev, _bar_now(df), reason,
+                                           config_now=forward_log.config_fingerprint(_scan_cfg())) is not None:
+                logger.info("%s — bar %s no longer signals (%s); its recorded row stands", ticker, _bd, reason)
+    except Exception as exc:                           # noqa: BLE001
+        logger.warning("%s — vanished-signal note failed: %s", ticker, exc)
+
+
 def _withhold(tk: str, r: dict, bucket: str, why: str, dry_run: bool) -> None:
     """An alert withheld before send (D4, D1): logged, and ONE "NOT SENT" row
     per key, as the fill gate (J1) records. The row carries at_send."""
@@ -1661,8 +1704,11 @@ def clocks_line() -> str:
         # THE SLOT STAYS (owner 2026-11-03, BACKLOG 39: "keep the slot"). The
         # number that reopens it is the one printed: a revision that moved a
         # decision or the HQ tag. A price a few cents off is the measurement.
-        parts.append(f"bar revisions {s.get('revisions', 0)} "
-                     f"({s.get('revisions_tag_moved', 0)} moved a decision or the tag; the slot moves if that is ever > 0)")
+        parts.append(f"bar revisions {s.get('revisions', 0)} + {s.get('revisions_missed', 0)} missed by the "
+                     f"post-close pass ({s.get('revisions_tag_moved', 0)} moved a decision or the tag, "
+                     f"{s.get('revisions_vanished', 0)} vanished; the slot moves if that is ever > 0; "
+                     f"not counted: {s.get('revisions_inputs', 0)} filter-input flips, "
+                     f"{s.get('revisions_config', 0)} config changes)")
     except Exception as exc:                               # noqa: BLE001
         parts.append(f"forward log unreadable ({exc})")
     try:
@@ -2484,8 +2530,14 @@ def _selftest_body() -> int:
         # recorded signal row is unchanged.
         sc.evaluate = lambda *a, **k: _canned("Bullish")
         analyze(_frame, "ZU")
-        _rv_rows = lambda: [x for x in forward_log.read_all() if x.get("kind") == "revision"]   # noqa: E731
+        _rv_rows = lambda: [x for x in forward_log.read_all() if x.get("kind") == "revision"   # noqa: E731
+                            and x.get("ticker") == "ZU"]
         assert not _rv_rows(), "an identical re-read must not write a revision"
+        # THE OTHER TREND (review 2026-11-03): ZZ's bar was recorded Bearish above
+        # and read Bullish after it; the Bearish row vanished, and says so.
+        _zz = [x for x in forward_log.read_all() if x.get("kind") == "revision" and x.get("ticker") == "ZZ"]
+        assert len(_zz) == 1 and _zz[0]["trend"] == "Bearish" and _zz[0]["decision"] == ["skipped", "none"] \
+            and _zz[0]["reason"] == "the bar now reads Bullish", _zz
         sc.evaluate = lambda *a, **k: dict(_canned("Bullish"), price=100.4, rr=2.9)
         analyze(_frame, "ZU")
         _rvs = _rv_rows()
@@ -2504,6 +2556,37 @@ def _selftest_body() -> int:
         _zw = [x for x in forward_log.read_all() if x.get("kind") == "signal" and x["ticker"] == "ZW"]
         assert _got["unchecked"] == ["earnings"] and _zw[0]["setup"]["unchecked"] == ["earnings"], (_got, _zw)
         print("unchecked legs          : a row and its alert say which tier legs passed open (N8)")
+        # THE REVISION COUNTER'S BLIND SPOTS (review 2026-11-03).
+        _bd0 = str(sc._bar_dates(_frame, None).max().date())
+        _revs = lambda tk: [x for x in forward_log.read_all() if x.get("kind") == "revision"   # noqa: E731
+                            and x.get("ticker") == tk]
+        # recorded, then the same bar blocked on a later read: vanished, with the rule
+        sc.evaluate = lambda *a, **k: _canned("Bullish")
+        analyze(_frame, "ZK", spy_regime={"regime": "Bullish"})
+        sc.evaluate = lambda *a, **k: dict(_canned("Bullish"), blocked=True, block_reason="rr",
+                                           reason="R:R 0.4 below the 0.5 minimum")
+        assert analyze(_frame, "ZK", spy_regime={"regime": "Bullish"}) is None
+        _zk = _revs("ZK")
+        assert len(_zk) == 1 and _zk[0]["decision"] == ["taken", "none"] and _zk[0]["reason"].startswith("rr: R:R 0.4") \
+            and _zk[0]["cause"] == "bar", _zk
+        analyze(_frame, "ZK", spy_regime={"regime": "Bullish"})
+        assert len(_revs("ZK")) == 1, "one revision per key"
+        # the fast base path too: a frame whose last bar fails the base condition
+        _fb2 = _frame.assign(EMA20=110.0, EMA50=105.0, MACD=1.0, Signal=0.5, RSI=60.0)
+        forward_log.record_signal("ZB", "Bullish", {"price": 101.0}, "taken", "", _scan_cfg(), bar_date=_bd0,
+                                  hq=False, bucket="live")
+        assert analyze(_fb2, "ZB") is None and _revs("ZB")[0]["reason"] == "base condition no longer met"
+        # missed: the post-close pass scanned ZM on this bar and found nothing; a later read
+        # signals, and the chain counts it (no row is written for it)
+        forward_log.record_scan(_bd0, ["ZM"], 0, _scan_cfg(), pass_kind="post_close")
+        sc.evaluate = lambda *a, **k: _canned("Bullish")
+        analyze(_frame, "ZM", spy_regime={"regime": "Bullish"})
+        analyze(_frame, "ZN", spy_regime={"regime": "Bullish"})   # not read by the post-close pass
+        _mz = [x["ticker"] for x in forward_log.missed_by_post_close(forward_log.read_all())]
+        assert "ZM" in _mz and "ZN" not in _mz and not _revs("ZM"), _mz
+        assert forward_log.summary()["revisions_missed"] == len(_mz), "the summary counts the same rows"
+        print("revision blind spots    : a signal that vanishes on a later read writes one revision row; one "
+              "the post-close pass missed is counted from the chain")
         # D8: a pool row carries the RS the cut ranks on; a row without one has none
         sc.evaluate = lambda *a, **k: _canned("Bullish")
         analyze(_frame, "ZR", spy_regime={"regime": "Bullish"}, bucket="pool", rs=4.2)
@@ -3288,7 +3371,8 @@ def _selftest_body() -> int:
                                                + timedelta(days=1)) is None, \
                 "a heartbeat from another day is not today's"
             _cl = clocks_line()
-            assert all(w in _cl for w in ("pool ", "/349", "bar revisions", "moved a decision or the tag", "basket ", "/52", "spread ", "/12", "IV premium")), _cl
+            assert all(w in _cl for w in ("pool ", "/349", "bar revisions", "moved a decision or the tag", "basket ", "/52", "spread ", "/12", "IV premium",
+                                          "vanished", "missed by the post-close pass", "filter-input flips", "config changes")), _cl
             print("post-close repeat       : skipped on today's heartbeat; clocks line reads every forward log")
         finally:
             _g.update(_saved)
