@@ -2972,8 +2972,8 @@ def check_journal_hygiene() -> None:
                                                                {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7}) or "")
     assert rp.option_structure_violation("2026-11-20", "2026-10-28",
                                          {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "invalidate_ema": True}) is None
-    assert app.count('value=bool(risk_params.MEASURED_OPTION_STRUCTURE["thesis"])') == 2, \
-        "both thesis checkboxes must default to the structure's thesis field"
+    assert app.count('value=bool(risk_params.MEASURED_OPTION_STRUCTURE["thesis"])') == 3, \
+        "every thesis checkbox (quick-buy, positions, contract checker) must default to the structure's thesis field"
     _sc = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
     assert "thesis OFF\"]" not in _sc and "_m = risk_params.MEASURED_OPTION_STRUCTURE" in _sc and \
         "thesis {'ON (EMA20 break)' if _m.get('thesis') else 'OFF'}" in _sc, \
@@ -3087,6 +3087,25 @@ def check_journal_hygiene() -> None:
         "the scanner's contract passes the alert's target to the selector (D2)"
     assert "moneyness_pct" in m and "strike=strike, underlying=underlying_px" in \
         Path("journal_store.py").read_text(encoding="utf-8"), "the journal asks the moneyness leg (D2)"
+    # THE CONTRACT CHECKER'S LOG FORM (owner 2026-11-03: "fix the contract-checker
+    # form bugs as well"): no logging call writes the thesis exit off as a
+    # literal (the checker's did, so every signal trade logged there was
+    # refused), every call dates the trade (the checker and quick-buy forms had
+    # no "Traded at"), and no fill defaults to the chain's mid.
+    for _n in _logs:
+        _call = next(x for x in _ast.walk(_n) if isinstance(x, _ast.Call)
+                     and getattr(x.func, "id", "") == "open_option_position")
+        _kw = {k.arg: k.value for k in _call.keywords}
+        assert "traded_at" in _kw, f"app.py line {_n.lineno}: open_option_position must pass traded_at"
+        _rules = _kw.get("rules")
+        if isinstance(_rules, _ast.Dict):
+            for _k, _v in zip(_rules.keys, _rules.values):
+                if isinstance(_k, _ast.Constant) and _k.value == "invalidate_ema":
+                    assert not (isinstance(_v, _ast.Constant) and _v.value is False), \
+                        f"app.py line {_n.lineno}: the thesis exit is hard-coded off"
+    _a2 = _app_src.replace("\r\n", "\n")
+    assert 'or (ct["mid"] if ct else 0.0)' not in _a2 and \
+        "if _chk_prem <= 0:" in _a2, "the contract checker logs only a typed fill, never the chain's mid"
     print("  signal entries only in the measured structure (one dict; scanner window and app defaults read it); "
           "no discretionary live entry; no fixture row committed; every app call site catches the refusal; "
           "DTE ceiling everywhere; H1/H1' read from amendment F; a logged position says so only on success; "
