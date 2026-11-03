@@ -124,8 +124,11 @@ def drop_unsettled_bars(df: "pd.DataFrame",
     # ROUTED THROUGH signal_core.drop_unsettled(). DROP_UNTIL_CLOSE is the live
     # policy: today's bar is unusable before the open (a stub) and during the
     # session (in progress), and is the freshest real data once the close has
-    # passed — which matters here, because the 20:00/21:00 UTC runs are the ones
-    # that should see the session that just ended.
+    # passed. (This said the 20:00/21:00 UTC runs see the session that just
+    # ended; they do not: run() skips every run after 16:00:00 ET, so THESIS is
+    # read on the NEXT session's first run, one session after the close that
+    # broke EMA20, where option_backtest exits at that close. Review
+    # 2026-11-03; re-measuring or a ~15:50 check is the owner's call.)
     #
     # The local version asked `not is_market_open(now)` and returned early, so it
     # kept the stub bar BEFORE the open. signal_core asks whether today has
@@ -185,12 +188,21 @@ def get_option_quote(ticker: str, expiry: str, strike: float,
         bid = float(row.get("bid") or 0)
         ask = float(row.get("ask") or 0)
         last = float(row.get("lastPrice") or 0)
-        if bid > 0 and ask > 0:
+        # A CROSSED quote (ask under bid) is bad data, not a market (review
+        # 2026-11-03, N7): bid 0.60 / ask 0.20 read as a reliable mid of 0.40
+        # and could fire a STOP on a 1.00 entry. spread_log refuses it too.
+        if bid > 0 and ask > 0 and ask >= bid:
             return {"mid": round((bid + ask) / 2, 2), "bid": bid, "ask": ask,
                     "reliable": True,
                     "spread_pct": round((ask - bid) / ((bid + ask) / 2) * 100, 1)}
         if last > 0:
             return {"mid": round(last, 2), "bid": bid, "ask": ask,
+                    "reliable": False, "spread_pct": None}
+        if (bid > 0) != (ask > 0):
+            # ONE SIDE AND NO LAST TRADE: still a bound (N7). The price rules
+            # below can read a STOP proven by the ask or a TARGET proven by
+            # the bid; nothing else is inferred from it.
+            return {"mid": None, "bid": bid, "ask": ask,
                     "reliable": False, "spread_pct": None}
         return None
     except Exception as e:
@@ -238,8 +250,9 @@ def get_underlying_state(ticker: str,
         # instead of mis-reporting a number.
         #
         # Dropped only while the market is OPEN: after the close today's bar is
-        # settled and is the one the rule should use, so the 20:00/21:00 UTC runs
-        # still see the current session.
+        # settled and is the one the rule should use. (run() skips after 16:00 ET,
+        # so in practice THESIS reads the close on the next session's first run;
+        # see drop_unsettled_bars and the review of 2026-11-03.)
         df = drop_unsettled_bars(df, now=now)
         if len(df) < 25:
             return None
@@ -397,7 +410,12 @@ def check_option_position(pos: dict) -> dict:
 
     quote = get_option_quote(pos["ticker"], pos["expiry"],
                              pos["strike"], pos["right"])
-    if quote:
+    if quote and quote.get("mid") is None:
+        # One side only, no last trade (N7): no mid to report, but the bound
+        # below may still prove a level.
+        mid = pnl_pct = None
+        info.update(mid=None, pnl_pct=None, reliable=False)
+    elif quote:
         mid = quote["mid"]
         # A non-positive entry premium makes every percentage rule meaningless.
         # This used to set pnl_pct = 0, which is NOT missing data — it is a
@@ -441,6 +459,31 @@ def check_option_position(pos: dict) -> dict:
     if sl and price_ok and pnl_pct <= -abs(sl):
         return {**info, "exit": True, "reason": "STOP",
                 "detail": f"Premium {pnl_pct:+.1f}% (limit −{abs(sl):.0f}%)"}
+
+    # A ONE-SIDED QUOTE THAT PROVES A LEVEL (review 2026-11-03, N7). The rule
+    # reads the mid. With no bid, the mid lies between ask/2 and the ask, so
+    # an ASK at or under the stop level proves the mid is too: bid 0 / ask
+    # 0.10 on a 1.00 entry is at best −90 %, and it used to be skipped as
+    # "unreliable" in exactly the deepest-loss state (and blocked BACKLOG
+    # 19's STOP-after-THESIS escalation there). With no ask, a BID at or
+    # over the target level proves the mid is above it. The levels are the
+    # rules' own; nothing is inferred beyond the bound.
+    _bid = float((quote or {}).get("bid") or 0)
+    _ask = float((quote or {}).get("ask") or 0)
+    if not price_ok and quote and entry_prem > 0:
+        if sl and _bid <= 0 < _ask and (_ask - entry_prem) / entry_prem * 100 <= -abs(sl):
+            _p = (_ask - entry_prem) / entry_prem * 100
+            info.pop("price_rules_skipped", None)
+            return {**info, "exit": True, "reason": "STOP", "mid": None, "pnl_pct": round(_p, 1),   # the bound, not a stale last
+                    "detail": f"No bid; even the ask {_ask:.2f} is {_p:+.1f}% "
+                              f"(limit −{abs(sl):.0f}%)"}
+        tp_ = rules.get("tp_pct") or 0
+        if tp_ and _ask <= 0 < _bid and (_bid - entry_prem) / entry_prem * 100 >= abs(tp_):
+            _p = (_bid - entry_prem) / entry_prem * 100
+            info.pop("price_rules_skipped", None)
+            return {**info, "exit": True, "reason": "TARGET", "mid": None, "pnl_pct": round(_p, 1),   # the bound, not a stale last
+                    "detail": f"No ask; the bid alone {_bid:.2f} is {_p:+.1f}% "
+                              f"(target +{abs(tp_):.0f}%)"}
 
     # 2. TARGET — premium rose past the take-profit
     tp = rules.get("tp_pct") or 0
@@ -663,6 +706,33 @@ def diagnose(positions: list) -> None:
     print("\n" + "=" * 72)
 
 
+def _price_matters(pos: dict, ev: dict) -> bool:
+    """
+    Whether a missing price costs this position anything (N7). Not when a
+    STOP has already been alerted (nothing outranks it, so no price rule can
+    add an alert), and not past expiry (there is no contract to price; the
+    position is the owner's to log). Every other unpriced position has two
+    of its rules switched off until a price comes back.
+    """
+    if pos.get("exit_alerted") and pos.get("exit_reason") == "STOP":
+        return False
+    dte = ev.get("dte")
+    return not (dte is not None and dte < 0)
+
+
+def format_unpriced(pos: dict, ev: dict) -> str:
+    """The once-a-day notice for a position the monitor could not price (N7)."""
+    contract = (f"{pos['ticker']} {pos['expiry']} "
+                f"${pos['strike']:g} {pos['right'].upper()}")
+    why = ev.get("price_rules_skipped") or "no quote for this contract"
+    return "\n".join([
+        "⚠️ <b>CANNOT PRICE A POSITION</b>", "", f"<b>{contract}</b>", "",
+        f"Why: {why}",
+        "STOP and TARGET could not run; TIME and THESIS still do.",
+        "Check the contract's bid and ask by hand. This notice is sent once a day "
+        "while it lasts."])
+
+
 def test_telegram() -> int:
     print("Sending a test message…")
     ok = send_telegram("✅ <b>Exit monitor test</b>\n\nIf you can read this, "
@@ -708,6 +778,15 @@ def run(args) -> int:
     # the exit status at the end says so.
     attempted = 0
     failed_checks = 0
+    # N7 (review 2026-11-03): a position whose price rules could not run
+    # (no quote, or one not worth acting on) used to reach the Actions log
+    # only, behind a green run, while last_check_epoch kept the coverage
+    # alarm quiet. Counted here, told to the owner once an ET day, and a run
+    # that could price NOTHING that needed it exits nonzero, as a run where
+    # every check raised already did. A failed send exits nonzero too.
+    unmonitored = 0
+    send_failed = 0
+    today_et = datetime.now(ET).strftime("%Y-%m-%d")
 
     for pos in positions:
         # EXIT_SIGNALLED is still watched — see EXIT_PRIORITY. Only a
@@ -749,6 +828,14 @@ def run(args) -> int:
                             tag, ev["mid"], ev["pnl_pct"], ev.get("dte"))
             if not args.dry_run:
                 pos["last_check_epoch"] = now_epoch
+            if (ev.get("mid") is None or ev.get("price_rules_skipped")) and _price_matters(pos, ev):
+                unmonitored += 1
+                if pos.get("unpriced_alerted_on") != today_et:
+                    if send_telegram(format_unpriced(pos, ev), dry_run=args.dry_run):
+                        if not args.dry_run:
+                            pos["unpriced_alerted_on"] = today_et
+                    else:
+                        send_failed += 1
             continue
 
         logger.info("%s EXIT %s — %s", tag, ev["reason"], ev["detail"])
@@ -788,6 +875,12 @@ def run(args) -> int:
                     "exit_detected": datetime.now(ET).strftime("%Y-%m-%d %H:%M ET"),
                     "last_check_epoch": now_epoch,
                 })
+        else:
+            # NOT DELIVERED (N7). The state is left as it was, so the next run
+            # retries, as before; the run now says so instead of ending green.
+            send_failed += 1
+            logger.error("%s — the %s exit alert was NOT delivered; the next run retries.",
+                         tag, ev["reason"])
 
     write_failed = False
     if not args.dry_run:
@@ -809,6 +902,14 @@ def run(args) -> int:
         logger.error("EVERY position check failed (%d of %d): nothing was "
                      "monitored this run. Exiting nonzero so the workflow shows "
                      "it instead of a green run.", failed_checks, attempted)
+        return 1
+    if attempted and unmonitored and failed_checks + unmonitored == attempted:
+        logger.error("NO position that needed a price could be priced (%d of %d): STOP and "
+                     "TARGET ran on nothing this run. Exiting nonzero so the workflow shows "
+                     "it.", unmonitored, attempted)
+        return 1
+    if send_failed:
+        logger.error("%d alert(s) were NOT delivered this run. Exiting nonzero.", send_failed)
         return 1
     if write_failed:
         return 1
@@ -1108,6 +1209,75 @@ def selftest() -> int:
     assert _closed["exit_reason"] == "THESIS" and "exit_history" not in _closed, \
         "only OPEN and EXIT_SIGNALLED are monitored"
     print("scope             : CLOSED positions are not touched")
+
+    # ── N7 (review 2026-11-03): quotes the monitor used to misread ──
+    class _Chain:
+        def __init__(self, rows):
+            self.calls = self.puts = _pd.DataFrame(rows)
+    _real_tk = yf.Ticker
+    def _quote_of(bid, ask, last):
+        class _Tk:
+            def __init__(self, t): pass
+            def option_chain(self, e): return _Chain([{"strike": 10.0, "bid": bid, "ask": ask, "lastPrice": last}])
+        yf.Ticker = _Tk
+        try:
+            return get_option_quote("T", "2099-01-01", 10.0, "CALL")
+        finally:
+            yf.Ticker = _real_tk
+    assert _quote_of(0.60, 0.20, 0) is None, "a crossed quote is not a market"
+    assert _quote_of(0.60, 0.20, 0.40)["reliable"] is False, "crossed with a last trade: unreliable, never a mid"
+    assert _quote_of(0.45, 0.55, 0.5)["reliable"] is True
+    assert _quote_of(0, 0.05, 0) == {"mid": None, "bid": 0.0, "ask": 0.05, "reliable": False, "spread_pct": None}, \
+        "one side and no last trade is still a bound"
+    _pos1 = {"ticker": "T", "expiry": "2099-01-01", "strike": 10.0, "right": "CALL", "entry_premium": 1.0,
+             "rules": {"tp_pct": 200, "sl_pct": 50}}
+    def _ev(q):
+        _g["get_option_quote"] = lambda *a, **k: q
+        _g["get_underlying_state"] = lambda *a, **k: None
+        try:
+            return check_option_position(_pos1)
+        finally:
+            _g["get_option_quote"] = _real_quote
+            _g["get_underlying_state"] = _real_under
+    _e = _ev({"mid": 0.60, "bid": 0.0, "ask": 0.10, "reliable": False, "spread_pct": None})
+    assert _e["exit"] and _e["reason"] == "STOP" and _e["mid"] is None and "even the ask 0.10" in _e["detail"], _e
+    assert _ev({"mid": None, "bid": 0.0, "ask": 0.05, "reliable": False})["reason"] == "STOP"
+    assert not _ev({"mid": None, "bid": 0.0, "ask": 0.60, "reliable": False})["exit"], "an ask above the stop proves nothing"
+    assert _ev({"mid": None, "bid": 3.2, "ask": 0.0, "reliable": False})["reason"] == "TARGET"
+    assert not _ev({"mid": None, "bid": 2.0, "ask": 0.0, "reliable": False})["exit"]
+    print("one-sided quotes  : an ask under the stop proves STOP, a bid over the target proves TARGET; "
+          "a crossed quote is not a market (N7)")
+
+    def _run_full(rows, quote, send_ok=True):
+        d = _P(_tf.mkdtemp()) / "pos.json"
+        d.write_text(json.dumps(rows))
+        msgs = []
+        _g["get_option_quote"] = lambda *a, **k: quote
+        _g["get_underlying_state"] = lambda *a, **k: None
+        _g["send_telegram"] = lambda m, *a, **k: (msgs.append(m) or send_ok)
+        try:
+            rc = run(_ap.Namespace(positions=str(d), diagnose=False, force=True, dry_run=False))
+            return rc, msgs, json.loads(d.read_text())
+        finally:
+            _g["get_option_quote"] = _real_quote
+            _g["get_underlying_state"] = _real_under
+            _g["send_telegram"] = _real_send
+    _open = dict(_base, status="OPEN", exit_alerted=False, exit_reason=None)
+    _rc, _m, _rows = _run_full([dict(_open)], None)
+    assert _rc == 1 and len(_m) == 1 and "CANNOT PRICE" in _m[0] and _rows[0]["unpriced_alerted_on"], (_rc, _m)
+    _rc2, _m2, _ = _run_full(_rows, None)
+    assert _rc2 == 1 and not _m2, "the notice is once an ET day; the run still says nothing was priced"
+    _rc3, _m3, _ = _run_full([dict(_open), dict(_open, id="Y", ticker="OK")],
+                             None)
+    assert _rc3 == 1 and len(_m3) == 2
+    _rc4, _m4, _ = _run_full([dict(_base, exit_reason="STOP")], None)
+    assert _rc4 == 0 and not _m4, "a STOP already alerted: no price rule can add anything, so no notice"
+    _rc5, _m5, _r5 = _run_full([dict(_open)], {"mid": 0.30, "reliable": True, "spread_pct": 3.0}, send_ok=False)
+    assert _rc5 == 1 and len(_m5) == 1 and _r5[0]["status"] == "OPEN", "an undelivered STOP exits nonzero and retries"
+    _rc6, _m6, _ = _run_full([dict(_open)], {"mid": 1.0, "reliable": True, "spread_pct": 3.0})
+    assert _rc6 == 0 and not _m6, "a priced, quiet position is a green run"
+    print("unpriced/undelivered: one notice a day, nonzero when nothing needing a price was priced or "
+          "an alert did not go; a STOP already sent needs no price (N7)")
 
     print("=" * 66)
     print("All self-tests passed.")

@@ -46,6 +46,15 @@ landed in the repo and the removal says so in the commit.
   cycles per arm). By 2026-12-16: rotate both PATs. (Item 42 H1, the
   thesis exit as part of the structure, was decided and built the same
   night.) Retire each line as it lands.
+- **2026-11-03 (item 46, the expert review).** Two corrections and one
+  warning. (1) NOW's time exit is **11-13**, not 11-11: the monitor counts
+  calendar days (11-20 minus 7), as the backtest does. (2) No TIME or
+  expiry alert will come for NOW: once STOP has alerted nothing else does
+  (item 46 D5), so close and log it by hand. (3) **Do not set
+  `TIINGO_API_KEY`** until the fallback is split-adjusted: both workflows
+  already pass the secret, and Tiingo's raw bars defeat the grader's split
+  guard (item 46). Eight owner decisions are listed in item 46 (D1–D8);
+  D1, earnings inside the contract's life, is the one with money on it.
 
 ---
 
@@ -2356,6 +2365,70 @@ from the constant its module owns (`forward_log.GATE_EPISODES`,
 `spread_log.report()` prints the unquoted cycles by `market_reason`, the
 F4 read. `check_post_close_pass_hygiene` (61). The first stamped
 heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
+
+---
+
+## 46. Expert review 2026-11-03 (evening): the alert, the contract, the exit and the record, read as a trader — NINE FIXES BUILT (N1–N9), EIGHT DECISIONS OPEN (D1–D8)
+
+`results/expert_review_2026-11-03.md`. Owner: "be an expert in trading
+stocks/options … strict review … identify any gaps and improve … better
+trade alerts". Five passes (signal-to-alert and grader; contract selection
+and pricing; exit monitor and the app's forms; research-engine look-ahead;
+filters, data and universe), every finding re-checked in code, most
+reproduced. No rule, threshold, level or grading changed; no committed
+number moved. **Headline:** earnings inside the position's life. In the
+record, 17 stops that gapped past −1.3 R cost −41.1 R against a +10.5 R
+total (a handful of events: NOW 10-28, PM ~10-21).
+
+**Built (plain bugs, each pinned and falsified):** **N1** the J1 fill gate
+asks `resolve_signal` itself (it missed the risk floor and the slippage:
+760 of 25,600 grid points disagreed, now 0). **N2** alerts print the move
+already made and the R:R from the price at send; alert rows carry
+`at_send` (WMT 0.24, V 0.65 at the open of 7 graded HQ alerts). **N3**
+DTE from the New York date (`option_chain.et_today`). **N4** the strike
+window is centred on the price at send. **N5** the app's quick-buy
+success/rerun sat inside `except` (refusals read "monitoring"; successes
+allowed a duplicate). **N6** close forms no longer pre-fill the exit fill.
+**N7** the exit monitor tells the owner (once a day) about a position it
+cannot price and exits nonzero when nothing needing a price was priced or
+an alert did not deliver; crossed quotes are refused; a one-sided quote
+that proves STOP or TARGET fires; the persist step runs `always()`.
+**N8** J2's straddle could not fire on NOW (Yahoo drops a release once it
+happens): release dates seen inside the window are remembered 10 days in
+`scanner_state.json` (`EARNINGS:SEEN`); the SPY regime fetch retries an
+empty (throttled) frame; rows and alerts say which tier legs passed
+unchecked (`setup.unchecked`). **N9** the alert says whether the next
+release falls before the contract's 7-DTE exit, before expiry or after.
+Three false comments corrected. Harness 46 selftests / 66 checks, clean.
+
+**Owner decisions (recommendation first):** **D1** gate HQ alerts whose
+next release falls before the contract's 7-DTE exit (built: the warning).
+**D2** name the strike nearest the money among liquid strikes, never above
+the target; add a moneyness leg to the structure (the selector ranks by
+liquidity alone; 8 of 24 delivered alerts had windows above the target).
+**D3** the +200 % take-profit needs the stock to overshoot the alert's
+target (at a 1.3–2.0 ATR capped target the call is +24 % to +73 %): run an
+`option_backtest` arm "exit when the underlying reaches the target" before
+choosing. **D4** withhold when the R:R from the price at send is under 1.0
+(built: the warning). **D5** exits on the bid rather than the mid; an
+expiry reminder after STOP/TARGET (NOW gets no TIME alert). **D6** THESIS
+alerts one session late (no run after 16:00) and the last half hour is
+never checked: a ~15:50 ET dispatch, or re-measure. **D7** the forward
+gate was sized on sd 1.0 R; the record's sd is 1.78 R (episodes ~1.4):
+349 episodes detect ~0.21–0.27 R; amend the stated MDE or enlarge the
+gate. **D8** the pool's top five: record RS, a sector cap, skip
+untradeable names, no alphabetical ranking when SPY is missing.
+
+**Recorded, not fixed:** Tiingo fallback not split-adjusted (P0 if the
+secret is set; do not set it); the revision counter behind item 39's slot
+decision cannot see a signal that appears or vanishes between reads; the
+research engine's NaN-row ADX blanking, truncated look-back on the first 19
+bars, open-beyond-target-then-stop booked −1 R, MaxDD in ticker order,
+overlapping trades under independent CIs (each needs a re-run on the
+frozen bars, fix and re-run as one change); option engine close-only
+marking vs ~13 live polls; inert DTE adequacy check; the exit workflow's
+retry after a rebase conflict; `--diagnose` vs `run()`; hygiene items in
+the review file.
 
 ---
 

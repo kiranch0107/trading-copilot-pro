@@ -26,7 +26,10 @@ That means:
      collapses after earnings (hurting both sides). This is the single largest
      source of error, and it is not small.
   2. NO VOLATILITY SMILE. Real OTM strikes carry different IV than ATM. We
-     model ATM only, which is what the app's strike selection targets anyway.
+     model ATM only (strike = round(the entry open)). The live selector does
+     NOT target ATM: option_chain.get_option_data() ranks the strikes inside
+     a +/-2 ATR window by liquidity alone, so the named strike can sit a few
+     percent either side of the money (review 2026-11-03; the owner's call).
   3. NO EARLY-EXERCISE OR PIN RISK, and dividends are ignored.
   4. FILLS ARE MODELLED AS MID PLUS A FIXED SPREAD COST. Real fills on wide
      contracts are worse and vary with size.

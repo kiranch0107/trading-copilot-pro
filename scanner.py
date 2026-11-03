@@ -194,6 +194,15 @@ PARAMS             = sc.DEFAULTS
 # signal_core.SignalParams instead.
 EARNINGS_BLACKOUT_DAYS = 3   # matches app.py sidebar default
 POST_EARNINGS_DAYS     = 1   # matches app.py sidebar default
+# RELEASE DATES ALREADY SEEN, per ticker (review 2026-11-03, N8): Yahoo's
+# calendar drops a release once it has happened, so the straddle rule (J2)
+# reads this memory beside it. run() binds it to scanner_state.json under
+# this key; market_context.remember_release_dates() keeps and prunes it.
+EARNINGS_STATE_KEY = "EARNINGS:SEEN"
+_EARNINGS_SEEN: dict = {}
+# The dates the last earnings check read for each ticker this run, for the
+# alert's "next earnings" line (N9). Never persisted.
+_EARNINGS_LAST: dict = {}
 ALERT_COOLDOWN_HRS = 4      # per ticker AND direction
 STATE_FILE         = Path("scanner_state.json")
 STATE_MAX_AGE_DAYS = 30     # cooldown stamps older than this are pruned
@@ -410,12 +419,23 @@ def gapped_at_fill(r: dict, open_px, last_px=None) -> str | None:
     alert path never asked: on 2026-10-29 the 11:07 scan alerted NOW's
     10-28 bar with the stock open 27 % below the recorded stop after the
     release, and the 16:09 pass voided the same row. The alert said "buy
-    at 149.85, stop 142.34" of a stock trading at 109. Mirrors the
-    grader's rule on the first bar after the signal bar (`open_px`, the
-    fill) and, when the run has one, the latest price (`last_px`): a stock
-    that opened inside the levels and has since run through them is the
-    same trade gone. Returns the reason to withhold, or None to send.
-    Unreadable prices never withhold (the grader still voids).
+    at 149.85, stop 142.34" of a stock trading at 109. Asked of the first
+    bar after the signal bar (`open_px`, the fill) and, when the run has
+    one, the latest price (`last_px`): a stock that opened inside the
+    levels and has since run through them is the same trade gone. Returns
+    the reason to withhold, or None to send. Unreadable prices never
+    withhold (the grader still voids).
+
+    THE GRADER IS ASKED, NOT COPIED (review 2026-11-03, N1). This used to
+    restate the gap rule as `px <= stop or px >= target` on the raw open.
+    The grader's void has two more legs: the 2 bps slippage on the fill,
+    and the risk floor (grading amendment 2026-10-29, L2), which voids a
+    fill within max($0.05, 0.3 %) of the stop. The floor landed a day
+    before this gate and was never wired into it, so an open in that band
+    (stop 97.50, open 97.55-97.70) was SENT and then voided at 16:09, the
+    exact NOW sequence J1 exists to stop. `_grader_voids_fill()` hands
+    the price to forward_log.resolve_signal() itself, so every leg the
+    grader has, or is amended to have, is the gate's leg too.
     """
     try:
         stop, target = float(r["stop"]), float(r["target"])
@@ -427,13 +447,45 @@ def gapped_at_fill(r: dict, open_px, last_px=None) -> str | None:
             px = float(px)
         except (TypeError, ValueError):
             continue
-        if px != px:                                        # NaN
+        if px != px or px <= 0:                             # NaN, or no price
             continue
-        beyond = (px <= stop or px >= target) if long else (px >= stop or px <= target)
-        if beyond:
-            return (f"{label} {px:.2f} is beyond the {'stop' if (px <= stop if long else px >= stop) else 'target'} "
-                    f"(stop {stop:.2f}, target {target:.2f}) — the grader would void this fill")
+        why = _grader_voids_fill(long, stop, target, px)
+        if why:
+            return (f"{label} {px:.2f} {why} (stop {stop:.2f}, target {target:.2f}) "
+                    f"— the grader would void this fill")
     return None
+
+
+def _grader_voids_fill(long: bool, stop: float, target: float, px: float) -> str | None:
+    """
+    Whether forward_log.resolve_signal() would VOID a fill at `px`
+    (gapped_before_fill, either note), asked of the grader itself on a
+    one-bar probe: a signal bar and one bar after it that opens, trades
+    and closes at `px`. The recorded close and the probe signal bar's
+    close are the same number, so the split check can never fire; the
+    grader reads nothing else of them. None when the grader would take
+    the fill (it then walks the bar, which is not this question).
+    """
+    ref = stop                                          # any positive close; see above
+    row = {"trend": "Bullish" if long else "Bearish", "bar_date": "2000-01-03",
+           "setup": {"price": ref, "stop": stop, "target": target}}
+    bars = [{"date": "2000-01-03", "open": ref, "high": ref, "low": ref, "close": ref},
+            {"date": "2000-01-04", "open": px, "high": px, "low": px, "close": px}]
+    try:
+        v = forward_log.resolve_signal(row, bars, today=date(2000, 1, 4))
+    except Exception:                                   # noqa: BLE001
+        return None
+    if not v or v.get("outcome") != "void" or v.get("reason") != "gapped_before_fill":
+        return None
+    if (px <= stop) if long else (px >= stop):
+        return "is beyond the stop"
+    if (px >= target) if long else (px <= target):
+        return "is beyond the target"
+    d = v.get("detail") or {}
+    if d.get("note") == "fill inside the risk floor":
+        return (f"is inside the risk floor of the stop (risk {d.get('fill_risk', 0):.2f} "
+                f"< floor {d.get('risk_floor', 0):.2f})")
+    return "is within the fill slippage of the target"
 
 
 def fill_probe(raw_df, cdf) -> tuple:
@@ -456,6 +508,45 @@ def fill_probe(raw_df, cdf) -> tuple:
         return float(after.iloc[0]["Open"]), float(after.iloc[-1]["Close"])
     except Exception:                                      # noqa: BLE001
         return None, None
+
+
+def at_send(r: dict, open_px, last_px) -> dict | None:
+    """
+    WHERE THE TRADE STANDS WHEN THE ALERT GOES OUT (review 2026-11-03, N2).
+    Every level in an alert is computed at the signal bar's CLOSE; the
+    alert is sent at 11:07 ET the next session, and the record grades the
+    trade from that session's OPEN. Neither is a price the owner can fill
+    at. In the record's first 7 graded HQ alerts the open alone had moved
+    WMT +0.84 R and V +0.60 R toward the target, leaving R:R 0.24 and 0.65
+    at the fill against the tier's 1.0. This says, in R of the planned
+    risk, how far the stock has already moved, and the R:R from the latest
+    price to the same stop and target. Display and measurement only: it
+    withholds nothing (the fill gate above does that) and changes no level.
+    None without a usable latest price.
+    """
+    try:
+        entry, stop, target = float(r["entry"]), float(r["stop"]), float(r["target"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    long = r.get("trend") == "Bullish"
+    def _px(v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return v if v == v and v > 0 else None
+    o, last = _px(open_px), _px(last_px)
+    now = last if last is not None else o
+    plan = (entry - stop) if long else (stop - entry)
+    if now is None or plan <= 0:
+        return None
+    risk_now = (now - stop) if long else (stop - now)
+    reward_now = (target - now) if long else (now - target)
+    rr_now = (reward_now / risk_now
+              if risk_now >= risk_params.min_risk(now) and reward_now > 0 else None)
+    return {"open": o, "last": last, "moved_r": round(((now - entry) if long else (entry - now)) / plan, 2),
+            "rr_now": None if rr_now is None else round(rr_now, 2),
+            "below_hq": rr_now is None or not sc.gate_rr(rr_now, PARAMS.hq_min_rr)}
 
 
 def withheld_on_bar(signal_key: str | None) -> bool:
@@ -530,6 +621,30 @@ def _yf_download_with_retry(ticker: str, period: str, interval: str) -> pd.DataF
     return None
 
 
+def _yf_download_nonempty(ticker: str, period: str, interval: str) -> pd.DataFrame | None:
+    """
+    The SPY regime's Yahoo leg, retried on an EMPTY frame as well as on a
+    raised rate limit (review 2026-11-03, N8). yfinance 1.x returns an empty
+    frame when throttled instead of raising, so the retry above never ran
+    for it, and one throttled SPY call turned the regime leg off for every
+    alert of the run ("Regime filter disabled"). app.py fixed its copy of
+    this; the scanner's did not. Used for the one fetch that gates a whole
+    run, not per ticker: a throttled pool would otherwise wait out the
+    backoff eighty times.
+    """
+    delay = YF_RETRY_DELAY
+    out = None
+    for attempt in range(YF_RETRY_ATTEMPTS):
+        out = _yf_download_with_retry(ticker, period, interval)
+        if out is not None and not getattr(out, "empty", True):
+            return out
+        if attempt < YF_RETRY_ATTEMPTS - 1:
+            logger.warning("Empty frame for %s (likely throttled); backing off %ss", ticker, delay)
+            time.sleep(delay)
+            delay *= 2
+    return out
+
+
 def get_data(ticker: str) -> pd.DataFrame | None:
     """
     Yahoo first, then data_source's fallback (Tiingo, if TIINGO_API_KEY is
@@ -601,7 +716,7 @@ def fetch_atm_chain(ticker: str, today=None, min_dte: int | None = None) -> dict
     spread arm's expiry rule, results/spread_preregistration.md), and the
     rows carry bid/ask when the chain has them.
     """
-    today = today or pd.Timestamp.today().normalize()
+    today = today or option_chain.et_today()     # ET, not the host clock (N3)
     try:
         stock = yf.Ticker(ticker)
         expiries, delay = None, YF_RETRY_DELAY
@@ -753,7 +868,7 @@ def fetch_chain_data(ticker: str) -> dict | None:
             return None
     if not expiries:
         return None
-    today = pd.Timestamp.today().normalize()
+    today = option_chain.et_today()               # ET, not the host clock (N3)
     out, checked = [], 0
     for exp in expiries:
         if checked >= OPT_MAX_EXPIRIES:
@@ -839,9 +954,35 @@ def check_earnings_blackout(ticker: str, bar_date=None) -> tuple[bool, str]:
     market_context refuses to default it: a host-clock default is the bug this
     repo has already fixed twice, and the runners here are UTC.
     """
+    _today = datetime.now(ET).date()
     return market_context.get_earnings_blackout(
-        ticker, _earnings_calendar, datetime.now(ET).date(),
+        ticker, lambda t: _remembered_calendar(t, _today), _today,
         blackout_days=EARNINGS_BLACKOUT_DAYS, post_days=POST_EARNINGS_DAYS, bar_date=bar_date)
+
+
+def _remembered_calendar(ticker: str, today) -> list:
+    """
+    The calendar's dates plus the releases already seen for `ticker` (N8),
+    via market_context.remember_release_dates(), which owns the window.
+    A failed calendar fetch still returns the remembered dates when there
+    are any (a release seen yesterday is still a release); with none, the
+    failure is raised so the gate says "unavailable", as before.
+    """
+    try:
+        dates = market_context.calendar_dates(_earnings_calendar(ticker))
+    except Exception:                                  # noqa: BLE001
+        mem = market_context.remember_release_dates(_EARNINGS_SEEN, ticker, [], today,
+                                                    blackout_days=EARNINGS_BLACKOUT_DAYS,
+                                                    post_days=POST_EARNINGS_DAYS)
+        _EARNINGS_LAST[ticker] = mem or None
+        if not mem:
+            raise
+        return mem
+    out = market_context.remember_release_dates(_EARNINGS_SEEN, ticker, dates, today,
+                                                blackout_days=EARNINGS_BLACKOUT_DAYS,
+                                                post_days=POST_EARNINGS_DAYS)
+    _EARNINGS_LAST[ticker] = out
+    return out
 
 
 def get_spy_regime() -> dict | None:
@@ -859,8 +1000,7 @@ def get_spy_regime() -> dict | None:
         time.sleep(FETCH_GAP_SEC)
         spy, source = data_source.fetch_daily(
             t, period=period, interval=interval,
-            yahoo_fetch=lambda tt, pp, ii: yf.download(
-                tt, period=pp, interval=ii, progress=False, auto_adjust=False))
+            yahoo_fetch=lambda tt, pp, ii: _yf_download_nonempty(tt, pp, ii))
         if spy is not None and source != "yahoo":
             logger.info("SPY regime: Yahoo unavailable, used %s fallback", source)
         return spy
@@ -969,6 +1109,19 @@ def analyze(df: pd.DataFrame, ticker: str,
     _hq_fail += [n for n, f in (r.get("filters") or {}).items()
                  if not (f or {}).get("pass")]
     _setup["hq_fail"] = _hq_fail
+    # LEGS THAT PASSED UNCHECKED (review 2026-11-03, N8). Both external legs
+    # of the tier fail OPEN: no SPY regime reads "filter disabled" and no
+    # calendar reads "proceed with caution", and both pass. The row now says
+    # which legs were not checked, so a tier reading can tell checked rows
+    # from unchecked ones. Nothing is gated on it.
+    _unchecked = []
+    if PARAMS.spy_regime_on and not spy_regime:
+        _unchecked.append("regime")
+    if market_context.earnings_unknown(((r.get("filters") or {}).get("Earnings Blackout") or {}).get("detail")):
+        _unchecked.append("earnings")
+    _setup["unchecked"] = _unchecked
+    _today_et = datetime.now(ET).date()
+    _next_er = min((d for d in (_EARNINGS_LAST.get(ticker) or []) if d >= _today_et), default=None)
     _hq = bool(r["high_quality"])
     # THE SIGNAL BAR'S DATE, once, for the row and for the alert. The alert
     # prints it so the owner can log the trade against exactly this signal
@@ -1060,6 +1213,8 @@ def analyze(df: pd.DataFrame, ticker: str,
         "bar_date": _bar_date,
         "signal_key": (forward_log.signal_key(ticker, r["trend"], _bar_date)
                        if _bar_date else None),
+        "unchecked": _unchecked,
+        "next_earnings": _next_er.isoformat() if _next_er else None,
     }
 
 def selftest() -> int:
@@ -1107,10 +1262,33 @@ def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
         f"you log the trade as a system signal, so its outcome attaches "
         f"to exactly this signal.",
     ]
+    _now = r.get("at_send")
+    if _now:
+        # N2: the levels above are the signal close's; this is the price now.
+        _px = _now["last"] if _now.get("last") is not None else _now["open"]
+        _o = _now.get("open")
+        _rrn = _now.get("rr_now")
+        lines.append(f"Now {_px:.2f} (open {'?' if _o is None else f'{_o:.2f}'}): "
+                     f"{_now['moved_r']:+.2f} R from the signal close; R:R from here "
+                     f"{'n/a' if _rrn is None else f'{_rrn:.2f}'} (at the close {r['rr']})")
+        if _now.get("below_hq"):
+            lines.append(f"⚠️ R:R from the current price is under the tier's {PARAMS.hq_min_rr:.1f}. "
+                         f"The record grades this signal from today's open, not from your fill.")
 
     # Chain fetch happens here — AFTER the cooldown check — so
     # suppressed alerts cost no API calls.
-    opt = suggest_option(tk, r["price"], r["trend"], r["atr"], r.get("strength", "Normal")) \
+    # THE STRIKE WINDOW IS CENTRED ON THE PRICE AT SEND (review 2026-11-03,
+    # N4). The selector's window is "the ATM window" around the price it is
+    # given, and the measured structure buys at the money AT THE FILL
+    # (option_backtest: strike = round(the entry session's open)). This
+    # passed the signal bar's close: a stock up 4 % by 11:07 was offered the
+    # strike 4 % in the money, and on 10-29 NOW's window around 149.85
+    # named 150 calls with the stock near 110. The latest price the fill
+    # probe read is the centre; the close when the run has none.
+    _now = r.get("at_send") or {}
+    _centre = next((float(v) for v in (_now.get("last"), _now.get("open"))
+                    if v is not None), float(r["price"]))
+    opt = suggest_option(tk, _centre, r["trend"], r["atr"], r.get("strength", "Normal")) \
         if SUGGEST_OPTIONS else None
 
     if opt:
@@ -1137,7 +1315,54 @@ def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
     elif SUGGEST_OPTIONS:
         lines += ["", "📄 No liquid contract found in the 21-45 DTE window "
                       "(spread/volume/OI gates). Check the chain yourself."]
+    _er = earnings_line(r, opt)
+    if _er:
+        lines += ["", _er]
+    _unc = [u for u in (r.get("unchecked") or []) if u != "earnings"]
+    if _unc:
+        lines.append(f"⚠️ Not checked this run: {', '.join(_unc)} (the data was unavailable, "
+                     f"so the leg passed open). Check it before trading.")
     return "\n".join(lines)
+
+
+def earnings_line(r: dict, opt: dict | None) -> str | None:
+    """
+    WHERE THE NEXT RELEASE FALLS AGAINST THE CONTRACT (review 2026-11-03, N9).
+    The blackout looks three days ahead of the alert; the contract is 21-45
+    DTE and the structure holds it to 7 DTE, so most releases inside the
+    position's life pass the gate. In the record, 17 stops that gapped past
+    -1.3 R cost -41 R against a +10.5 R total, clustered on releases (NOW
+    10-28, PM about 10-21). The measured structure priced no event IV and no
+    crush. This says plainly whether the named contract holds through the
+    next release. Display only: it gates nothing (that is the owner's call).
+    """
+    if "earnings" in (r.get("unchecked") or []):
+        return ("⚠️ Earnings date unknown this run: check it before buying. A release "
+                "inside the contract's life is a different bet from the one measured.")
+    ne = r.get("next_earnings")
+    if not ne:
+        return None
+    try:
+        ned = date.fromisoformat(str(ne)[:10])
+    except ValueError:
+        return None
+    n = (ned - datetime.now(ET).date()).days
+    if not opt:
+        return f"Next earnings {ned} ({n}d away)."
+    try:
+        exp = date.fromisoformat(str(opt["expiry"])[:10])
+    except (KeyError, ValueError):
+        return f"Next earnings {ned} ({n}d away)."
+    _dx = int(risk_params.MEASURED_OPTION_STRUCTURE["dte_exit"])
+    out_by = exp - timedelta(days=_dx)
+    if ned <= out_by:
+        return (f"⚠️ Earnings {ned} ({n}d away) is before this contract's {_dx}-DTE exit "
+                f"({out_by}): you would hold long premium THROUGH the release. Its IV is in "
+                f"today's price and comes out after it; the measured structure priced none of it.")
+    if ned <= exp:
+        return (f"Earnings {ned} ({n}d away) falls after the {_dx}-DTE exit ({out_by}) but "
+                f"before expiry: the exit comes first; today's price still carries some event IV.")
+    return f"Next earnings {ned} ({n}d away), after this contract's expiry."
 
 
 def _scan_cfg() -> dict:
@@ -1177,7 +1402,8 @@ def _record_alert(tk: str, r: dict, bucket: str, delivered: bool, header: str,
     if dry_run:
         return
     try:
-        forward_log.record_alert(tk, r["trend"], r.get("bar_date"), bucket, delivered, header)
+        forward_log.record_alert(tk, r["trend"], r.get("bar_date"), bucket, delivered, header,
+                                 at_send=r.get("at_send"))
     except Exception as exc:                           # noqa: BLE001
         logger.warning("%s — alert row failed: %s", tk, exc)
 
@@ -1395,6 +1621,10 @@ def run(args) -> int:
         return 0
 
     state = load_state()
+    global _EARNINGS_SEEN
+    _mem = state.get(EARNINGS_STATE_KEY)
+    _EARNINGS_SEEN = _mem if isinstance(_mem, dict) else {}
+    state[EARNINGS_STATE_KEY] = _EARNINGS_SEEN          # N8: persisted with the state
     _pruned = prune_state(state)
     if _pruned:
         logger.info("state: pruned %d stamp(s) older than %d days",
@@ -1507,6 +1737,7 @@ def run(args) -> int:
                 withheld += 1
                 continue
 
+            r["at_send"] = at_send(r, *fill_probe(df, cdf))
             msg = compose_alert(r, tk)
             logger.info("ALERT %s %s rr=%s", tk, r["trend"], r["rr"])
             _ok = send_alert(msg, dry_run=args.dry_run)
@@ -1631,6 +1862,7 @@ def run(args) -> int:
                 continue
             _hdr = (f"🚨 POOL ALERT (wide universe, HQ tier, RS {r['rs']:+.1f})"
                     if r["rs"] is not None else "🚨 POOL ALERT (wide universe, HQ tier)")
+            r["at_send"] = at_send(r, *fill_probe(frames[tk], pool_cdfs.get(tk)))
             msg = compose_alert(r, tk, header=_hdr)
             logger.info("POOL ALERT %s %s rr=%s rs=%s", tk, r["trend"], r["rr"], r["rs"])
             pool_attempted += 1
@@ -2046,12 +2278,112 @@ def _selftest_body() -> int:
         assert len(_rv_rows()) == 1, "one revision per key"
         _zu = [x for x in forward_log.read_all() if x.get("kind") == "signal" and x["ticker"] == "ZU"]
         assert len(_zu) == 1 and _zu[0]["setup"]["price"] == 100.0, "the recorded row stands; the record is append-only"
+        # N8: the row says which tier legs passed UNCHECKED (no SPY regime here,
+        # so "regime"); with the regime and an unknown calendar, "earnings".
+        assert _zu[0]["setup"]["unchecked"] == ["regime"], _zu[0]["setup"]
+        sc.evaluate = lambda *a, **k: dict(_canned("Bullish"), filters={"Earnings Blackout": {
+            "pass": True, "detail": "No earnings date available — proceed with caution"}})
+        _got = analyze(_frame, "ZW", spy_regime={"regime": "Bullish"})
+        _zw = [x for x in forward_log.read_all() if x.get("kind") == "signal" and x["ticker"] == "ZW"]
+        assert _got["unchecked"] == ["earnings"] and _zw[0]["setup"]["unchecked"] == ["earnings"], (_got, _zw)
+        print("unchecked legs          : a row and its alert say which tier legs passed open (N8)")
         print("bar revision note       : a later read that differs writes one revision row; identical reads none")
     finally:
         sc.evaluate = _real_eval
         globals()["get_weekly_trend"] = _real_wk
         globals()["check_earnings_blackout"] = _real_earn
     print("direction gate          : bearish dropped, bullish still alerts")
+
+    # ── N8: RELEASE DATES SEEN ARE REMEMBERED, through the real gate ──
+    # NOW, 2026-10-27: the calendar shows the 10-28 release (blocked). By
+    # 10-29 11:07 Yahoo has rolled it to next quarter's estimate; the
+    # memory keeps 10-28, so the straddle blocks NOW's 10-28 bar.
+    import datetime as _dtm
+    global _EARNINGS_SEEN
+    _real_cal, _real_dt, _real_seen = _earnings_calendar, datetime, _EARNINGS_SEEN
+    class _Clock:
+        at = None
+        @classmethod
+        def now(cls, tz=None):
+            return cls.at
+    try:
+        _EARNINGS_SEEN = {}
+        globals()["datetime"] = _Clock
+        _Clock.at = _dtm.datetime(2026, 10, 27, 11, 7)
+        globals()["_earnings_calendar"] = lambda t: {"Earnings Date": [_dtm.date(2026, 10, 28)]}
+        assert check_earnings_blackout("NOW", bar_date=_dtm.date(2026, 10, 26))[0] is False
+        assert _EARNINGS_SEEN == {"NOW": ["2026-10-28"]}, _EARNINGS_SEEN
+        _Clock.at = _dtm.datetime(2026, 10, 29, 11, 7)
+        globals()["_earnings_calendar"] = lambda t: {"Earnings Date": [_dtm.date(2027, 1, 27)]}
+        _ok, _why = check_earnings_blackout("NOW", bar_date=_dtm.date(2026, 10, 28))
+        assert _ok is False and "straddle" in _why, (_ok, _why)
+        _EARNINGS_SEEN = {}
+        assert check_earnings_blackout("NOW", bar_date=_dtm.date(2026, 10, 28))[0] is True, \
+            "without the memory the rolled calendar clears it: the 10-29 alert"
+        # a failed fetch still reads what is remembered; with nothing remembered it says unavailable
+        _EARNINGS_SEEN = {"NOW": ["2026-10-28"]}
+        def _boom(t):
+            raise RuntimeError("calendar down")
+        globals()["_earnings_calendar"] = _boom
+        assert check_earnings_blackout("NOW", bar_date=_dtm.date(2026, 10, 28))[0] is False
+        _EARNINGS_SEEN = {}
+        _ok, _why = check_earnings_blackout("NOW", bar_date=_dtm.date(2026, 10, 28))
+        assert _ok is True and "unavailable" in _why, _why
+    finally:
+        globals()["_earnings_calendar"] = _real_cal
+        globals()["datetime"] = _real_dt
+        _EARNINGS_SEEN = _real_seen
+    # run() binds the memory to the state and saves it with the state
+    _stt: dict = {}
+    _saved_rs = {k: globals()[k] for k in ("load_state", "save_state", "WATCHLIST", "get_spy_regime", "pool_due",
+                                           "get_data")}
+    try:
+        globals()["get_data"] = lambda tk: None             # offline: grading fetches nothing
+        globals()["load_state"] = lambda: _stt
+        globals()["save_state"] = lambda st: None
+        globals()["WATCHLIST"] = []
+        globals()["get_spy_regime"] = lambda: None
+        globals()["pool_due"] = lambda st: False
+        import argparse as _apm
+        run(_apm.Namespace(force=True, dry_run=False))
+        assert isinstance(_stt.get(EARNINGS_STATE_KEY), dict) and _EARNINGS_SEEN is _stt[EARNINGS_STATE_KEY], _stt
+    finally:
+        globals().update(_saved_rs)
+        _EARNINGS_SEEN = _real_seen
+    print("earnings memory         : a release seen before Yahoo drops it still blocks the straddle; "
+          "persisted in the scanner state (N8)")
+
+    # ── N8: the SPY regime's Yahoo leg retries an EMPTY frame ──
+    _real_dl, _real_delay = _yf_download_with_retry, YF_RETRY_DELAY
+    _calls = []
+    try:
+        globals()["YF_RETRY_DELAY"] = 0
+        globals()["_yf_download_with_retry"] = lambda t, p, i: (
+            _calls.append(1) or (_pd.DataFrame() if len(_calls) < 3 else _pd.DataFrame({"Close": [1.0]})))
+        _out = _yf_download_nonempty("SPY", "2y", "1d")
+        assert len(_calls) == 3 and not _out.empty, "two empty frames, then data: three calls"
+    finally:
+        globals()["_yf_download_with_retry"] = _real_dl
+        globals()["YF_RETRY_DELAY"] = _real_delay
+    _sr = _src_text = Path(__file__).read_text(encoding="utf-8", errors="replace")
+    _gs = _sr[_sr.find("def get_spy_regime("):_sr.find("def control_bars(")]
+    assert "_yf_download_nonempty(" in _gs, "get_spy_regime must fetch through the empty-frame retry"
+    print("SPY regime retry        : an empty (throttled) frame is retried, not read as no regime (N8)")
+
+    # ── N9: the alert says where the next release falls against the contract ──
+    _o = {"expiry": "2026-12-04"}
+    _Clock2 = type("C", (), {"now": staticmethod(lambda tz=None: _dtm.datetime(2026, 11, 3, 11, 7))})
+    _real_dt2 = datetime
+    try:
+        globals()["datetime"] = _Clock2
+        assert "THROUGH the release" in earnings_line({"next_earnings": "2026-11-12"}, _o)
+        assert "after the 7-DTE exit" in earnings_line({"next_earnings": "2026-11-30"}, _o)
+        assert "after this contract's expiry" in earnings_line({"next_earnings": "2027-01-28"}, _o)
+        assert "unknown" in earnings_line({"unchecked": ["earnings"]}, _o)
+        assert earnings_line({}, _o) is None and earnings_line({"next_earnings": "2026-11-12"}, None).startswith("Next earnings")
+    finally:
+        globals()["datetime"] = _real_dt2
+    print("earnings line           : before the 7-DTE exit, before expiry, after expiry, unknown (N9)")
 
     # ── EVERY SIGNAL MUST REACH THE FORWARD LOG, INCLUDING THE SKIPS ──
     # A log of only the alerts that went out describes what the filters let
@@ -2425,12 +2757,43 @@ def _selftest_body() -> int:
             _g["get_data"] = lambda tk: _with_fill(100.0, 101.0)    # a fill inside the levels
             run(_ap2.Namespace(force=True, dry_run=False))
             assert len(_sentk) == 1, "a fill inside the levels is alerted"
+            # THE PRICE AT SEND (review 2026-11-03, N2): the alert prints where the
+            # stock is now against the signal close's levels, and the alert row
+            # carries the same numbers; nothing is withheld on them.
+            assert "Now 101.00 (open 100.00): +0.50 R from the signal close; R:R from here 1.67" in _sentk[0] \
+                and "under the tier" not in _sentk[0], _sentk[0]
+            _as = [r for r in forward_log.read_all(_tmpl) if r["kind"] == "alert" and r["delivered"]][-1].get("at_send")
+            assert _as == {"open": 100.0, "last": 101.0, "moved_r": 0.5, "rr_now": 1.67, "below_hq": False}, _as
+            _w = at_send({"trend": "Bullish", "entry": 100.0, "stop": 97.5, "target": 103.18}, 102.1, 102.3)
+            assert _w["below_hq"] and _w["rr_now"] == 0.18 and _w["moved_r"] == 0.92, _w
+            assert at_send({"trend": "Bullish", "entry": 100.0, "stop": 97.5, "target": 103.18}, None, None) is None \
+                and at_send({"trend": "Bullish"}, 100.0, 101.0) is None, "no price, or no levels, prints nothing"
+            assert "under the tier's 1.0" in compose_alert({**_hq(_fr, "AAA"), "at_send": _w}, "AAA")
+            # N4: the contract's strike window is centred on the price at send,
+            # the close only when the run has none.
+            _centres = []
+            _g["suggest_option"] = lambda tk, px, *a, **k: _centres.append(px)
+            compose_alert({**_hq(_fr, "AAA"), "at_send": _w}, "AAA")
+            compose_alert({**_hq(_fr, "AAA"), "at_send": {**_w, "last": None}}, "AAA")
+            compose_alert(_hq(_fr, "AAA"), "AAA")
+            assert _centres == [102.3, 102.1, 100.0], _centres
+            _g["suggest_option"] = lambda *a, **k: None
+            print("price at send            : the alert prints the move already made and the R:R from "
+                  "the latest price, warns under the tier's R:R, and the alert row carries it (N2)")
             assert gapped_at_fill({"trend": "Bearish", "stop": 102.0, "target": 94.0}, 103.0) and \
                 gapped_at_fill({"trend": "Bearish", "stop": 102.0, "target": 94.0}, 100.0, 93.0) and \
                 gapped_at_fill({"trend": "Bearish", "stop": 102.0, "target": 94.0}, 100.0, 100.0) is None and \
                 gapped_at_fill({"trend": "Bullish", "stop": 98.0, "target": 106.0}, None, None) is None and \
                 gapped_at_fill({"trend": "Bullish", "stop": 98.0, "target": 106.0}, float("nan")) is None and \
                 gapped_at_fill({"trend": "Bullish"}, 50.0) is None, "the short side mirrors; unreadable prices never withhold"
+            # THE GRADER IS ASKED, NOT COPIED (review 2026-11-03, N1): an open
+            # inside the risk floor of the stop, or within the fill slippage of
+            # the target, is a fill the grader voids; the restated rule sent both.
+            _rf = {"trend": "Bullish", "stop": 97.5, "target": 105.0}
+            assert "risk floor" in (gapped_at_fill(_rf, 97.6) or "") and \
+                "slippage" in (gapped_at_fill(_rf, 104.99) or "") and gapped_at_fill(_rf, 97.8) is None and \
+                "risk floor" in (gapped_at_fill(_rf, 100.0, 97.55) or "") and gapped_at_fill(_rf, 0.0) is None, \
+                "the gate withholds exactly what the grader voids: the risk floor and the slippage too (N1)"
             assert fill_probe(_fr, _fr) == (None, None), "a frame ending on the signal bar has no fill yet"
             print("fill check before alert : a next open beyond the stop, or a last print beyond the target, "
                   "withholds the alert and records one NOT SENT row; a fill inside sends (J1)")

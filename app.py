@@ -31,7 +31,7 @@ from rate_limit import (
     RATE_LIMITER as _rl, RATE_LIMITER_SLOW as _rl_slow,
     is_rate_limit_error as _is_rate_limit_error,
 )
-from option_chain import get_option_data, _fetch_chain_with_retry, _OPT_MAX_EXPIRIES
+from option_chain import get_option_data, _fetch_chain_with_retry, _OPT_MAX_EXPIRIES, et_today
 
 
 def _bridge_secrets_to_env(*names: str) -> None:
@@ -1123,7 +1123,7 @@ def check_manual_contract(ticker: str, right: str, strike: float,
 
     # ── B. The contract itself ──
     try:
-        dte = (pd.Timestamp(expiry) - pd.Timestamp.today().normalize()).days
+        dte = (pd.Timestamp(expiry) - et_today()).days   # ET, not the host clock (N3)
     except Exception:
         out["error"] = f"Could not parse expiry {expiry!r} (use YYYY-MM-DD)"
         return out
@@ -2165,6 +2165,13 @@ with TAB_STOCK:
                                                 # refused by journal_store (F4; BACKLOG 32):
                                                 # say why and keep the form
                                                 st.error(f"Not logged: {_qve}")
+                                              else:
+                                                # LOGGED: close the form and say so (review
+                                                # 2026-11-03, N5). These four lines sat inside
+                                                # the except: a refusal flashed "now
+                                                # monitoring", and a success showed nothing and
+                                                # left Confirm live, so a second click logged a
+                                                # duplicate position monitored twice.
                                                 st.session_state[f"qbuy_open_{_qkey}"] = False
                                                 st.success(
                                                     f"Logged {ticker} {opt['expiry']} "
@@ -2319,20 +2326,31 @@ with TAB_POSITIONS:
                                f"\\${p['exit_premium']:.2f} "
                                f"({p.get('exit_pnl_pct', 0):+.1f}%) · "
                                f"detected {p.get('exit_detected','')}")
+                # NO DEFAULT FILL (review 2026-11-03, N6). This pre-filled the
+                # monitor's mid at detection, which can be days old (NOW's 0.11
+                # while the contract traded near 0.01), or the entry premium: a
+                # click-through logged a fill that never happened. The entry form
+                # refuses a default for the same reason. Empty until typed; 0 is
+                # a real fill (an option that expired worthless).
                 fill = st.number_input(
                     "Your actual fill premium (per share)", min_value=0.0, step=0.01,
-                    value=float(p.get("exit_premium") or p["entry_premium"]),
+                    value=None, placeholder="type the price you sold at",
                     key=f"fill_{p['id']}")
-                pnl = (fill - p["entry_premium"]) * 100 * float(p.get("contracts") or 0)
-                st.caption(f"P&L at that fill: **\\${pnl:+,.0f}** "
-                           f"on {p.get('contracts')} contract(s)")
+                if fill is not None:
+                    pnl = (fill - p["entry_premium"]) * 100 * float(p.get("contracts") or 0)
+                    st.caption(f"P&L at that fill: **\\${pnl:+,.0f}** "
+                               f"on {p.get('contracts')} contract(s)")
                 default_oc = 0 if p.get("exit_reason") == "TARGET" else 1
                 oc = st.radio("Outcome", ["WIN","LOSS","BREAKEVEN"], horizontal=True,
                               index=default_oc, key=f"oc_{p['id']}")
                 nt = st.text_input("Notes", key=f"nt_{p['id']}")
                 _ct = trade_time_input(f"cl_{p['id']}", "Closed at")
-                if st.button("📓 Close & log to journal", type="primary",
-                             key=f"close_{p['id']}"):
+                _close_clicked = st.button("📓 Close & log to journal", type="primary",
+                                           key=f"close_{p['id']}")
+                if _close_clicked and fill is None:
+                    st.error("Type the price you actually sold at first: the journal "
+                             "records your fill, not the monitor's quote.")
+                elif _close_clicked:
                     _cres = close_position(p["id"], fill, oc, nt, closed_at=_ct)
                     if _cres.get("ok"):
                         st.success(f"{p['ticker']} closed and logged.")
@@ -2386,14 +2404,17 @@ with TAB_POSITIONS:
                     st.session_state[f"closing_{p['id']}"] = True
                 if st.session_state.get(f"closing_{p['id']}"):
                     mf = st.number_input("Exit fill premium (per share)",
-                                         min_value=0.0, step=0.01,
-                                         value=float(p["entry_premium"]),
+                                         min_value=0.0, step=0.01, value=None,   # N6: no default fill
+                                         placeholder="type the price you sold at",
                                          key=f"mf_{p['id']}")
                     mo = st.radio("Outcome", ["WIN","LOSS","BREAKEVEN"],
                                   horizontal=True, key=f"mo_{p['id']}")
                     mn = st.text_input("Notes", key=f"mn_{p['id']}")
                     _mt = trade_time_input(f"mc_{p['id']}", "Closed at")
-                    if st.button("Confirm close", type="primary", key=f"cf_{p['id']}"):
+                    _cf_clicked = st.button("Confirm close", type="primary", key=f"cf_{p['id']}")
+                    if _cf_clicked and mf is None:
+                        st.error("Type the price you actually sold at first.")
+                    elif _cf_clicked:
                         _cres = close_position(p["id"], mf, mo, mn, closed_at=_mt)
                         if _cres.get("ok"):
                             st.session_state.pop(f"closing_{p['id']}", None)

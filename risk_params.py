@@ -352,7 +352,9 @@ LONGS_ONLY = True
 
 # THE MEASURED OPTION STRUCTURE, and the only one a SIGNAL trade may be logged
 # under (BACKLOG 32, decision 1, owner 2026-10-28: "trade the measured
-# structure or do not trade"). option_backtest measured 21-45 DTE at entry,
+# structure or do not trade"). option_backtest measured a 30-DTE ATM entry
+# (every results/option_* run; 21-45 is the live acceptance window around it,
+# review 2026-11-03),
 # +200% / -50% on the premium, out at 7 DTE (the sweep's rows; the live rules
 # the monitor enforces). The journal review of 2026-10-13 found ten of
 # thirteen trades entered under 21 DTE and none run to +200%: the structure
