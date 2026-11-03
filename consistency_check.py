@@ -2415,10 +2415,15 @@ def check_signal_key_round_trip() -> None:
         js.load_journal = lambda: list(mem["jrn"])
         js.save_journal = lambda d: mem.__setitem__("jrn", list(d))
         key = fl.signal_key("NVDA", "Bullish", "2026-09-10")
-        pos = js.open_option_position("NVDA", "CALL", 250.0, "2026-11-20", 1, 3.0,
+        # DATED, never the wall clock (review 2026-11-03 M1): this fixture
+        # used to open a 2026-11-20 expiry with no `traded_at`, so the
+        # structure check dated the entry TODAY and the fixture fell under
+        # the 21-DTE floor on 2026-10-31 — the check went red by calendar.
+        pos = js.open_option_position("NVDA", "CALL", 250.0, "2026-10-16", 1, 3.0,
                                       {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7,
                                        "max_hold_bars": 20, "invalidate_ema": True},
-                                      source="signal", signal_key=key)
+                                      source="signal", signal_key=key,
+                                      traded_at="2026-09-11 10:00 ET")
         js.close_position(pos["id"], 4.5, "WIN")
     finally:
         for k, v in saved.items():
@@ -3149,6 +3154,34 @@ def check_alert_once_per_bar() -> None:
     print("  the same signal bar is never alerted twice: both loops read the delivered alert rows by key")
 
 
+def check_fixtures_never_read_the_clock() -> None:
+    """
+    Review 2026-11-03 M1. A signal-trade fixture that omits `traded_at`
+    has its entry dated by the wall clock, so a fixed expiry drifts out of
+    the 21-45 DTE structure and the check goes red by calendar (it did,
+    on 2026-10-31, in check_signal_key_round_trip). Every call that opens
+    a signal-sourced position in this file's and journal_store's selftest
+    must pass `traded_at=` (in the call or in the kwargs dict it builds).
+    """
+    import re
+    for path in ("consistency_check.py", "journal_store.py"):
+        src = Path(path).read_text(encoding="utf-8", errors="replace")
+        for m in re.finditer(r"open_option_position\(", src):
+            if src[max(0, m.start() - 4):m.start()].endswith("def "):
+                continue
+            # the call's argument text, to its closing parenthesis
+            i, depth = m.end(), 1
+            while depth and i < len(src):
+                depth += {"(": 1, ")": -1}.get(src[i], 0); i += 1
+            call = src[m.end():i - 1]
+            if "**" in call:                      # kwargs dict built above the call
+                call = src[max(0, m.start() - 1200):m.start()] + call
+            if 'source="signal"' in call or "source='signal'" in call:
+                assert "traded_at=" in call, \
+                    f"{path}: a signal-trade fixture must date its entry with traded_at= (line {src.count(chr(10), 0, m.start()) + 1})"
+    print("  every signal-trade fixture dates its entry: no selftest can go red by calendar")
+
+
 def check_fill_gate_and_blackout_bar() -> None:
     """
     Review 2026-10-30 J1/J2 (owner: "go with J1 and J2 as well"). J1: both
@@ -3659,6 +3692,7 @@ CHECKS = [
     ("risk floor single-sourced (review 10-29 L2)", check_risk_floor_single_sourced),
     ("HQ episodes re-anchored at the F cut (G1)",  check_hq_episodes_reanchored),
     ("fill gate before alert, blackout vs bar (J1/J2)", check_fill_gate_and_blackout_bar),
+    ("signal-trade fixtures never read the clock (M1)", check_fixtures_never_read_the_clock),
 ]
 
 

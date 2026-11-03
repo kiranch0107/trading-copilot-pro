@@ -29,17 +29,19 @@ landed in the repo and the removal says so in the commit.
   2027-01-06, both rotated in the last week of December 2026) live on in the
   scheduler item's "FORCING FUNCTION — TWO PATs" paragraph.
 - **2026-10-30 (item 43): close the NOW position** (EXIT_SIGNALLED since
-  09:30 ET, STOP −56 % at 14:00) and log it. ~~J1/J2 (the gap-at-the-fill
+  09:30 ET, STOP −56 % at 14:00; expiry 11-20, the structure's 7-DTE exit
+  on 11-11) and log it. ~~J1/J2 (the gap-at-the-fill
   alert gate, the blackout against the signal bar's date) before Monday
-  11-02's first scan~~ (merged 2026-10-30; first binds at the 11-02 11:07
-  scan — read that log for "withheld at the fill" on the Done line and
-  any "NOT SENT" row). Retire when the position is logged.
+  11-02's first scan~~ (merged 2026-10-30; ~~first binds at the 11-02 11:07
+  scan — read that log~~ read 11-03, item 45: XOM withheld at the fill on
+  11-02, one NOT SENT row). Retire when the position is logged.
 - **2026-10-29 (items 39–42), the reads that are due.** ~~2026-10-30 11:07
   ET: the first `revision` rows, the key-based alert suppression against
   the seven delivered alerts of 10-29, whether CME alerts~~ (read 10-30,
   item 43: no revision due, the 4-hour stamp held at 13:07, CME alerted).
   ~2026-11-06: a week of revision rows, then the post-close
-  slot decision (item 39). 2026-11-09/10: the first IV premium rows.
+  slot decision (item 39) — interim read 11-03 (item 45 M5): 2 of 7
+  live rows revised, max 0.24 %, nothing decided differently. 2026-11-09/10: the first IV premium rows.
   2026-11-30: the first spread settlements (first reading at 6 graded
   cycles per arm). By 2026-12-16: rotate both PATs. (Item 42 H1, the
   thesis exit as part of the structure, was decided and built the same
@@ -2357,6 +2359,35 @@ heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
 
 ---
 
+## 45. Progress review 2026-11-03: J1 withheld its first alert, the key check held twice, the first revision rows, a check gone red by calendar — ASSESSED 2026-11-03, ONE FIX BUILT
+
+`results/progress_review_2026-11-03.md`. Monday 11-02 11:07: ACN alerted
+(live, bar 10-30); pool CVX, TMO, CME, V, MA delivered and **XOM
+withheld at the fill** (last price 181.65 under the 182.29 stop; one
+NOT SENT row; no cap slot consumed). The first two revision rows (ACN
++0.24 % price, Normal → Strong; PFE a cent): no decision or tag moved.
+15:07 on 11-02 and 11-03: the 4-hour stamp lapsed by ~20 s and the
+key check (L1) held ACN both days — the dispatches are four hours apart
+to the second, so the key check now carries the afternoon suppression.
+Today: ACN (live), CVX 1.25, ABBV 1.02, CME, UNP (pool; R:R ≥ 1.0 is
+the tier's leg, by the rules). Universe turned over 11-01 (LLY, TSLA,
+CRWD, AMGN, ADI in; NOW, PFE, TMO, CME, ABNB out). DST ended 11-01; the
+ET dispatcher held and the guard discarded the UTC backups. NOW still
+open (owner's). **M1 DONE:** `check_signal_key_round_trip` opened a
+signal position with a fixed 2026-11-20 expiry and no `traded_at`, so
+the entry was dated by the wall clock and the fixture fell under the
+21-DTE floor on 10-31 — red since Saturday, unseen because nothing ran
+CI. Fixture dated; check 66 `check_fixtures_never_read_the_clock`
+requires `traded_at=` on every signal-trade fixture in
+consistency_check and journal_store (66 checks). **M5 (interim for the
+~11-06 decision, item 39):** 2 of 7 post-close live rows revised across
+three re-reads, max price move 0.24 %, nothing decided differently;
+recommendation: keep the slot unless a re-read ever moves a decision or
+the tag. Pending: close NOW (expiry 11-20, 7-DTE exit 11-11); ~11-06 slot
+decision; 11-09/10 IV premium rows; 11-30 spread; 12-16 PATs.
+
+---
+
 ## 44. Progress review 2026-10-30 (late): J1/J2 live, the 15:07 run, NOW at −72 % — ASSESSED 2026-10-30, TWO SMALL FIXES BUILT
 
 `results/progress_review_2026-10-30_late.md`. The 15:07 ET scan was the
@@ -2631,8 +2662,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 65 cross-module
-  invariants (65 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 66 cross-module
+  invariants (66 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on

@@ -909,7 +909,7 @@ def selftest() -> int:
         assert _nv["rules"]["max_hold_bars"] == 0 and _nv["rules"]["invalidate_ema"] is True, _nv["rules"]
         try:
             open_option_position("PFE", "CALL", 29.0, "2026-10-16", 1, 0.5,
-                                 _rules, source="signal")
+                                 _rules, source="signal", traded_at="2026-09-11 10:00 ET")
             raise AssertionError("a signal-sourced position without a signal key must be refused (F4)")
         except ValueError as _e:
             assert "signal_key" in str(_e), _e
