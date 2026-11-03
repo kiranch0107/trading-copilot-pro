@@ -39,9 +39,9 @@ landed in the repo and the removal says so in the commit.
   ET: the first `revision` rows, the key-based alert suppression against
   the seven delivered alerts of 10-29, whether CME alerts~~ (read 10-30,
   item 43: no revision due, the 4-hour stamp held at 13:07, CME alerted).
-  ~2026-11-06: a week of revision rows, then the post-close
-  slot decision (item 39) — interim read 11-03 (item 45 M5): 2 of 7
-  live rows revised, max 0.24 %, nothing decided differently. 2026-11-09/10: the first IV premium rows.
+  ~~~2026-11-06: a week of revision rows, then the post-close
+  slot decision (item 39)~~ (decided 11-03: keep the slot; the clocks
+  line prints the number that would reopen it). 2026-11-09/10: the first IV premium rows.
   2026-11-30: the first spread settlements (first reading at 6 graded
   cycles per arm). By 2026-12-16: rotate both PATs. (Item 42 H1, the
   thesis exit as part of the structure, was decided and built the same
@@ -2383,7 +2383,7 @@ consistency_check and journal_store (66 checks). **M5 (interim for the
 ~11-06 decision, item 39):** 2 of 7 post-close live rows revised across
 three re-reads, max price move 0.24 %, nothing decided differently;
 recommendation: keep the slot unless a re-read ever moves a decision or
-the tag. Pending: close NOW (expiry 11-20, 7-DTE exit 11-11); ~11-06 slot
+the tag — **decided 2026-11-03, keep the slot (item 39)**. Pending: close NOW (expiry 11-20, 7-DTE exit 11-11); ~11-06 slot
 decision; 11-09/10 IV premium rows; 11-30 spread; 12-16 PATs.
 
 ---
@@ -2604,7 +2604,7 @@ mismatches, the engines AGREE; run 1's note retired. No verdict changed.
 
 ---
 
-## 39. The first alerts (2026-10-29): seven genuine by the rules; the post-close pass records a bar Yahoo has not finished; a journal key named the alert's day — ASSESSED 2026-10-29, TWO FIXES, ONE DECISION OPEN
+## 39. The first alerts (2026-10-29): seven genuine by the rules; the post-close pass records a bar Yahoo has not finished; a journal key named the alert's day — ASSESSED 2026-10-29, TWO FIXES, DECIDED 2026-11-03 (keep the slot)
 
 The 11:07 ET scan of 2026-10-29, the first under `4ddd12a3095f`, sent the
 record's first seven alerts on bar 2026-10-28: ACN and NOW (live), AMGN,
@@ -2643,6 +2643,16 @@ the tag or decision; `report()` prints the count. A revision is never
 taken, open or an episode. One check (60). The first morning scan under it
 is 2026-10-30 11:07 ET; read `report()`'s "bar revisions" after a week
 and decide the slot on the measured size.
+**DECIDED 2026-11-03 (owner: "go with the slot decision as well, keep the
+slot").** Three re-reads in (item 45 M5): 2 of 7 post-close live rows
+revised, the largest price move 0.24 %, no decision or HQ tag moved.
+The 16:20 ET slot stays; the revision rows keep being written as the
+measurement; the clocks line on every post-close log now prints
+"bar revisions N (M moved a decision or the tag; the slot moves if that
+is ever > 0)", so the one number that reopens this is in every log
+rather than in a report someone has to run. Pinned in
+`check_post_close_pass_hygiene` (the clocks line reads
+`revisions_tag_moved`) and the scanner selftest.
 
 **Fixed 2026-10-29 (owner: "go ahead and fix per your recommendation").**
 The first NOW trade was logged with signal bar 2026-10-29 (the alert's
