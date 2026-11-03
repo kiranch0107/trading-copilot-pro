@@ -498,16 +498,61 @@ def fill_probe(raw_df, cdf) -> tuple:
     its Close is the latest print. (None, None) when the frame ends on the
     signal bar (the post-close pass: nothing has traded since, the fill is
     tomorrow's open and cannot be checked yet).
+
+    A FALLBACK FRAME HAS NO FORMING BAR (review 2026-11-03; owner: "fix the
+    Tiingo end-of-day fill gate gap as well"). Tiingo's daily bars are end
+    of day, so on a day Yahoo failed the frame ends on yesterday's bar
+    during the session, and the fill gate (J1), the R:R at send (D4) and
+    the strike's centre (N4) had nothing to read: the alert went out
+    unchecked. In session, a frame whose bars came from a fallback reads
+    the session so far from data_source.fetch_tiingo_quote() instead,
+    fetched once per frame. fill_unchecked() says when even that is missing.
     """
     try:
         last_sig = sc._bar_dates(cdf, None).max()
         raw_dates = sc._bar_dates(raw_df, None)
         after = raw_df[raw_dates > last_sig]
         if after.empty:
-            return None, None
+            q = _fallback_quote(raw_df)
+            return (q["open"], q["last"]) if q else (None, None)
         return float(after.iloc[0]["Open"]), float(after.iloc[-1]["Close"])
     except Exception:                                      # noqa: BLE001
         return None, None
+
+
+def _is_fallback(raw_df) -> bool:
+    """Whether a frame's bars came from a provider other than Yahoo."""
+    src = getattr(raw_df, "attrs", {}).get("source")
+    return src is not None and src != "yahoo"
+
+
+def _fallback_quote(raw_df) -> dict | None:
+    """The live quote standing in for a fallback frame's missing forming bar,
+    in session only, memoised on the frame (one request per name a run)."""
+    if not _is_fallback(raw_df) or not is_market_open():
+        return None
+    if "_quote" not in raw_df.attrs:
+        raw_df.attrs["_quote"] = data_source.fetch_tiingo_quote(
+            str(raw_df.attrs.get("ticker") or ""), datetime.now(ET).date())
+    return raw_df.attrs["_quote"]
+
+
+def fill_unchecked(raw_df, cdf) -> str | None:
+    """
+    The reason to withhold an alert whose fill CANNOT be checked: its bars
+    came from a fallback provider (end of day, no forming bar) and the live
+    quote that stands in for it was unavailable too. Sending it would skip
+    the fill gate, the R:R at send and the strike's centre on exactly the
+    day the primary data failed. A Yahoo frame is not judged here: its
+    unreadable prices keep J1's rule (never withhold; the grader still
+    voids). None to go on.
+    """
+    if not _is_fallback(raw_df):
+        return None
+    if fill_probe(raw_df, cdf) != (None, None):
+        return None
+    return (f"no intraday price to check the fill: the bars came from the "
+            f"{raw_df.attrs.get('source')} fallback (end of day) and its live quote was unavailable")
 
 
 def at_send(r: dict, open_px, last_px) -> dict | None:
@@ -722,6 +767,10 @@ def get_data(ticker: str) -> pd.DataFrame | None:
     if _why:
         logger.warning("%s — bars refused: %s", ticker, _why)
         return None
+    # Where the bars came from rides on the frame (review 2026-11-03): a
+    # fallback provider's bars are end of day, so the alert path asks for a
+    # live quote instead of a forming bar (fill_probe, fill_unchecked).
+    df.attrs["source"], df.attrs["ticker"] = source, ticker
     return df
 
 
@@ -1277,6 +1326,7 @@ def analyze(df: pd.DataFrame, ticker: str,
                        if _bar_date else None),
         "unchecked": _unchecked,
         "next_earnings": _next_er.isoformat() if _next_er else None,
+        "data_source": getattr(df, "attrs", {}).get("source"),
     }
 
 def selftest() -> int:
@@ -1395,6 +1445,9 @@ def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
     _er = earnings_line(r, opt)
     if _er:
         lines += ["", _er]
+    if r.get("data_source") not in (None, "yahoo"):
+        lines.append(f"⚠️ Yahoo was unavailable: these bars are {r['data_source']}'s (end of day) "
+                     f"and the price now is its IEX quote, one venue's view of the tape.")
     _unc = [u for u in (r.get("unchecked") or []) if u != "earnings"]
     if _unc:
         lines.append(f"⚠️ Not checked this run: {', '.join(_unc)} (the data was unavailable, "
@@ -1872,7 +1925,8 @@ def run(args) -> int:
                 continue
 
             r["at_send"] = at_send(r, *fill_probe(df, cdf))
-            _hold = withhold_before_send(r, datetime.now(ET).date())      # D4, D1
+            _hold = (fill_unchecked(df, cdf)                              # fallback, no quote
+                     or withhold_before_send(r, datetime.now(ET).date()))  # D4, D1
             if _hold:
                 _withhold(tk, r, "live", _hold, args.dry_run)
                 withheld += 1
@@ -2017,7 +2071,8 @@ def run(args) -> int:
             _hdr = (f"🚨 POOL ALERT (wide universe, HQ tier, RS {r['rs']:+.1f})"
                     if r["rs"] is not None else f"🚨 POOL ALERT (wide universe, HQ tier, ranked by {_by})")
             r["at_send"] = at_send(r, *fill_probe(frames[tk], pool_cdfs.get(tk)))
-            _hold = (withhold_before_send(r, datetime.now(ET).date())      # D4, D1
+            _hold = (fill_unchecked(frames[tk], pool_cdfs.get(tk))        # fallback, no quote
+                     or withhold_before_send(r, datetime.now(ET).date())   # D4, D1
                      or pool_gate(r, tk, _sector_n))                    # D8
             if _hold:
                 _withhold(tk, r, "pool", _hold, args.dry_run)
@@ -3014,6 +3069,55 @@ def _selftest_body() -> int:
             assert "Expiry kept to" not in compose_alert(dict(_hq(_fr, "AAA"), next_earnings=(
                 _today4 + _dt4.timedelta(days=60)).isoformat()), "AAA"), "a cap past 45 DTE does not bind"
             _g["suggest_option"] = lambda *a, **k: None
+            # ── THE FALLBACK'S MISSING FORMING BAR (owner 2026-11-03: "fix the
+            # Tiingo end-of-day fill gate gap as well"). A Tiingo frame ends on
+            # the signal bar in session; the IEX quote stands in for the bar.
+            _fb = _fr.copy()
+            _fb.attrs.update(source="tiingo", ticker="AAA")
+            _quotes, _qcalls = {"q": None}, []
+            _real_q, _real_mo = data_source.fetch_tiingo_quote, _g["is_market_open"]
+            try:
+                data_source.fetch_tiingo_quote = lambda tk, today, _get=None: (_qcalls.append(tk) or _quotes["q"])
+                _g["is_market_open"] = lambda now=None: True
+                _g["compute"] = lambda df: df
+                _g["analyze"] = lambda df, tk, **k: dict(_hq(df, tk), data_source=df.attrs.get("source"))
+                # a quote gapped past the stop: withheld by the fill gate, as on Yahoo's bars
+                _quotes["q"] = {"open": 97.0, "last": 97.5}
+                _tmpl.write_text(""); del _sentk[:]
+                _g["get_data"] = lambda tk: _fb.copy()
+                run(_ap2.Namespace(force=True, dry_run=False))
+                _nsf = [r for r in forward_log.read_all(_tmpl) if r["kind"] == "alert"]
+                assert not _sentk and "fill (next open) 97.00 is beyond the stop" in _nsf[0]["header"], _nsf
+                # inside the levels: sent, with the price now and the fallback said
+                _quotes["q"] = {"open": 100.0, "last": 101.0}
+                _tmpl.write_text("")
+                run(_ap2.Namespace(force=True, dry_run=False))
+                assert len(_sentk) == 1 and "Now 101.00 (open 100.00)" in _sentk[0] \
+                    and "Yahoo was unavailable: these bars are tiingo's" in _sentk[0], _sentk
+                # no quote either: withheld, never sent unchecked
+                _quotes["q"] = None
+                _tmpl.write_text(""); del _sentk[:]
+                run(_ap2.Namespace(force=True, dry_run=False))
+                _nsq = [r for r in forward_log.read_all(_tmpl) if r["kind"] == "alert"]
+                assert not _sentk and "no intraday price to check the fill" in _nsq[0]["header"], _nsq
+                # one quote request per frame, however many questions are asked of it
+                _f1 = _fb.copy(); del _qcalls[:]
+                _quotes["q"] = {"open": 100.0, "last": 101.0}
+                fill_probe(_f1, _f1); fill_probe(_f1, _f1); fill_unchecked(_f1, _f1)
+                assert _qcalls == ["AAA"], _qcalls
+                # a YAHOO frame with no forming bar keeps J1's rule (send) and asks for no quote
+                _y = _fr.copy(); _y.attrs.update(source="yahoo", ticker="AAA"); del _qcalls[:]
+                assert fill_probe(_y, _y) == (None, None) and fill_unchecked(_y, _y) is None and not _qcalls
+                # out of session there is nothing to quote
+                _g["is_market_open"] = lambda now=None: False
+                _f2 = _fb.copy(); del _qcalls[:]
+                assert fill_probe(_f2, _f2) == (None, None) and not _qcalls
+            finally:
+                data_source.fetch_tiingo_quote = _real_q
+                _g["is_market_open"] = _real_mo
+                _g["analyze"] = _hq
+            print("fallback fill check     : on a Tiingo day the IEX quote is the forming bar (gate, R:R at send, "
+                  "strike centre); no quote -> withheld; a Yahoo frame keeps J1's rule")
             print("D4 / D1 before send     : R:R under 1.0 at send is withheld; a release before every "
                   "contract's exit is withheld; a later one caps the expiry; unknown sends (owner 2026-11-03)")
             print("price at send            : the alert prints the move already made and the R:R from "

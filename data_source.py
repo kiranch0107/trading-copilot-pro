@@ -55,9 +55,12 @@ it; the exit monitor's THESIS read a halved close as a break of EMA20; and the
 scanner's indicators spanned the step. A response without splitFactor is
 refused, never passed through raw.
 
-Still true of the fallback, and not fixed here: Tiingo is end of day only, so
-on a fallback day there is no forming bar (the alert's fill gate and its
-price-at-send line have no intraday price), and the post-close pass may read
+Tiingo's daily bars are end of day only, so on a fallback day there is no
+forming bar. fetch_tiingo_quote() supplies the session's open and last price
+from Tiingo's IEX endpoint instead, for the scanner's fill gate and its
+price-at-send line (review 2026-11-03; owner: "fix the Tiingo end-of-day fill
+gate gap as well"); with no quote either, the scanner withholds the alert
+rather than send it unchecked. Still true: the post-close pass may read
 yesterday's bar if Tiingo has not published today's yet.
 """
 
@@ -80,6 +83,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 TIINGO_BASE = "https://api.tiingo.com/tiingo/daily"
+TIINGO_IEX = "https://api.tiingo.com/iex"
 TIINGO_KEY_ENV = "TIINGO_API_KEY"
 
 
@@ -198,6 +202,57 @@ def fetch_tiingo(ticker: str, period: str = "1y", interval: str = "1d",
         return None
 
 
+def fetch_tiingo_quote(ticker: str, today, _get=None) -> dict | None:
+    """
+    The session so far for `ticker`, from Tiingo's IEX endpoint
+    (TIINGO_IEX/<ticker>), as {"open", "last", "ts"}: the stand-in for the
+    forming bar Tiingo's end-of-day prices do not have. `today` is the ET
+    date; a quote stamped on any other day is stale and refused. `last` is
+    tngoLast (Tiingo's last price), else last; `open` is the session's open
+    when the endpoint has one yet (None early in the session). One venue's
+    view (IEX), close to the consolidated tape on a liquid large cap, not
+    identical to it: good enough to tell a fill gapped past a level, which
+    is the question it answers. None with no key, an HTTP error, an
+    unreadable or stale quote, or no positive price. Field names follow
+    Tiingo's IEX documentation; this sandbox cannot reach the API, so the
+    parsing is tested on its documented shape.
+    """
+    api_key = os.environ.get(TIINGO_KEY_ENV)
+    if not api_key:
+        return None
+    if requests is None and _get is None:
+        return None
+    get = _get or requests.get
+    try:
+        resp = get(f"{TIINGO_IEX}/{ticker.strip().lower()}", params={"token": api_key}, timeout=10)
+        if resp.status_code != 200:
+            logger.warning("Tiingo IEX %s: HTTP %s", ticker, resp.status_code)
+            return None
+        body = resp.json()
+        row = body[0] if isinstance(body, list) and body else (body if isinstance(body, dict) else None)
+        if not row:
+            return None
+        ts = pd.Timestamp(row.get("timestamp") or row.get("lastSaleTimestamp"))
+        ts = (ts.tz_localize("UTC") if ts.tzinfo is None else ts).tz_convert("America/New_York")
+        if ts.date() != today:
+            logger.info("Tiingo IEX %s: quote is from %s, not today — refused", ticker, ts.date())
+            return None
+
+        def _pos(v):
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                return None
+            return v if v == v and v > 0 else None
+        last = _pos(row.get("tngoLast")) or _pos(row.get("last"))
+        if last is None:
+            return None
+        return {"open": _pos(row.get("open")), "last": last, "ts": ts.isoformat()}
+    except Exception as e:                                  # noqa: BLE001
+        logger.warning("Tiingo IEX quote failed for %s: %s", ticker, e)
+        return None
+
+
 def split_adjust(df: pd.DataFrame, split_factor: pd.Series) -> pd.DataFrame:
     """
     Split-only adjustment, the convention of Yahoo's auto_adjust=False bars.
@@ -282,6 +337,7 @@ def selftest() -> int:
     def _unexpected_get(*a, **kw):
         calls.append((a, kw)); raise AssertionError("should not be called")
     assert fetch_tiingo("TGT", _get=_unexpected_get) is None
+    assert fetch_tiingo_quote("TGT", date.today(), _get=_unexpected_get) is None
     assert not calls, "no TIINGO_API_KEY must mean no network call at all"
     print("  no key              : returns None, makes NO network call")
 
@@ -345,6 +401,28 @@ def selftest() -> int:
         assert list(_odd["Close"]) == [10.0, 10.0], "a missing or zero factor is no split"
         print("  splits              : prices / and volume x the later factors (Yahoo's "
               "auto_adjust=False basis); no splitFactor -> refused")
+
+        # THE SESSION SO FAR, from IEX (review 2026-11-03): today's quote is
+        # the forming bar; yesterday's is stale; tngoLast before last.
+        from datetime import date as _d
+        class _Q:
+            status_code = 200
+            def __init__(self, ts, **kw): self._r = {"ticker": "tgt", "timestamp": ts, **kw}
+            def json(self): return [self._r]
+        _today = _d(2026, 11, 4)
+        q = fetch_tiingo_quote("TGT", _today, _get=lambda *a, **k: _Q(
+            "2026-11-04T16:07:12.000Z", open=101.0, tngoLast=102.3, last=102.25))
+        assert q == {"open": 101.0, "last": 102.3, "ts": q["ts"]} and q["ts"].startswith("2026-11-04T11:07"), q
+        assert fetch_tiingo_quote("TGT", _today, _get=lambda *a, **k: _Q(
+            "2026-11-03T20:59:00.000Z", open=99.0, tngoLast=100.0)) is None, "yesterday's quote is stale"
+        assert fetch_tiingo_quote("TGT", _today, _get=lambda *a, **k: _Q(
+            "2026-11-04T14:31:00.000Z", open=None, last=101.5)) == \
+            {"open": None, "last": 101.5, "ts": "2026-11-04T09:31:00-05:00"}, "no open yet; last stands in"
+        assert fetch_tiingo_quote("TGT", _today, _get=lambda *a, **k: _Q(
+            "2026-11-04T16:07:12.000Z", open=101.0, tngoLast=0, last=None)) is None, "no price, no quote"
+        assert fetch_tiingo_quote("TGT", _today, _get=lambda *a, **k: _RespBad()) is None
+        print("  IEX quote           : today's open/last as the forming bar; stale, empty or "
+              "failed -> None")
     finally:
         os.environ.pop(TIINGO_KEY_ENV, None)
 

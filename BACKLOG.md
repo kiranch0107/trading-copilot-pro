@@ -73,6 +73,10 @@ landed in the repo and the removal says so in the commit.
   owner's choice; know that on a day the fallback is used, Tiingo has no
   intraday bar, so the alert's fill gate and its price-at-send line cannot
   run and those alerts go out without them.
+- **2026-11-03 (Tiingo end-of-day gap fixed).** Correction to the note just
+  above: on a fallback day the alert's fill gate and price-at-send line now
+  read Tiingo's IEX quote; with no quote the alert is withheld (a `NOT SENT`
+  row says why) rather than sent unchecked.
 - **2026-11-03 (D3, D7 decided).** **Owed on the laptop (frozen bars):** the
   D3 run, two commands in `results/option_target_exit_preregistration.md`
   (`option_backtest.py --config live --tp 200 --sl 50 --dte-exit 7
@@ -2538,9 +2542,21 @@ factors after each bar; a response without `splitFactor` is refused. The
 module docstring, which said raw bars matched Yahoo "at all", is corrected.
 `check_tiingo_split_adjusted` (69) drives a 2:1 split after the fill through
 `fetch_tiingo()` into `resolve_signal()`: void `split_in_window`, as on
-Yahoo's bars (the same bars read raw grade −19.8 R). Still true of the
-fallback: end of day only, so on a fallback day the fill gate and the
-price-at-send line have no intraday price.
+Yahoo's bars (the same bars read raw grade −19.8 R). **The end-of-day gap,
+FIXED 2026-11-03 (owner: "fix the Tiingo end-of-day fill gate gap as
+well"):** Tiingo's daily bars have no forming bar, so on a Yahoo-outage day
+the fill gate (J1), the R:R at send (D4) and the strike's centre (N4) had
+nothing to read and the alert went out unchecked. `scanner.get_data()` tags
+each frame with its source; in session `fill_probe()` reads a fallback
+frame's session so far from `data_source.fetch_tiingo_quote()` (Tiingo's IEX
+endpoint: today's open and last, a stale quote refused, one request per
+frame); `fill_unchecked()` withholds the alert ("no intraday price to check
+the fill") when even that is missing, asked first in both alerting loops; a
+Yahoo frame keeps J1's rule. The alert says when its bars were the
+fallback's. Pinned in the scanner selftest (through `run()`) and
+`check_tiingo_split_adjusted`; seven mutations falsified. Not reachable from
+this sandbox: the IEX field names are Tiingo's documented ones, parsed on
+that shape.
 
 **Recorded, not fixed:** the revision counter behind item 39's slot
 decision cannot see a signal that appears or vanishes between reads; the
