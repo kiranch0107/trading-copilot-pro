@@ -1084,7 +1084,8 @@ def control_bars(df: pd.DataFrame, bar_date) -> list:
 
 def analyze(df: pd.DataFrame, ticker: str,
             spy_regime: dict | None = None,
-            tally: dict | None = None, bucket: str = "live") -> dict | None:
+            tally: dict | None = None, bucket: str = "live",
+            rs: float | None = None) -> dict | None:
     """
     Thin adapter over signal_core.evaluate().
 
@@ -1177,6 +1178,10 @@ def analyze(df: pd.DataFrame, ticker: str,
     if market_context.earnings_unknown(((r.get("filters") or {}).get("Earnings Blackout") or {}).get("detail")):
         _unchecked.append("earnings")
     _setup["unchecked"] = _unchecked
+    if rs is not None:
+        # D8 (review 2026-11-03): the pool ranks its alerts by RS; the number
+        # is on the row so the cut can be audited (it never was).
+        _setup["rs"] = rs
     _today_et = datetime.now(ET).date()
     _next_er = min((d for d in (_EARNINGS_LAST.get(ticker) or []) if d >= _today_et), default=None)
     _hq = bool(r["high_quality"])
@@ -1347,9 +1352,12 @@ def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
                     if v is not None), float(r["price"]))
     _cap = earnings_cap_dte(r, datetime.now(ET).date())
     _cap = _cap if (_cap is not None and _cap < OPT_MAX_DTE) else None      # D1: binding only
-    opt = suggest_option(tk, _centre, r["trend"], r["atr"], r.get("strength", "Normal"),
-                         target=r.get("target"), max_dte=_cap) \
-        if SUGGEST_OPTIONS else None
+    if "contract" in r:                  # D8: the pool loop fetched it to check tradeability
+        opt = r["contract"]
+    else:
+        opt = suggest_option(tk, _centre, r["trend"], r["atr"], r.get("strength", "Normal"),
+                             target=r.get("target"), max_dte=_cap) \
+            if SUGGEST_OPTIONS else None
 
     if opt:
         lines += [
@@ -1475,6 +1483,54 @@ def _record_alert(tk: str, r: dict, bucket: str, delivered: bool, header: str,
                                  at_send=r.get("at_send"))
     except Exception as exc:                           # noqa: BLE001
         logger.warning("%s — alert row failed: %s", tk, exc)
+
+
+def sector_of(tk: str) -> str | None:
+    """universe.SECTORS' label for `tk` (D8), or None: an unlabelled name is
+    not grouped with others (every pool candidate is labelled; the universe
+    selftest asserts it)."""
+    try:
+        import universe as _u
+        return _u.SECTORS.get(tk)
+    except Exception:                                  # noqa: BLE001
+        return None
+
+
+def pool_gate(r: dict, tk: str, sector_n: dict) -> str | None:
+    """
+    D8 (review 2026-11-03; owner: "go with D8"). The pool's top five used to
+    be filled by RS alone: on 10-30 V, MA and CME went out, three Financials,
+    while the universe itself caps a sector at two; and a name with no
+    contract inside the structure's gates (UNP: tightest spread 13.2 %) took
+    a slot it could not use. Asked after the D4/D1 hold, before the send:
+    a sector already at universe.MAX_PER_SECTOR attempted pool alerts this
+    session is withheld; then the contract the alert would name is fetched
+    (compose_alert reuses it) and a name with none is withheld. Neither
+    takes a cap slot, so the next name by rank is tried. The reason, or
+    None to send.
+    """
+    try:
+        import universe as _u
+        _cap = int(_u.MAX_PER_SECTOR)
+    except Exception:                                  # noqa: BLE001
+        _cap = 0
+    sec = sector_of(tk)
+    if sec and _cap > 0 and sector_n.get(sec, 0) >= _cap:
+        return (f"sector cap: {sector_n[sec]} {sec} pool alert(s) already this session "
+                f"(at most {_cap}, the universe's own cap)")
+    if SUGGEST_OPTIONS:
+        _now = r.get("at_send") or {}
+        _centre = next((float(v) for v in (_now.get("last"), _now.get("open")) if v is not None),
+                       float(r["price"]))
+        _c = earnings_cap_dte(r, datetime.now(ET).date())
+        _c = _c if (_c is not None and _c < OPT_MAX_DTE) else None
+        opt = suggest_option(tk, _centre, r["trend"], r["atr"], r.get("strength", "Normal"),
+                             target=r.get("target"), max_dte=_c)
+        if not opt:
+            return ("no contract passes the structure's gates (spread, volume, open interest, "
+                    "DTE window, moneyness, target)")
+        r["contract"] = opt
+    return None
 
 
 def _withhold(tk: str, r: dict, bucket: str, why: str, dry_run: bool) -> None:
@@ -1905,26 +1961,41 @@ def run(args) -> int:
                 except Exception:                      # noqa: BLE001
                     _bar = None
                 pool_scanned += 1
+                _rs_tk = relative_strength(df, bench)     # D8: recorded on the row
                 r = analyze(cdf, tk, spy_regime=spy_regime,
                             tally=pool_bars.get(_bar) if _bar else None,
-                            bucket="pool")
+                            bucket="pool", rs=_rs_tk)
                 _record_pullback(tk, df, cdf, spy_regime, "pool", pullback_tally)
                 if r:
-                    r["rs"] = relative_strength(df, bench)
+                    r["rs"] = _rs_tk
                     pool_hq.append(r)
             except Exception as e:                     # noqa: BLE001
                 logger.exception("pool %s failed: %s", tk, e)
                 pool_failed.append(f"{tk} ({type(e).__name__})")
         # RANK BY RELATIVE STRENGTH, alert the top POOL_ALERT_CAP. The rest
         # are already recorded by analyze(); they are named here, not sent.
-        pool_hq.sort(key=lambda x: (x["rs"] is None, -(x["rs"] or 0.0), x["ticker"]))
+        # D8 (review 2026-11-03): with no benchmark every RS is None and the
+        # five were the first five ALPHABETICALLY. Then the order is the
+        # record's own declared rank (forward_log.rank_score, H1': ADX, then
+        # R:R, then ticker), and the alert says which ranking chose it.
+        _by = "RS" if any(x["rs"] is not None for x in pool_hq) else "ADX (RS unavailable)"
+        if _by == "RS":
+            pool_hq.sort(key=lambda x: (x["rs"] is None, -(x["rs"] or 0.0), x["ticker"]))
+        else:
+            pool_hq.sort(key=lambda x: forward_log.rank_score(
+                {"ticker": x["ticker"], "setup": {"hq_fail": [], "adx": x.get("adx"), "rr": x.get("rr")}}),
+                reverse=True)
         pool_hq_n = len(pool_hq)
+        _sector_n: dict = {}        # D8: pool alerts attempted per sector this session
         pool_attempted = 0          # THE CAP BOUNDS ATTEMPTS, not deliveries: on a
-        for r in pool_hq:           # failed day the five by RS are tried, not all six
+        for _rank, r in enumerate(pool_hq, 1):   # failed day the five by RS are tried, not all six
             tk = r["ticker"]
             if pool_attempted >= POOL_ALERT_CAP:
                 logger.info("pool: %s %s is HQ but beyond the cap of %d — "
                             "recorded, not alerted", tk, r["trend"], POOL_ALERT_CAP)
+                # D8: the cut is on the record (one NOT SENT row per key)
+                _withhold(tk, r, "pool", f"beyond the pool cap of {POOL_ALERT_CAP} (rank {_rank} "
+                                         f"of {pool_hq_n} by {_by})", args.dry_run)
                 continue
             if recently_alerted(state, tk, r["trend"]):
                 logger.info("pool: %s %s qualifies but alerted within %dh — "
@@ -1944,9 +2015,10 @@ def run(args) -> int:
                 withheld += 1
                 continue
             _hdr = (f"🚨 POOL ALERT (wide universe, HQ tier, RS {r['rs']:+.1f})"
-                    if r["rs"] is not None else "🚨 POOL ALERT (wide universe, HQ tier)")
+                    if r["rs"] is not None else f"🚨 POOL ALERT (wide universe, HQ tier, ranked by {_by})")
             r["at_send"] = at_send(r, *fill_probe(frames[tk], pool_cdfs.get(tk)))
-            _hold = withhold_before_send(r, datetime.now(ET).date())      # D4, D1
+            _hold = (withhold_before_send(r, datetime.now(ET).date())      # D4, D1
+                     or pool_gate(r, tk, _sector_n))                    # D8
             if _hold:
                 _withhold(tk, r, "pool", _hold, args.dry_run)
                 withheld += 1
@@ -1954,6 +2026,7 @@ def run(args) -> int:
             msg = compose_alert(r, tk, header=_hdr)
             logger.info("POOL ALERT %s %s rr=%s rs=%s", tk, r["trend"], r["rr"], r["rs"])
             pool_attempted += 1
+            _sector_n[sector_of(tk)] = _sector_n.get(sector_of(tk), 0) + 1
             _ok = send_alert(msg, dry_run=args.dry_run)
             _record_alert(tk, r, "pool", _ok, "POOL ALERT", args.dry_run)
             if _ok:
@@ -2376,6 +2449,11 @@ def _selftest_body() -> int:
         _zw = [x for x in forward_log.read_all() if x.get("kind") == "signal" and x["ticker"] == "ZW"]
         assert _got["unchecked"] == ["earnings"] and _zw[0]["setup"]["unchecked"] == ["earnings"], (_got, _zw)
         print("unchecked legs          : a row and its alert say which tier legs passed open (N8)")
+        # D8: a pool row carries the RS the cut ranks on; a row without one has none
+        sc.evaluate = lambda *a, **k: _canned("Bullish")
+        analyze(_frame, "ZR", spy_regime={"regime": "Bullish"}, bucket="pool", rs=4.2)
+        _zr = [x for x in forward_log.read_all() if x.get("kind") == "signal" and x["ticker"] == "ZR"]
+        assert _zr[0]["setup"]["rs"] == 4.2 and "rs" not in _zw[0]["setup"], (_zr, _zw)
         print("bar revision note       : a later read that differs writes one revision row; identical reads none")
     finally:
         sc.evaluate = _real_eval
@@ -3370,7 +3448,7 @@ def _selftest_body() -> int:
             return fr
         _rs = {"P1": 3.0, "P2": 9.0, "P3": -2.0, "P4": 12.0, "P5": 0.5, "P6": 7.0}
         _buckets: dict = {}
-        def _fake_analyze4(df, tk, spy_regime=None, tally=None, bucket="live"):
+        def _fake_analyze4(df, tk, spy_regime=None, tally=None, bucket="live", rs=None):
             _buckets[tk] = bucket
             if tk in _rs:                       # six HQ signals in the pool
                 if tally is not None:
@@ -3408,7 +3486,12 @@ def _selftest_body() -> int:
             _g["load_state"] = lambda: dict(_state4)
             _g["WATCHLIST"] = ["AAA"]
             _g["FETCH_GAP_SEC"] = 0
-            _g["suggest_option"] = lambda *a, **k: None
+            # D8: a pool name with no contract is withheld, so the harness names one
+            _opt4 = {"right": "CALL", "strike": 100.0, "expiry": "2026-12-18", "dte": 30, "mid": 2.05,
+                     "bid": 2.0, "ask": 2.1, "spread_pct": 4.9, "volume": 50, "oi": 500, "cost": 205.0,
+                     "pct_account": 4.1, "within_budget": True, "budget": 250.0, "dte_adequate": True,
+                     "days_needed": 12, "moneyness_pct": 0.0}
+            _g["suggest_option"] = lambda *a, **k: dict(_opt4)
             _pool7 = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]
             _g["pool_tickers"] = lambda wl: list(_pool7)
             _g["relative_strength"] = lambda df, bench, lookback=None: _rs.get(df.attrs.get("tk"))
@@ -3435,7 +3518,10 @@ def _selftest_body() -> int:
                 and _scans4[1]["n_signals"] == 6, _scans4[1]
             assert forward_log.last_scan(_tmpl4)["tickers"] == ["AAA"], \
                 "the coverage heartbeat is the LIVE scan row, not the pool's"
-            _alr = [r for r in _rows4 if r["kind"] == "alert"]
+            _alr = [r for r in _rows4 if r["kind"] == "alert" and r["delivered"]]
+            _cut = [r for r in _rows4 if r["kind"] == "alert" and not r["delivered"]]
+            assert [(a["ticker"], a["header"]) for a in _cut] == [
+                ("P3", "NOT SENT: beyond the pool cap of 5 (rank 6 of 6 by RS)")], (_cut, "D8: the cut is recorded")
             assert [a["ticker"] for a in _alr] == ["P4", "P2", "P6", "P1", "P5"] and \
                 all(a["delivered"] and a["bucket"] == "pool" and a["header"] == "POOL ALERT"
                     and a["key"] is None for a in _alr), (
@@ -3537,13 +3623,51 @@ def _selftest_body() -> int:
             assert sum(1 for t in _fetched if t in _pool7) == 7 and POOL_STATE_KEY not in _state4, \
                 "undelivered pool alerts must not stamp the day"
             assert not any(k.endswith(":Bullish") for k in _state4), "no cooldown on a failed send"
-            _failed_rows = [r for r in forward_log.read_all(_tmpl4) if r["kind"] == "alert" and not r["delivered"]]
+            _failed_rows = [r for r in forward_log.read_all(_tmpl4) if r["kind"] == "alert" and not r["delivered"]
+                            and r["header"] == "POOL ALERT"]
             assert len(_failed_rows) == 5, (len(_failed_rows), "a failed delivery is recorded as such")
             globals()["send_alert"] = lambda m, dry_run=False: (_sent4.append(m) or True)
             _fetched.clear(); _sent4.clear()
             run(_ns())
             assert sum(1 for t in _fetched if t in _pool7) == 7 and POOL_STATE_KEY in _state4 \
                 and len([m for m in _sent4 if m.startswith("🚨 POOL ALERT")]) == 5, "delivered: stamped"
+            # ── D8 (owner 2026-11-03): THE SECTOR CAP AND A TRADEABLE CONTRACT ──
+            # V, MA, CME, JPM, GS are Financials; UNP has no contract in the gates.
+            # By RS: V MA CME UNP XOM ABBV JPM GS CVX. Two Financials go, the
+            # other three are held at the sector cap, UNP has no contract; none
+            # of the four takes a slot, so XOM, ABBV and CVX fill the five.
+            _rs8 = {"V": 9.0, "MA": 8.0, "CME": 7.0, "UNP": 6.0, "XOM": 5.0, "ABBV": 4.0,
+                    "JPM": 3.0, "GS": 2.0, "CVX": 1.0}
+            _rs.clear(); _rs.update(_rs8)
+            _pool7[:] = list(_rs8)
+            _g["suggest_option"] = lambda tk, *a, **k: None if tk == "UNP" else dict(_opt4)
+            _state4.clear(); _sent4.clear()
+            _tmpl4.write_text("")
+            run(_ns())
+            _sent8 = [m.splitlines()[1].split()[0] for m in _sent4 if m.startswith("🚨 POOL ALERT")]
+            assert _sent8 == ["V", "MA", "XOM", "ABBV", "CVX"], _sent8
+            _ns8 = {r["ticker"]: r["header"] for r in forward_log.read_all(_tmpl4)
+                    if r["kind"] == "alert" and not r["delivered"]}
+            assert _ns8["CME"].startswith("NOT SENT: sector cap: 2 Financials") and \
+                _ns8["JPM"].startswith("NOT SENT: sector cap") and _ns8["GS"].startswith("NOT SENT: sector cap") \
+                and _ns8["UNP"].startswith("NOT SENT: no contract") and set(_ns8) == {"CME", "JPM", "GS", "UNP"}, _ns8
+            # ── D8: NO BENCHMARK, NO RS: ranked by the record's own H1' order (ADX, then R:R) ──
+            _adx8 = {"V": 31.0, "MA": 45.0, "CME": 38.0, "UNP": 50.0, "XOM": 33.0, "ABBV": 41.0,
+                     "JPM": 30.5, "GS": 36.0, "CVX": 44.0}
+            _real_fa = _g["analyze"]
+            _g["analyze"] = lambda df, tk, **k: (dict(_real_fa(df, tk, **k), adx=_adx8[tk])
+                                                 if _real_fa(df, tk, **k) else None)
+            _g["relative_strength"] = lambda df, bench, lookback=None: None
+            _state4.clear(); _sent4.clear()
+            run(_ns())
+            _sent9 = [m.splitlines()[1].split()[0] for m in _sent4 if m.startswith("🚨 POOL ALERT")]
+            # by ADX: UNP 50 (no contract, no slot), MA 45, CVX 44, ABBV 41, CME 38 (the
+            # second Financial), GS 36 (a third: sector cap), XOM 33: five.
+            assert _sent9 == ["MA", "CVX", "ABBV", "CME", "XOM"], _sent9
+            assert all("ranked by ADX (RS unavailable)" in m.splitlines()[0]
+                       for m in _sent4 if m.startswith("🚨 POOL ALERT")), _sent4[0].splitlines()[0]
+            print("pool D8                 : at most 2 a sector, an untradeable name takes no slot, "
+                  "the cut is recorded; with no SPY the five rank by ADX, not the alphabet")
         finally:
             _g.update(_saved)
             pullback_signal.evaluate_pullback = _real_pb

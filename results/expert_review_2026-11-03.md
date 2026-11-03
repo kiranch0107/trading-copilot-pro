@@ -143,8 +143,22 @@ the sector cap and the untradeable skip.
   the rules say; `--diagnose` reports the monitor's own verdict.
 
 The forward record is untouched by all four (the intake note of
-2026-11-03 in `forward_record_preregistration.md` says so); D3, D6, D7 and
-D8 remain the owner's.
+2026-11-03 in `forward_record_preregistration.md` says so).
+
+## Decided 2026-11-03, later (owner: "go with D6 and D8 as well") — built
+
+- **D6** built: from 35 minutes before the close (13:00 on a half day) the
+  thesis exit reads the live price against an EMA20 that includes it, a
+  stand-in for the close the measured exit leaves at. The existing 15:30
+  run is inside the window; earlier runs read settled closes only. A
+  15:45 ET backup schedule is added; a 15:45 slot on the external
+  dispatcher is the reliable version (the owner's setting).
+- **D8** built: at most two pool alerts a sector a session (the
+  universe's own cap); a name with no tradeable contract is withheld and
+  takes no slot; with no SPY benchmark the five rank by ADX then R:R (the
+  record's declared rank), not the alphabet; RS and the cut are recorded.
+
+D3 and D7 remain the owner's.
 
 ## Recorded, not fixed
 

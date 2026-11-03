@@ -159,6 +159,33 @@ hold between `at_send()` and the send) and `check_journal_hygiene` (every
 app logging path passes the underlying's price; both selector callers pass
 the target).
 
+**Note 2026-11-03, later (BACKLOG 46; owner: "go with D6 and D8 as
+well") — the pool's five and the thesis exit's clock; no row kind,
+reading, rule, threshold, tag or fingerprint changes.** *D8, the pool's
+top five* (refining the amendment of 2026-10-13, which stays: at most five
+a session, ranked by relative strength). Asked after the fill gate and the
+D4/D1 hold, a pool name is withheld (one `NOT SENT` row, no cap slot) when
+its sector already has `universe.MAX_PER_SECTOR` (2) attempted pool alerts
+this session, the universe's own cap (10-30: V, MA and CME, three
+Financials), or when no contract passes the structure's gates (UNP,
+tightest spread 13.2 %); the next name by rank is tried. With no benchmark
+(every RS None) the five were the first five alphabetically; they are now
+ranked by the record's own declared order (`forward_log.rank_score`, H1':
+ADX, then R:R) and the alert says so. Every pool signal row carries its
+`rs` (`setup.rs`), and a name beyond the cap leaves a `NOT SENT: beyond the
+pool cap` row with its rank, so the cut can be audited. `summary()` counts
+the new reasons (`pool_cap`, `sector_cap`, `no_contract`). *D6* changes the
+exit monitor, not the record: inside 35 minutes before the close (13:00 on
+a half day) the thesis exit reads the live price against an EMA20 that
+includes it, as a stand-in for the close the measured exit leaves at;
+earlier runs read settled closes only. Enforcement: `scanner.py
+--selftest` (the pool harness: two a sector, an untradeable name takes no
+slot, the cut recorded, the no-SPY rank; RS on the row),
+`exit_monitor.py --selftest` (D6: the window's edges, half days, the live
+read), `forward_log` selftest (the counts), and
+`consistency_check.check_pool_bucket_wired` (the pool loop asks `pool_gate`, the
+universe's cap, the fallback rank, RS and the cut recorded).
+
 ## Amendment 2026-10-28 (F) — the HQ tier's ADX leg is 30, not 35 (BACKLOG 33, owner's decision). THRESHOLD CHANGE on the tag and the alert tier, declared as an INTAKE choice; the fingerprint moves once and is declared
 
 **Note 2026-10-29 (review G1, owner: "go with G1 as well") — episodes

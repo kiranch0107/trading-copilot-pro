@@ -62,6 +62,11 @@ landed in the repo and the removal says so in the commit.
   for earnings (a `NOT SENT` row says why), the contract named is the one
   nearest the money, and the journal refuses a signal trade more than 5 %
   from the money. Exits now trigger on the bid.
+- **2026-11-03 (latest; item 46 D6, D8 built).** Optional, the owner's
+  setting: add a **15:45 ET** weekday slot to the external dispatcher
+  (cron-job.org) for `exit-monitor.yml`. The 15:30 run already reads the
+  thesis exit on the live price; a 15:45 run adds a second read and covers
+  STOP/TARGET in the last half hour, which has had no reliable run.
 
 ---
 
@@ -2375,7 +2380,7 @@ heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
 
 ---
 
-## 46. Expert review 2026-11-03 (evening): the alert, the contract, the exit and the record, read as a trader — NINE FIXES BUILT (N1–N9); D1, D2, D4, D5 DECIDED AND BUILT 2026-11-03; D3, D6, D7, D8 OPEN
+## 46. Expert review 2026-11-03 (evening): the alert, the contract, the exit and the record, read as a trader — NINE FIXES BUILT (N1–N9); D1, D2, D4, D5, D6, D8 DECIDED AND BUILT 2026-11-03; D3, D7 OPEN
 
 `results/expert_review_2026-11-03.md`. Owner: "be an expert in trading
 stocks/options … strict review … identify any gaps and improve … better
@@ -2453,8 +2458,30 @@ counts holds by reason. Intake note 2026-11-03 in
 `forward_record_preregistration.md`. ~23 mutations falsified. **Seen while
 building, not fixed:** the app's contract-checker logging path writes
 `invalidate_ema: False` (so a signal trade logged there is refused by the
-structure) and defaults its premium to the chain's mid. **Still open:**
-D3, D6, D7, D8.
+structure) and defaults its premium to the chain's mid.
+
+**D6 AND D8 DECIDED AND BUILT 2026-11-03 (owner: "go with D6 and D8 as
+well").** **D6** `exit_monitor.in_closing_window()`: from
+`CLOSING_WINDOW_MIN` = 35 minutes before the close (13:00 on a half day)
+THESIS reads today's forming bar, the live price, against an EMA20 that
+includes it, as a stand-in for the close the measured exit leaves at; the
+alert says "near the close (live price)". The 15:30 dispatch is inside
+it, so no schedule change is needed and a person has time to act; earlier
+runs still read settled closes only. A 15:45 ET backup cron is in
+`exit-monitor.yml` (GitHub's scheduler is unreliable; a 15:45 slot on the
+external dispatcher is the reliable version and the owner's setting).
+**D8** the pool's top five: `scanner.pool_gate()` withholds a name whose
+sector already has `universe.MAX_PER_SECTOR` (2) attempted pool alerts
+this session and a name with no contract inside the structure's gates
+(the contract is fetched once and reused by the alert); neither takes a
+cap slot. With no SPY benchmark the five rank by `forward_log.rank_score`
+(ADX, then R:R), not the alphabet, and the header says so. Every pool row
+carries `setup.rs`; a name beyond the cap leaves a `NOT SENT: beyond the
+pool cap` row with its rank; `summary()` counts `pool_cap`, `sector_cap`,
+`no_contract`. The two alert-loop pins are now bounded by the loop, not a
+character window. Intake note (later, 2026-11-03) in
+`forward_record_preregistration.md`. 12 mutations falsified. **Still
+open:** D3, D7.
 
 **Recorded, not fixed:** Tiingo fallback not split-adjusted (P0 if the
 secret is set; do not set it); the revision counter behind item 39's slot

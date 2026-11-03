@@ -84,6 +84,13 @@ on:
     # hourly 09:30-16:00 America/New_York, Mon-Fri. A dispatch is created and
     # started in the same second; `schedule` has not been since 2026-08-26.
     - cron: "0,30 13,14,15,16,17,18,19,20,21 * * 1-5"
+    # 15:45 ET in both halves of the year (19:45 UTC in EDT, 20:45 in EST; the
+    # other of the two lands outside the session or mid-afternoon and is a
+    # plain run). Review 2026-11-03 D6: the last half hour had no run, and
+    # THESIS now reads the live price in the closing window (exit_monitor.
+    # CLOSING_WINDOW_MIN). A backup like the line above; a 15:45 ET slot on
+    # the external dispatcher is the reliable version (the owner's setting).
+    - cron: "45 19,20 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:
