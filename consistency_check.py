@@ -3183,10 +3183,15 @@ def check_alert_once_per_bar() -> None:
     run_body = sc_src[sc_src.find("\ndef run("):]
     n = run_body.count('if alerted_on_bar(r.get("signal_key")):')
     assert n == 2, f"both alerting loops must ask alerted_on_bar() before sending (found {n})"
-    for loop in ("compose_alert(r, tk)\n", "compose_alert(r, tk, header=_hdr)"):
-        i = run_body.find(loop)
-        assert i > 0 and 'if alerted_on_bar(r.get("signal_key")):' in run_body[i - 1500:i] \
-            and "if recently_alerted(state, tk, r[\"trend\"]):" in run_body[i - 1500:i], \
+    # Bounded by the LOOP, not a character window (review 2026-11-03: each gate
+    # added before the send pushed the stamp check out of a fixed window).
+    _rbn = run_body.replace("\r\n", "\n")
+    for head, loop in (("    for tk in WATCHLIST:", "compose_alert(r, tk)\n"),
+                       ("        for _rank, r in enumerate(pool_hq, 1):", "compose_alert(r, tk, header=_hdr)")):
+        i = _rbn.find(loop)
+        seg = _rbn[_rbn.rfind(head, 0, i):i]
+        assert i > 0 and head in seg and seg.find("if recently_alerted(state, tk, r[\"trend\"]):") >= 0 \
+            and seg.find("if recently_alerted(state, tk, r[\"trend\"]):") < seg.find('if alerted_on_bar(r.get("signal_key")):'), \
             f"the key check must sit between the stamp check and the send ({loop.strip()})"
     assert "one alert per signal bar" in sc_src, "the selftest proves it"
     print("  the same signal bar is never alerted twice: both loops read the delivered alert rows by key")
@@ -3270,11 +3275,15 @@ def check_fill_gate_and_blackout_bar() -> None:
                 _bad.append((_row["trend"], _stop, _tgt, _px))
     assert not _bad, f"the alert gate and the grader disagree on {len(_bad)} fill price(s), e.g. {_bad[:3]}"
     run_body = sc_src[sc_src.find("\ndef run("):]
-    for loop, probe in (("compose_alert(r, tk)\n", "gapped_at_fill(r, *fill_probe(df, cdf))"),
-                        ("compose_alert(r, tk, header=_hdr)", "gapped_at_fill(r, *fill_probe(frames[tk], pool_cdfs.get(tk)))")):
-        i = run_body.find(loop)
-        seg = run_body[i - 1500:i]
-        assert i > 0 and probe in seg and seg.find('if alerted_on_bar(r.get("signal_key")):') < seg.find(probe), \
+    _rbn2 = run_body.replace("\r\n", "\n")
+    for head, loop, probe in (("    for tk in WATCHLIST:", "compose_alert(r, tk)\n",
+                               "gapped_at_fill(r, *fill_probe(df, cdf))"),
+                              ("        for _rank, r in enumerate(pool_hq, 1):", "compose_alert(r, tk, header=_hdr)",
+                               "gapped_at_fill(r, *fill_probe(frames[tk], pool_cdfs.get(tk)))")):
+        i = _rbn2.find(loop)
+        seg = _rbn2[_rbn2.rfind(head, 0, i):i]
+        assert i > 0 and head in seg and probe in seg and \
+            0 <= seg.find('if alerted_on_bar(r.get("signal_key")):') < seg.find(probe), \
             f"the fill check must sit between the key check and the send ({loop.strip()})"
         gate = seg[seg.find(probe):]
         assert "if not withheld_on_bar(r.get(\"signal_key\")):" in gate and '"NOT SENT: " + _gap' in gate \
@@ -3575,6 +3584,20 @@ def check_pool_bucket_wired() -> None:
     assert fl.bucket_of({"kind": "signal"}) == "live", "legacy rows are the live bucket's"
     # A forced record-only pass never scans the pool: the code path is gated.
     assert "if not record_only and (getattr(args, \"force_pool\", False) or pool_due(state))" in src
+    # D8 (owner 2026-11-03): the pool's hold asks pool_gate() (the universe's
+    # sector cap, then a tradeable contract) after D4/D1; the fallback rank
+    # without RS is the record's own (forward_log.rank_score); RS rides on the
+    # row; the cut is recorded.
+    _s8 = src.replace("\r\n", "\n")
+    assert "or pool_gate(r, tk, _sector_n))" in _s8 and "_sector_n[sector_of(tk)] = " in _s8, \
+        "the pool loop asks pool_gate and counts attempted alerts per sector (D8)"
+    _pg = _s8[_s8.find("def pool_gate("):_s8.find("def _withhold(")]
+    assert "_u.MAX_PER_SECTOR" in _pg and "suggest_option(" in _pg and 'r["contract"] = opt' in _pg, \
+        "pool_gate reads the universe's cap and fetches the contract compose_alert reuses (D8)"
+    assert "_u.SECTORS.get(tk)" in _s8[_s8.find("def sector_of("):_s8.find("def pool_gate(")]
+    assert "forward_log.rank_score(" in _s8 and 'bucket="pool", rs=_rs_tk)' in _s8 and \
+        '_withhold(tk, r, "pool", f"beyond the pool cap of {POOL_ALERT_CAP}' in _s8, \
+        "no-RS fallback is the record's rank; RS is recorded; the cut is recorded (D8)"
     print(f"  pool bucket: once a session, cap {scanner.POOL_ALERT_CAP} by RS, rows under "
           f"bucket=pool, heartbeat reads live; workflow input wired")
 

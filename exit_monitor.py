@@ -112,6 +112,31 @@ def is_market_open(now: datetime | None = None) -> bool:
             <= now <= now.replace(hour=ch, minute=cm, second=0, microsecond=0))
 
 
+# THE CLOSING WINDOW (review 2026-11-03 D6; owner: "go with D6"). The
+# measured thesis exit (option_backtest) leaves at the CLOSE that breaks
+# EMA20. A settled close exists only after 16:00 and no run happens after
+# 16:00, so THESIS used to fire on the next session's first run, carrying
+# the overnight gap. Inside this many minutes before the close (13:00 on a
+# half day) THESIS reads TODAY'S forming bar, the live price, as a stand-in
+# for the close, against an EMA20 that includes it. The 15:30 dispatch is in
+# it (no schedule change is needed) and leaves a person time to act; a run
+# earlier in the day still reads only settled closes, so an intraday dip
+# that recovers cannot fire it (the bug drop_unsettled_bars exists to stop).
+CLOSING_WINDOW_MIN = 35
+
+
+def in_closing_window(now: datetime | None = None) -> bool:
+    """True from CLOSING_WINDOW_MIN minutes before today's close to the
+    close, on a trading day (D6)."""
+    now = now or datetime.now(ET)
+    if not is_market_open(now):
+        return False
+    day = now.strftime("%Y-%m-%d")
+    ch, cm = (13, 0) if day in MARKET_HALF_DAYS else (16, 0)
+    close = now.replace(hour=ch, minute=cm, second=0, microsecond=0)
+    return close - timedelta(minutes=CLOSING_WINDOW_MIN) <= now <= close
+
+
 def drop_unsettled_bars(df: "pd.DataFrame",
                         now: datetime | None = None) -> "pd.DataFrame":
     """
@@ -127,8 +152,9 @@ def drop_unsettled_bars(df: "pd.DataFrame",
     # passed. (This said the 20:00/21:00 UTC runs see the session that just
     # ended; they do not: run() skips every run after 16:00:00 ET, so THESIS is
     # read on the NEXT session's first run, one session after the close that
-    # broke EMA20, where option_backtest exits at that close. Review
-    # 2026-11-03; re-measuring or a ~15:50 check is the owner's call.)
+    # broke EMA20, where option_backtest exits at that close. Decided
+    # 2026-11-03 (D6): in the closing window THESIS reads the live price
+    # instead; see CLOSING_WINDOW_MIN above.)
     #
     # The local version asked `not is_market_open(now)` and returned early, so it
     # kept the stub bar BEFORE the open. signal_core asks whether today has
@@ -211,7 +237,8 @@ def get_option_quote(ticker: str, expiry: str, strike: float,
 
 
 def get_underlying_state(ticker: str,
-                         now: datetime | None = None) -> dict | None:
+                         now: datetime | None = None,
+                         live_close: bool = False) -> dict | None:
     """
     Last daily close and EMA20, for the thesis-invalidation check.
 
@@ -253,14 +280,22 @@ def get_underlying_state(ticker: str,
         # settled and is the one the rule should use. (run() skips after 16:00 ET,
         # so in practice THESIS reads the close on the next session's first run;
         # see drop_unsettled_bars and the review of 2026-11-03.)
-        df = drop_unsettled_bars(df, now=now)
+        _now = now or datetime.now(ET)
+        if live_close:
+            # D6: today's forming bar stands in for the close (asked only in the
+            # closing window); a bar dated after today is still never data.
+            df = drop_unsettled_bars(df, now=_now.replace(hour=23, minute=59))
+        else:
+            df = drop_unsettled_bars(df, now=now)
         if len(df) < 25:
             return None
         # Matches the app's ta.trend.ema_indicator(window=20)
         ema20 = df["Close"].ewm(span=20, adjust=False).mean()
+        _as_of = str(pd.to_datetime(df.index[-1]).date())
         return {"close": round(float(df["Close"].iloc[-1]), 2),
                 "ema20": round(float(ema20.iloc[-1]), 2),
-                "as_of": str(pd.to_datetime(df.index[-1]).date())}
+                "as_of": _as_of,
+                "live": bool(live_close and _as_of == _now.strftime("%Y-%m-%d"))}
     except Exception as e:
         logger.warning("get_underlying_state(%s) failed: %s", ticker, e)
         return None
@@ -525,15 +560,18 @@ def check_option_position(pos: dict) -> dict:
 
     # 5. THESIS — underlying invalidated the setup
     if rules.get("invalidate_ema"):
-        u = get_underlying_state(pos["ticker"])
+        u = get_underlying_state(pos["ticker"], live_close=in_closing_window())
         if u:
             info.update(underlying=u["close"], ema20=u["ema20"])
             broke = (u["close"] < u["ema20"]) if pos["right"].upper() == "CALL" \
                 else (u["close"] > u["ema20"])
             if broke:
                 side = "below" if pos["right"].upper() == "CALL" else "above"
+                _how = (f"is trading {u['close']} near the close (live price, D6: the "
+                        f"measured exit is at this close; sell before it)"
+                        if u.get("live") else f"closed {u['close']}")
                 return {**info, "exit": True, "reason": "THESIS",
-                        "detail": f"{pos['ticker']} closed {u['close']} — {side} "
+                        "detail": f"{pos['ticker']} {_how} — {side} "
                                   f"EMA20 {u['ema20']}. The setup that justified "
                                   f"this {pos['right']} is no longer valid."}
 
@@ -1396,6 +1434,42 @@ def selftest() -> int:
         _g["get_underlying_state"] = _real_under
     assert "Rules read     : 0.30 [the bid (D5)]" in _buf.getvalue() and \
         "Would fire     : STOP" in _buf.getvalue() and "EXIT_SIGNALLED  : 1" in _buf.getvalue(), _buf.getvalue()
+    # ── D6 (owner 2026-11-03): THESIS ON THE LIVE PRICE IN THE CLOSING WINDOW ──
+    _at = lambda d, h, m: ET.localize(datetime(*d, h, m))                     # noqa: E731
+    assert not in_closing_window(_at((2026, 11, 4), 15, 24)) and in_closing_window(_at((2026, 11, 4), 15, 25))
+    assert in_closing_window(_at((2026, 11, 4), 15, 30)) and in_closing_window(_at((2026, 11, 4), 16, 0))
+    assert not in_closing_window(_at((2026, 11, 4), 16, 1)) and not in_closing_window(_at((2026, 11, 4), 11, 0))
+    assert in_closing_window(_at((2026, 11, 27), 12, 25)) and not in_closing_window(_at((2026, 11, 27), 15, 30)), "half day"
+    assert not in_closing_window(_at((2026, 11, 7), 15, 30)) and not in_closing_window(_at((2026, 11, 26), 15, 30))
+    # a rising series whose LAST bar (today, still forming) drops under EMA20
+    _idx = _pd.bdate_range(end="2026-11-04", periods=60)
+    _cl = [100 + i * 0.5 for i in range(59)] + [100.0]
+    _fr6 = _pd.DataFrame({"Open": _cl, "High": _cl, "Low": _cl, "Close": _cl, "Volume": 1e6}, index=_idx)
+    _real_fd = data_source.fetch_daily
+    try:
+        data_source.fetch_daily = lambda *a, **k: (_fr6.copy(), "yahoo")
+        _u0 = get_underlying_state("X", now=_at((2026, 11, 4), 15, 30))
+        _u1 = get_underlying_state("X", now=_at((2026, 11, 4), 15, 30), live_close=True)
+    finally:
+        data_source.fetch_daily = _real_fd
+    assert _u0["as_of"] == "2026-11-03" and _u0["close"] > _u0["ema20"] and not _u0["live"], _u0
+    assert _u1["as_of"] == "2026-11-04" and _u1["close"] < _u1["ema20"] and _u1["live"], _u1
+    _uk = []
+    _real_cw = _g["in_closing_window"]
+    _g["in_closing_window"] = lambda *a, **k: True
+    _g["get_underlying_state"] = lambda *a, **k: (_uk.append(k) or
+                                                  {"close": 100.0, "ema20": 121.5, "as_of": "2026-11-04", "live": True})
+    _g["get_option_quote"] = lambda *a, **k: None
+    try:
+        _th = check_option_position(dict(_pos1, rules={"invalidate_ema": True}))
+    finally:
+        _g["get_underlying_state"] = _real_under
+        _g["get_option_quote"] = _real_quote
+        _g["in_closing_window"] = _real_cw
+    assert _th["reason"] == "THESIS" and "near the close (live price" in _th["detail"], _th
+    assert _uk == [{"live_close": True}], ("THESIS asks for the live read in the closing window", _uk)
+    print("D6 thesis         : from 35 min before the close THESIS reads the live price against an EMA20 "
+          "that includes it; earlier runs read settled closes only")
     print("D5 expiry         : one reminder within 2 sessions of expiry and one after it, even after STOP; "
           "undelivered retries")
 
