@@ -3790,6 +3790,57 @@ def check_option_target_exit_preregistered() -> None:
     assert "POWER_TABLE" not in doc, "the power table must be filled in from --d3-power before the commit"
     print("  the D3 arm is off by default; its pre-registration fixes the arms, power, bar and commands")
 
+
+def check_tiingo_split_adjusted() -> None:
+    """
+    The Tiingo fallback is SPLIT-adjusted like Yahoo's auto_adjust=False bars
+    (review 2026-11-03; owner: "fix the Tiingo split adjustment as well").
+    The grader's split guard relies on the provider rewriting the signal bar
+    after a split: on Tiingo's raw columns it did not, and a 2:1 split after
+    the fill graded as a loss of about -20 R. Driven end to end: a fake Tiingo
+    response through fetch_tiingo() into forward_log.resolve_signal().
+    """
+    import os
+    import datetime as _dt
+    import data_source as ds
+    import forward_log as fl
+    src = Path("data_source.py").read_text(encoding="utf-8")
+    assert "return split_adjust(df, factors)" in src and '"splitFactor" not in df.columns' in src, \
+        "fetch_tiingo must split-adjust and refuse a response without splitFactor"
+    # signal bar 10-01 closes 100 (recorded); fill 10-02 opens 100.5; a 2:1
+    # split takes effect 10-06 (raw ~50); the stop is 98, the target 106.
+    raw = [("2026-10-01", 100.0, 1.0), ("2026-10-02", 100.5, 1.0), ("2026-10-05", 101.0, 1.0),
+           ("2026-10-06", 50.6, 2.0), ("2026-10-07", 50.8, 1.0)]
+    class _R:
+        status_code = 200
+        def json(self):
+            return [{"date": f"{d}T00:00:00.000Z", "open": c, "high": c * 1.002, "low": c * 0.998,
+                     "close": c, "volume": 1e6, "splitFactor": s} for d, c, s in raw]
+    _old = os.environ.get(ds.TIINGO_KEY_ENV)
+    os.environ[ds.TIINGO_KEY_ENV] = "consistency-check"
+    try:
+        frame = ds.fetch_tiingo("ZZ", _get=lambda *a, **k: _R())
+    finally:
+        if _old is None:
+            os.environ.pop(ds.TIINGO_KEY_ENV, None)
+        else:
+            os.environ[ds.TIINGO_KEY_ENV] = _old
+    def _bars(f):
+        return [{"date": str(d.date()), "open": float(r.Open), "high": float(r.High),
+                 "low": float(r.Low), "close": float(r.Close)} for d, r in f.iterrows()]
+    row = {"trend": "Bullish", "bar_date": "2026-10-01", "setup": {"price": 100.0, "stop": 98.0, "target": 106.0}}
+    v = fl.resolve_signal(row, _bars(frame), today=_dt.date(2026, 12, 1))
+    assert v["outcome"] == "void" and v["reason"] == "split_in_window", \
+        ("a split after the fill must void the row on split-adjusted bars, as on Yahoo's", v)
+    # The hazard, shown on the same bars read raw (every factor 1): a large loss.
+    flat = ds.pd.DataFrame({"Open": [x[1] for x in raw], "High": [x[1] * 1.002 for x in raw],
+                            "Low": [x[1] * 0.998 for x in raw], "Close": [x[1] for x in raw],
+                            "Volume": [1e6] * len(raw)}, index=ds.pd.to_datetime([x[0] for x in raw]))
+    w = fl.resolve_signal(row, _bars(flat), today=_dt.date(2026, 12, 1))
+    assert w["outcome"] == "loss" and w["r"] < -10, ("raw bars grade the split as a loss (the bug)", w)
+    print(f"  Tiingo bars are split-adjusted: a split after the fill voids the row (raw bars graded it "
+          f"{w['r']:+.1f} R)")
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -3859,6 +3910,7 @@ CHECKS = [
     ("signal-trade fixtures never read the clock (M1)", check_fixtures_never_read_the_clock),
     ("forward record's power stated at its own sd (D7)", check_forward_power_stated),
     ("option target-exit arm pre-registered (D3)", check_option_target_exit_preregistered),
+    ("Tiingo fallback split-adjusted (review 11-03)", check_tiingo_split_adjusted),
 ]
 
 

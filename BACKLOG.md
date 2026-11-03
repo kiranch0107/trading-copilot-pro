@@ -67,6 +67,12 @@ landed in the repo and the removal says so in the commit.
   (cron-job.org) for `exit-monitor.yml`. The 15:30 run already reads the
   thesis exit on the live price; a 15:45 run adds a second read and covers
   STOP/TARGET in the last half hour, which has had no reliable run.
+- **2026-11-03 (Tiingo split fix).** Correction to (3) of the item-46 note
+  above: the Tiingo fallback is now split-adjusted like Yahoo, so the split
+  hazard behind "do not set `TIINGO_API_KEY`" is gone. Setting it is the
+  owner's choice; know that on a day the fallback is used, Tiingo has no
+  intraday bar, so the alert's fill gate and its price-at-send line cannot
+  run and those alerts go out without them.
 - **2026-11-03 (D3, D7 decided).** **Owed on the laptop (frozen bars):** the
   D3 run, two commands in `results/option_target_exit_preregistration.md`
   (`option_backtest.py --config live --tp 200 --sl 50 --dte-exit 7
@@ -2524,8 +2530,19 @@ IV 1.15 AND 1.00; REJECT if < 0 at both; otherwise NOT ESTABLISHED; under
 `check_option_target_exit_preregistered` (68). **Owed:** the two commands
 in the pre-registration, on the frozen bars.
 
-**Recorded, not fixed:** Tiingo fallback not split-adjusted (P0 if the
-secret is set; do not set it); the revision counter behind item 39's slot
+**Tiingo fallback split-adjusted: FIXED 2026-11-03 (owner: "fix the Tiingo
+split adjustment as well").** `data_source.fetch_tiingo()` builds split-only
+bars (Yahoo's auto_adjust=False basis) from Tiingo's `splitFactor` through
+`split_adjust()`: prices divided, volume multiplied, by the product of the
+factors after each bar; a response without `splitFactor` is refused. The
+module docstring, which said raw bars matched Yahoo "at all", is corrected.
+`check_tiingo_split_adjusted` (69) drives a 2:1 split after the fill through
+`fetch_tiingo()` into `resolve_signal()`: void `split_in_window`, as on
+Yahoo's bars (the same bars read raw grade −19.8 R). Still true of the
+fallback: end of day only, so on a fallback day the fill gate and the
+price-at-send line have no intraday price.
+
+**Recorded, not fixed:** the revision counter behind item 39's slot
 decision cannot see a signal that appears or vanishes between reads; the
 research engine's NaN-row ADX blanking, truncated look-back on the first 19
 bars, open-beyond-target-then-stop booked −1 R, MaxDD in ticker order,
@@ -2850,8 +2867,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 68 cross-module
-  invariants (68 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 69 cross-module
+  invariants (69 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on
