@@ -158,7 +158,18 @@ The forward record is untouched by all four (the intake note of
   takes no slot; with no SPY benchmark the five rank by ADX then R:R (the
   record's declared rank), not the alphabet; RS and the cut are recorded.
 
-D3 and D7 remain the owner's.
+## Decided 2026-11-03, last (owner: "go with D3 and D7 as well")
+
+- **D7** built: a dated amendment corrects the forward record's stated
+  power (sd 1.0 R was a paired figure; the record's episodes run ~1.3-1.5 R).
+  At the unchanged 349 gate the main question detects about +0.20 R and the
+  rank tier about +0.49 R; the report now computes these from the record.
+- **D3** built as a pre-registered arm in `option_backtest` (off by
+  default), with its power checked through the engine; the run is owed on
+  the laptop's frozen bars (`results/option_target_exit_preregistration.md`).
+  Nothing in the live system changes until it reads ADOPT.
+
+Every decision of this review is now taken.
 
 ## Recorded, not fixed
 

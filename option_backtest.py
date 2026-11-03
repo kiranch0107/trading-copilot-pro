@@ -111,12 +111,19 @@ def realised_vol(closes: pd.Series, window: int = 20) -> float:
 # OPTION TRADE SIMULATION
 # ══════════════════════════════════════════════════════════════════
 def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
-                          cfg: dict) -> dict | None:
+                          cfg: dict, target: float | None = None) -> dict | None:
     """
     Buy an ATM option at the next bar's open and walk it forward daily,
     applying the same exit rules the live monitor uses.
 
     Exit priority matches exit_monitor.py: STOP, TARGET, TIME, THESIS.
+
+    THE D3 ARM (review 2026-11-03; owner: "go with D3"), OFF unless
+    cfg["tgt_exit"]: the option is also sold when the UNDERLYING closes at
+    or beyond the signal's own `target` (the level the alert names), at the
+    close's mark like every other rule here; checked after STOP and before
+    the premium TARGET. results/option_target_exit_preregistration.md fixes how it is
+    read. Every committed run had it off and is unchanged.
     """
     n = len(df)
     entry_i = signal_i + 1
@@ -188,6 +195,18 @@ def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
             return _result("STOP", entry_prem, mid, held, dte_left, pnl_pct,
                            spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
                            right=right, dte0=dte0, entry_date=entry_date, features=feats)
+        # 1b. THE UNDERLYING'S TARGET (the D3 arm; off by default). MARKED ON
+        # THE CLOSE, like every other rule here: the session's close at or
+        # beyond the target sells at the close's mark. An intraday touch fill
+        # was tried first and is NOT used: it priced arm B at the touch while
+        # arm A's +200 % is marked on the close, and on driftless random walks
+        # that asymmetry alone put B about 3.5 points ahead (the pre-registration
+        # records it). The engine has no intraday option price for either arm.
+        if cfg.get("tgt_exit") and target is not None:
+            if (spot >= target) if right == "CALL" else (spot <= target):
+                return _result("TARGET_U", entry_prem, mid, held, dte_left, pnl_pct,
+                               spot0=spot0, spot_exit=spot, strike=strike, iv=iv,
+                               right=right, dte0=dte0, entry_date=entry_date, features=feats)
         # 2. TARGET
         if cfg["tp"] and pnl_pct >= abs(cfg["tp"]):
             return _result("TARGET", entry_prem, mid, held, dte_left, pnl_pct,
@@ -352,6 +371,119 @@ def run_ticker(tk: str, cfg: dict, sig_cfg: dict, coverage: dict | None = None) 
                 continue
         i += 1
     return trades
+
+
+def run_ticker_pairs(tk: str, cfg_a: dict, cfg_b: dict, sig_cfg: dict,
+                     coverage: dict | None = None, hq_only: bool = True) -> list[tuple]:
+    """
+    THE D3 COMPARISON: both arms on IDENTICAL entries, as (a, b) pairs.
+    Entries are the alerts the live system could send: longs only
+    (risk_params.LONGS_ONLY), R:R at or above the tier's hq_min_rr when
+    `hq_only`, and not gapped at the fill (the next open beyond the stop or
+    the target: the live fill gate, J1, withholds those). A pair is kept
+    only when both arms price it. The signal's own target reaches arm B.
+    """
+    params = bt.build_signal_params(sig_cfg)
+    raw = bt.download(tk, cfg_a["years"])
+    if raw is None:
+        if coverage is not None:
+            coverage["no_data"].append(tk)
+        return []
+    df = bt.compute(raw)
+    if len(df) < bt.MIN_BARS_AFTER:
+        if coverage is not None:
+            coverage["too_short"].append((tk, len(df)))
+        return []
+    if coverage is not None:
+        coverage["ok"].append(tk)
+    return pairs_on_frame(df, tk, cfg_a, cfg_b, params, sig_cfg["cooldown_bars"], hq_only)
+
+
+def pairs_on_frame(df: "pd.DataFrame", tk: str, cfg_a: dict, cfg_b: dict, params,
+                   cooldown: int, hq_only: bool = True) -> list[tuple]:
+    """The pair loop on a computed frame (split out so it runs offline)."""
+    out, i, n = [], 0, len(df)
+    while i < n - 1:
+        sig = bt.evaluate_signal(df, i, params)
+        if sig and (not risk_params.LONGS_ONLY or sig["trend"] == "Bullish") \
+                and (not hq_only or sc_gate_rr(sig, params)):
+            o = float(df["Open"].iloc[i + 1])
+            long = sig["trend"] == "Bullish"
+            gapped = ((o <= sig["stop"] or o >= sig["target"]) if long
+                      else (o >= sig["stop"] or o <= sig["target"]))
+            if not gapped:
+                a = simulate_option_trade(df, i, sig["trend"], cfg_a, target=sig["target"])
+                b = simulate_option_trade(df, i, sig["trend"], cfg_b, target=sig["target"])
+                if a and b:
+                    for x in (a, b):
+                        x["ticker"], x["trend"] = tk, sig["trend"]
+                    out.append((a, b))
+                    i += cooldown + 1
+                    continue
+        i += 1
+    return out
+
+
+def sc_gate_rr(sig: dict, params) -> bool:
+    """The alert tier's R:R leg on the signal's unrounded R:R."""
+    import signal_core as _sc
+    return _sc.gate_rr(sig.get("rr_raw", sig.get("rr") or 0), params.hq_min_rr)
+
+
+def paired_report(pairs: list[tuple]) -> dict:
+    """B minus A per entry, % of premium; OPEN trades (censored) are left out."""
+    d = [b["pnl_pct"] - a["pnl_pct"] for a, b in pairs
+         if a["reason"] != "OPEN" and b["reason"] != "OPEN"]
+    n = len(d)
+    if n < 2:
+        return {"n": n}
+    m = float(np.mean(d)); s = float(np.std(d, ddof=1)); se = s / math.sqrt(n)
+    ra = [a["pnl_pct"] for a, b in pairs if a["reason"] != "OPEN" and b["reason"] != "OPEN"]
+    rb = [b["pnl_pct"] for a, b in pairs if a["reason"] != "OPEN" and b["reason"] != "OPEN"]
+    reasons_b: dict = {}
+    for _a, b in pairs:
+        reasons_b[b["reason"]] = reasons_b.get(b["reason"], 0) + 1
+    return {"n": n, "mean_a": float(np.mean(ra)), "mean_b": float(np.mean(rb)),
+            "diff": m, "sd": s, "se": se, "lo": m - 1.96 * se, "hi": m + 1.96 * se,
+            "changed": sum(1 for x in d if abs(x) > 1e-9), "reasons_b": reasons_b}
+
+
+def d3_power(n_frames: int = 200, n_trend_frames: int = 60) -> int:
+    """
+    BACKLOG 13 step 2 for D3, through THIS engine: synthetic daily paths
+    (lognormal, sd 1.7 % a day) go through backtest.compute, the live
+    signal and both arms. Two worlds: no persistence (a random walk, where
+    an option marked on the close is close to a fair game and the arms
+    should tie) and persistent 60-session trends (where selling at the
+    target gives up the run). Prints the paired difference's mean and sd at
+    IV 1.00 and 1.15 and the smallest effect each n could detect. Seeded;
+    results/option_target_exit_preregistration.md quotes its output.
+    """
+    params = bt.build_signal_params(bt.live_cfg())
+    cool = bt.live_cfg()["cooldown_bars"]
+
+    def _frame(rng, n, sig, trend):
+        tr = np.repeat(rng.normal(0, trend, n // 60 + 1), 60)[:n]
+        c = 100 * np.exp(np.cumsum(rng.normal(0, sig, n) + tr))
+        o = c * np.exp(rng.normal(0, sig * 0.3, n))
+        h = np.maximum(o, c) * np.exp(np.abs(rng.normal(0, sig * 0.5, n)))
+        lo = np.minimum(o, c) * np.exp(-np.abs(rng.normal(0, sig * 0.5, n)))
+        return pd.DataFrame({"Date": pd.bdate_range("2015-01-02", periods=n), "Open": o, "High": h,
+                             "Low": lo, "Close": c, "Volume": rng.lognormal(14, 0.3, n)})
+    for label, trend, frames in (("no persistence", 0.0, n_frames), ("60-session trends", 0.004, n_trend_frames)):
+        for ivm in (1.00, 1.15):
+            base = dict(years=5, dte=30, tp=200, sl=50, dte_exit=7, use_thesis=True, iv_mult=ivm, spread_pct=5.0)
+            rng = np.random.default_rng(11)
+            pairs = []
+            for k in range(frames):
+                df = bt.compute(_frame(rng, 1300, 0.017, trend))
+                pairs += pairs_on_frame(df, f"S{k}", dict(base), dict(base, tgt_exit=True), params, cool)
+            r = paired_report(pairs)
+            mde = {n: 2.8 * r["sd"] / math.sqrt(n) for n in (150, 300, 600)}
+            print(f"{label:18s} iv x{ivm:.2f}: pairs {r['n']:5d} | A {r['mean_a']:+6.2f}% B {r['mean_b']:+6.2f}% | "
+                  f"B-A {r['diff']:+6.2f}% sd {r['sd']:5.1f} | MDE n150 {mde[150]:.1f} n300 {mde[300]:.1f} "
+                  f"n600 {mde[600]:.1f}")
+    return 0
 
 
 def summarise(trades: list[dict]) -> dict:
@@ -565,6 +697,49 @@ def selftest() -> int:
         bt._CACHE_LOG[:] = _saved_log
     print("fingerprint       : printed once per run, deduped to one entry per series")
 
+    # ── D3 (owner 2026-11-03): THE UNDERLYING-TARGET ARM ──
+    # Off by default: every call above ran without it. On, a close at or above
+    # the signal's target sells at that close's mark (TARGET_U); an intraday
+    # touch that closes below does not; STOP still comes first.
+    _cfg3 = dict(cfg, sl=50, tp=10**9, dte_exit=0)
+    _up = frame.copy()
+    _up.loc[45, "Close"] = float(_up.loc[41, "Open"]) * 1.06
+    _tg = float(_up.loc[41, "Open"]) * 1.05
+    _off = simulate_option_trade(_up, 40, "Bullish", _cfg3, target=_tg)
+    _on = simulate_option_trade(_up, 40, "Bullish", dict(_cfg3, tgt_exit=True), target=_tg)
+    assert _off["reason"] != "TARGET_U" and _on["reason"] == "TARGET_U" and _on["held"] == 4 \
+        and abs(_on["spot_exit"] - float(_up.loc[45, "Close"])) < 1e-9, (_off["reason"], _on)
+    _touch = frame.copy()
+    _touch.loc[45, "High"] = float(_touch.loc[41, "Open"]) * 1.10       # touched, closed below
+    _t3 = simulate_option_trade(_touch, 40, "Bullish", dict(_cfg3, tgt_exit=True), target=_tg)
+    assert _t3["reason"] != "TARGET_U" or _t3["held"] != 4, ("an intraday touch is not a close", _t3)
+    assert simulate_option_trade(_up, 40, "Bullish", dict(_cfg3, tgt_exit=True))["reason"] != "TARGET_U", \
+        "no target passed: the arm cannot fire"
+    # the paired report reads B - A per entry and leaves OPEN trades out
+    _pa = {"pnl_pct": -50.0, "reason": "STOP"}; _pb = {"pnl_pct": 20.0, "reason": "TARGET_U"}
+    _rp3 = paired_report([(_pa, _pb), (dict(_pa, pnl_pct=10.0), dict(_pb, pnl_pct=10.0)),
+                          (dict(_pa, reason=OPEN), _pb)])
+    assert _rp3["n"] == 2 and abs(_rp3["diff"] - 35.0) < 1e-9 and _rp3["changed"] == 1, _rp3
+    # the pair runner keeps only what the live system could alert: longs, R:R at or
+    # over the tier's minimum, a next open inside the levels
+    _real_es = bt.evaluate_signal
+    _o42 = float(frame["Open"].iloc[42])
+    _canned = {41: {"trend": "Bearish", "stop": 1e9, "target": 1.0, "rr_raw": 2.0},
+               43: {"trend": "Bullish", "stop": 1.0, "target": 1e9, "rr_raw": 0.8},
+               47: {"trend": "Bullish", "stop": 1.0, "target": float(frame["Open"].iloc[48]) * 0.99, "rr_raw": 2.0},
+               50: {"trend": "Bullish", "stop": 1.0, "target": 1e9, "rr_raw": 1.5}}
+    try:
+        bt.evaluate_signal = lambda df, i, params: _canned.get(i)
+        _prs = pairs_on_frame(frame, "T", dict(_cfg3), dict(_cfg3, tgt_exit=True),
+                              bt.build_signal_params(bt.live_cfg()), 0)
+    finally:
+        bt.evaluate_signal = _real_es
+    assert len(_prs) == 1 and _prs[0][0]["entry_date"] == str(frame["Date"].iloc[51]), \
+        ([p[0]["entry_date"] for p in _prs], "short, R:R 0.8 and a gapped fill are not alerts")
+    del _o42
+    print("D3 arm            : off by default; a close at the signal's target sells at its mark; "
+          "an intraday touch does not; pairs read B - A")
+
     print("\nAll self-tests passed.")
     return 0
 
@@ -586,17 +761,32 @@ def main() -> int:
                     help="Round-trip bid-ask cost, %% of premium")
     ap.add_argument("--selftest", action="store_true",
                     help="offline checks for the coverage guard")
+    ap.add_argument("--config", choices=("research", "live"), default="research",
+                    help="entries from bt.DEFAULTS (the record's) or bt.live_cfg() (the scanner's; "
+                         "BACKLOG 23: every NEW run uses live)")
+    ap.add_argument("--target-exit-ab", action="store_true",
+                    help="D3: the structure (A) against the structure plus 'sell when the underlying "
+                         "reaches the signal's target' (B), on identical live alert entries; see "
+                         "results/option_target_exit_preregistration.md")
+    ap.add_argument("--d3-power", action="store_true",
+                    help="D3's power check: the paired difference's sd on synthetic paths through "
+                         "this engine (no market data; a few minutes; not run in CI)")
     ap.add_argument("--sweep", action="store_true",
                     help="Compare take-profit levels instead of one config")
     a = ap.parse_args()
 
     if a.selftest:
         return selftest()
+    if a.d3_power:
+        return d3_power()
     if hasattr(bt, "_CACHE_LOG"):
         bt._CACHE_LOG.clear()                     # this run's reads only
     tickers = [t.strip().upper() for t in a.tickers.split(",") if t.strip()]
-    sig_cfg = dict(bt.DEFAULTS)
-    sig_cfg.update(tickers=tickers, years=a.years)
+    if a.config == "live":
+        sig_cfg = bt.live_cfg(tickers=tickers, years=a.years)
+    else:
+        sig_cfg = dict(bt.DEFAULTS)
+        sig_cfg.update(tickers=tickers, years=a.years)
 
     base = dict(years=a.years, dte=a.dte, tp=a.tp, sl=a.sl,
                 dte_exit=a.dte_exit, use_thesis=not a.no_thesis,
@@ -610,7 +800,32 @@ def main() -> int:
     print(f"Costs     : {a.spread_pct}% round-trip spread")
     print("Option prices are MODELLED (Black-Scholes on the real underlying path),")
     print("not historical quotes. IV is assumed, not observed — see the header.")
+    print(f"Config    : {bt.describe_config(sig_cfg)}")
     print("=" * 78)
+
+    if a.target_exit_ab:
+        # D3: A is the measured structure as passed (--tp 200 --sl 50 --dte-exit 7,
+        # thesis on); B adds the underlying-target exit. Same entries.
+        cfg_a = dict(base)
+        cfg_b = dict(base, tgt_exit=True)
+        coverage = {"ok": [], "no_data": [], "too_short": []}
+        pairs = []
+        for tk in tickers:
+            pairs += run_ticker_pairs(tk, cfg_a, cfg_b, sig_cfg, coverage=coverage)
+        r = paired_report(pairs)
+        print(f"\nD3 PAIRED: A = TP+{a.tp:g}/SL-{a.sl:g}/out at {a.dte_exit} DTE/thesis "
+              f"{'off' if a.no_thesis else 'on'};  B = A + sell at the underlying's target")
+        if r["n"] < 2:
+            print(f"  pairs        : {r['n']} — nothing to read")
+            return _report_coverage(coverage, tickers)
+        print(f"  pairs        : {r['n']} (settled in both arms; {r['changed']} differ)")
+        print(f"  mean A       : {r['mean_a']:+.2f}% of premium")
+        print(f"  mean B       : {r['mean_b']:+.2f}% of premium")
+        print(f"  B - A        : {r['diff']:+.2f}%  sd {r['sd']:.2f}  SE {r['se']:.2f}  "
+              f"95% CI [{r['lo']:+.2f}, {r['hi']:+.2f}]")
+        print(f"  B exits      : {r['reasons_b']}")
+        print(f"  IV multiplier: {a.iv_mult}  (read with the other multiplier; see the pre-registration)")
+        return _report_coverage(coverage, tickers)
 
     if a.sweep:
         print("\nPAYOFF STRUCTURE SWEEP — the question the defaults depend on\n")

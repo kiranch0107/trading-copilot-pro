@@ -3724,6 +3724,53 @@ def check_bar_validator_wired() -> None:
     print("  get_data() and bars_for_grading() both run signal_core.validate_bars()")
 
 
+
+def check_forward_power_stated() -> None:
+    """
+    Amendment 2026-11-03 (D7; owner: "go with D3 and D7 as well"). The forward
+    record's stated power rested on per-trade sd 1.0 R, taken from a PAIRED
+    threshold (0.075 R, atr_stop_run1); the research record's sd is 1.855 R and
+    the record's own episodes ~1.3-1.5 R. The power is now computed from the
+    record (forward_log.mde / n_for, report() at the settled episodes' sd), the
+    amendment states it, and no typed figure from the old basis survives.
+    """
+    import forward_log as fl
+    src = Path("forward_log.py").read_text(encoding="utf-8")
+    assert fl.MDE_Z == 2.8 and abs(fl.mde(1.0, 349) - 0.15) < 0.001 and abs(fl.mde(1.855, 1386) - 0.1395) < 0.001, \
+        "the power functions reproduce the declared figure at sd 1.0 and the record's at 1.855"
+    assert "~ +0.37 R; +0.15 R needs ~2,070" not in src and "mde(_sd, GATE_EPISODES)" in src \
+        and '"sd_r"' in src, "report() prints the MDE from the record's own sd, not a typed constant"
+    doc = Path("results/forward_record_preregistration.md").read_text(encoding="utf-8")
+    assert "## Amendment 2026-11-03 (D7)" in doc and "1.855 R" in doc and "NOT\nESTABLISHED" in doc \
+        and "The gate stays **349 settled pool episodes**" in doc, "the amendment states the corrected power and keeps the gate"
+    assert "detectable 0.075 R, observed" not in Path("power_check.py").read_text(encoding="utf-8"), \
+        "power_check's docstring must not call the paired 0.075 R that test's threshold"
+    print("  the forward record's power is computed at its own sd; the amendment states it; the gate is unchanged (D7)")
+
+
+def check_option_target_exit_preregistered() -> None:
+    """
+    D3 (owner: "go with D3 and D7 as well"): the 'sell at the underlying's
+    target' arm exists OFF by default, so no committed option run changes, and
+    its pre-registration fixes the arms, the power, the bar and the commands
+    before the run (which needs the laptop's frozen bars).
+    """
+    import inspect as _i
+    import option_backtest as ob
+    sim = _i.getsource(ob.simulate_option_trade)
+    assert 'cfg.get("tgt_exit") and target is not None' in sim and "if cfg[\"tgt_exit\"]" not in sim, \
+        "the arm reads cfg.get(): off unless asked for"
+    main = _i.getsource(ob.main)
+    assert "tgt_exit" not in main[:main.find("if a.target_exit_ab:")], "no committed run's config turns the arm on"
+    assert "cfg_b = dict(base, tgt_exit=True)" in main, "only the D3 comparison does"
+    doc = Path("results/option_target_exit_preregistration.md").read_text(encoding="utf-8")
+    for needle in ("**ADOPT the target exit**", "**REJECT it", "**NOT ESTABLISHED**", "## Prediction, stated now",
+                   "--config live --tp 200 --sl 50 --dte-exit 7 --target-exit-ab |",
+                   "--target-exit-ab --iv-mult 1.00 |", "UNDERPOWERED"):
+        assert needle in doc, f"the pre-registration must state {needle!r}"
+    assert "POWER_TABLE" not in doc, "the power table must be filled in from --d3-power before the commit"
+    print("  the D3 arm is off by default; its pre-registration fixes the arms, power, bar and commands")
+
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
     ("market calendar has runway left",            check_calendar_runway),
@@ -3791,6 +3838,8 @@ CHECKS = [
     ("HQ episodes re-anchored at the F cut (G1)",  check_hq_episodes_reanchored),
     ("fill gate before alert, blackout vs bar (J1/J2)", check_fill_gate_and_blackout_bar),
     ("signal-trade fixtures never read the clock (M1)", check_fixtures_never_read_the_clock),
+    ("forward record's power stated at its own sd (D7)", check_forward_power_stated),
+    ("option target-exit arm pre-registered (D3)", check_option_target_exit_preregistered),
 ]
 
 

@@ -1291,14 +1291,44 @@ def rank_tier(rows: list, k: int = RANK_TIER_K, bucket: str = HEADLINE_BUCKET) -
     return tier
 
 
+# THE STATED POWER IS COMPUTED FROM THE RECORD (amendment 2026-11-03 D7).
+# The pre-registration sized the 349-episode gate on per-trade sd ~ 1.0 R,
+# inferred from a 0.075 R detectable effect that was a PAIRED figure
+# (atr_stop_run1); the record's own settled episodes run ~1.5 R. The gate
+# stays 349 (owner's choice: state the limit, not move it); report() prints
+# the smallest effect it can detect at the sd the record has, so the number
+# beside the reading can never again be a constant from a wrong basis.
+MDE_Z = 2.8                    # 5 % two-sided (1.96) + 80 % power (0.84)
+RANK_TIER_SHARE = 0.21         # the H1' tier's share of pool episodes at declaration
+
+
+def mde(sd: float, n: int, share: float | None = None) -> float:
+    """Smallest true difference detectable at 80 % power, 5 % two-sided:
+    one sample of n (H0/H1), or with `share`, a tier of that share of n
+    against the rest (H1')."""
+    if n <= 0 or sd != sd:
+        return float("nan")
+    if share:
+        return MDE_Z * sd / (share * (1 - share) * n) ** 0.5
+    return MDE_Z * sd / n ** 0.5
+
+
+def n_for(effect: float, sd: float, share: float | None = None) -> int:
+    """Observations needed to detect `effect` at the same power."""
+    base = (MDE_Z * sd / effect) ** 2
+    return int(round(base / (share * (1 - share)) if share else base))
+
+
 def _episode_stats(eps: list) -> dict:
     settled = [e for e in eps if e["r"] is not None]
+    _m = (sum(e["r"] for e in settled) / len(settled)) if settled else float("nan")
     return {"episodes": len(eps), "settled": len(settled),
             "open": sum(1 for e in eps if e["outcome"] is None),
             "void": sum(1 for e in eps if e["outcome"] == "void"),
             "rows": sum(e["rows"] for e in eps),
-            "mean_r": (sum(e["r"] for e in settled) / len(settled)
-                       if settled else float("nan")),
+            "mean_r": _m,
+            "sd_r": ((sum((e["r"] - _m) ** 2 for e in settled) / (len(settled) - 1)) ** 0.5
+                     if len(settled) > 1 else float("nan")),
             "wins": sum(1 for e in settled if e["r"] > 0)}
 
 
@@ -1495,7 +1525,14 @@ def report(path: Path | None = None) -> int:
                 print(f"  {'':12}  H1' rank tier (top {h['k']}/bar by HQ-nearness, amendment 2026-10-28 D): "
                       f"tier {h['tier']['episodes']} ep, {h['tier']['settled']} settled, mean R {_fmt(h['tier']['mean_r'])}  |  "
                       f"rest {h['rest']['episodes']} ep, {h['rest']['settled']} settled, mean R {_fmt(h['rest']['mean_r'])}")
-                print(f"  {'':12}  MDE at the 349 gate ~ +0.37 R; +0.15 R needs ~2,070 settled pool episodes")
+                _sd = eb.get("sd_r", float("nan"))
+                if eb["settled"] >= 10 and _sd == _sd:
+                    print(f"  {'':12}  POWER at the record's own sd {_sd:.2f} R ({eb['settled']} settled episodes; "
+                          f"amendment 2026-11-03 D7): at the {GATE_EPISODES} gate H0/H1 detect "
+                          f"{mde(_sd, GATE_EPISODES):+.2f} R and H1' {mde(_sd, GATE_EPISODES, RANK_TIER_SHARE):+.2f} R; "
+                          f"+0.15 R needs ~{n_for(0.15, _sd):,} / ~{n_for(0.15, _sd, RANK_TIER_SHARE):,} episodes")
+                else:
+                    print(f"  {'':12}  POWER: fewer than 10 settled episodes; the MDE is printed from 10 on (D7)")
                 print(f"  {'':12}  H1/H1' read from amendment F (2026-10-28) forward: {h['read_rows']} taken pool rows read "
                       f"as {h['episodes']} episodes re-anchored at the cut, "
                       f"{h['excluded_rows']} under the pre-F hashes excluded (the base question reads every row)")
@@ -2185,6 +2222,18 @@ def selftest() -> int:
         raise AssertionError("an unknown bucket must be refused")
     except ValueError:
         pass
+    # D7 (amendment 2026-11-03): the stated power is computed, not typed
+    assert abs(mde(1.0, 349) - 0.1499) < 1e-3 and abs(mde(1.0, 349, 0.21) - 0.3681) < 1e-3, \
+        "sd 1.0 reproduces the figures as declared (+0.15 at 349; +0.37 for H1')"
+    assert abs(mde(1.855, 1386) - 0.1395) < 1e-3, "the research record at its own sd detects ~0.14 R"
+    assert n_for(0.15, 1.0) == 348 and n_for(0.15, 1.34) == 626 and mde(1.0, 0) != mde(1.0, 0)
+    _es = _episode_stats([{"r": 1.0, "outcome": "win", "rows": 1}, {"r": -1.0, "outcome": "loss", "rows": 2},
+                          {"r": None, "outcome": None, "rows": 1}])
+    assert abs(_es["sd_r"] - 2 ** 0.5) < 1e-12 and _es["settled"] == 2, _es
+    _bufp = _io.StringIO()
+    with _ctx.redirect_stdout(_bufp):
+        report(al)
+    assert "~ +0.37 R" not in _bufp.getvalue(), "no hard-coded MDE in the report"
     print("alert rows       : sent/delivered recorded per attempt, keyed to the signal bar; "
           "never counted as signal, scan or outcome")
 

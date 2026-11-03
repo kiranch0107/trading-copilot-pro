@@ -67,6 +67,12 @@ landed in the repo and the removal says so in the commit.
   (cron-job.org) for `exit-monitor.yml`. The 15:30 run already reads the
   thesis exit on the live price; a 15:45 run adds a second read and covers
   STOP/TARGET in the last half hour, which has had no reliable run.
+- **2026-11-03 (D3, D7 decided).** **Owed on the laptop (frozen bars):** the
+  D3 run, two commands in `results/option_target_exit_preregistration.md`
+  (`option_backtest.py --config live --tp 200 --sl 50 --dte-exit 7
+  --target-exit-ab`, at IV 1.15 and 1.00), teed to
+  `results/option_target_exit_run1_iv1.15.txt` / `_iv1.00.txt`. Retire this
+  line when both files are committed with their reading.
 
 ---
 
@@ -2380,7 +2386,7 @@ heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
 
 ---
 
-## 46. Expert review 2026-11-03 (evening): the alert, the contract, the exit and the record, read as a trader — NINE FIXES BUILT (N1–N9); D1, D2, D4, D5, D6, D8 DECIDED AND BUILT 2026-11-03; D3, D7 OPEN
+## 46. Expert review 2026-11-03 (evening): the alert, the contract, the exit and the record, read as a trader — NINE FIXES BUILT (N1–N9); ALL EIGHT DECISIONS TAKEN 2026-11-03 (D1, D2, D4–D8 BUILT; D3 PRE-REGISTERED, RUN OWED ON THE LAPTOP)
 
 `results/expert_review_2026-11-03.md`. Owner: "be an expert in trading
 stocks/options … strict review … identify any gaps and improve … better
@@ -2480,8 +2486,35 @@ carries `setup.rs`; a name beyond the cap leaves a `NOT SENT: beyond the
 pool cap` row with its rank; `summary()` counts `pool_cap`, `sector_cap`,
 `no_contract`. The two alert-loop pins are now bounded by the loop, not a
 character window. Intake note (later, 2026-11-03) in
-`forward_record_preregistration.md`. 12 mutations falsified. **Still
-open:** D3, D7.
+`forward_record_preregistration.md`. 12 mutations falsified.
+
+**D3 AND D7 DECIDED 2026-11-03 (owner: "go with D3 and D7 as well").**
+**D7 BUILT:** amendment 2026-11-03 (D7) at the top of
+`forward_record_preregistration.md`: the stated power rested on sd 1.0 R,
+taken from the PAIRED 0.075 R of `atr_stop_run1`; the research record's sd
+is 1.855 R and the record's settled pool episodes 1.34 R (46 episodes). At
+the 349 gate H0/H1 detect about +0.20 R (not +0.15), H1′ about +0.49 R
+(not +0.37); +0.15 R needs ~630 / ~3,800 episodes. **The gate stays 349**
+(owner's choice: state the limit); under the detectable effect a reading is
+NOT ESTABLISHED, never refuted. `forward_log.mde()` / `n_for()`;
+`report()` prints the power from the record's own episode sd
+(`_episode_stats()["sd_r"]`) instead of the typed "+0.37 R; ~2,070";
+`power_check.py`'s docstring corrected. `check_forward_power_stated` (67).
+**D3 BUILT AS A PRE-REGISTERED ARM; THE RUN IS OWED ON THE LAPTOP:**
+`results/option_target_exit_preregistration.md`. `option_backtest`
+gains, off by default (no committed run changes): `simulate_option_trade(
+target=)` with `cfg["tgt_exit"]` (sell when the underlying CLOSES at or
+beyond the signal's target, at the close's mark; an intraday-touch version
+was dropped because it favoured B by ~3.5 points on marking alone),
+`--config live`, `--target-exit-ab` (both arms on identical live alert
+entries: longs, R:R ≥ 1.0, not gapped at the fill) and `--d3-power` (the
+power check through this engine on synthetic paths: paired sd ~44-68 % of
+premium; the arms tie without persistence and B loses 22-25 points with
+it; at 150 / 300 / 600 pairs about 10-16 / 7-11 / 5-8 points detectable). The bar: ADOPT only if B − A > 0 with the CI clear of zero at
+IV 1.15 AND 1.00; REJECT if < 0 at both; otherwise NOT ESTABLISHED; under
+150 pairs UNDERPOWERED. Prediction: −10 % to +2 %, NOT ESTABLISHED.
+`check_option_target_exit_preregistered` (68). **Owed:** the two commands
+in the pre-registration, on the frozen bars.
 
 **Recorded, not fixed:** Tiingo fallback not split-adjusted (P0 if the
 secret is set; do not set it); the revision counter behind item 39's slot
@@ -2809,8 +2842,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 66 cross-module
-  invariants (66 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 68 cross-module
+  invariants (68 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on
