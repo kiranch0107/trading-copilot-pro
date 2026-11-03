@@ -3050,9 +3050,32 @@ def check_journal_hygiene() -> None:
     finally:
         for k, v in saved.items():
             setattr(js, k, v)
+    # N5 (review 2026-11-03): a logged position says so ONLY on success. The
+    # quick-buy form's success message and rerun sat inside `except
+    # ValueError`, so a refusal read "now monitoring" and a success left
+    # Confirm live for a duplicate. Every try that logs a position keeps
+    # st.success / st.rerun out of its handlers.
+    import ast as _ast
+    _app_tree = _ast.parse(Path("app.py").read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n"))
+    _logs = [n for n in _ast.walk(_app_tree) if isinstance(n, _ast.Try)
+             and any("open_option_position(" in _ast.unparse(x) for x in n.body)]
+    assert len(_logs) >= 3, f"expected the app's three position-logging paths, found {len(_logs)}"
+    for _n in _logs:
+        _h = " ".join(_ast.unparse(x) for x in _n.handlers)
+        assert "st.success" not in _h and "st.rerun" not in _h, \
+            f"app.py line {_n.lineno}: success/rerun inside the refusal handler (N5)"
+    # N6: an exit fill is typed, never pre-filled from the monitor's quote or
+    # the entry premium; both close forms refuse an empty fill.
+    _app_src = Path("app.py").read_text(encoding="utf-8", errors="replace")
+    assert 'value=float(p.get("exit_premium")' not in _app_src and \
+        'value=float(p["entry_premium"]),\r\n                                         key=f"mf_' not in _app_src, \
+        "a close form must not pre-fill the exit fill (N6)"
+    assert _app_src.count("if _close_clicked and fill is None:") == 1 and \
+        _app_src.count("if _cf_clicked and mf is None:") == 1, "both close forms refuse an empty fill (N6)"
     print("  signal entries only in the measured structure (one dict; scanner window and app defaults read it); "
           "no discretionary live entry; no fixture row committed; every app call site catches the refusal; "
-          "DTE ceiling everywhere; H1/H1' read from amendment F")
+          "DTE ceiling everywhere; H1/H1' read from amendment F; a logged position says so only on success; "
+          "exit fills are typed (N5/N6)")
 
 
 def check_bar_revision_note_wired() -> None:

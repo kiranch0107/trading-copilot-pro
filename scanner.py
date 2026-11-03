@@ -683,7 +683,7 @@ def fetch_atm_chain(ticker: str, today=None, min_dte: int | None = None) -> dict
     spread arm's expiry rule, results/spread_preregistration.md), and the
     rows carry bid/ask when the chain has them.
     """
-    today = today or pd.Timestamp.today().normalize()
+    today = today or option_chain.et_today()     # ET, not the host clock (N3)
     try:
         stock = yf.Ticker(ticker)
         expiries, delay = None, YF_RETRY_DELAY
@@ -835,7 +835,7 @@ def fetch_chain_data(ticker: str) -> dict | None:
             return None
     if not expiries:
         return None
-    today = pd.Timestamp.today().normalize()
+    today = option_chain.et_today()               # ET, not the host clock (N3)
     out, checked = [], 0
     for exp in expiries:
         if checked >= OPT_MAX_EXPIRIES:
@@ -1204,7 +1204,18 @@ def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
 
     # Chain fetch happens here — AFTER the cooldown check — so
     # suppressed alerts cost no API calls.
-    opt = suggest_option(tk, r["price"], r["trend"], r["atr"], r.get("strength", "Normal")) \
+    # THE STRIKE WINDOW IS CENTRED ON THE PRICE AT SEND (review 2026-11-03,
+    # N4). The selector's window is "the ATM window" around the price it is
+    # given, and the measured structure buys at the money AT THE FILL
+    # (option_backtest: strike = round(the entry session's open)). This
+    # passed the signal bar's close: a stock up 4 % by 11:07 was offered the
+    # strike 4 % in the money, and on 10-29 NOW's window around 149.85
+    # named 150 calls with the stock near 110. The latest price the fill
+    # probe read is the centre; the close when the run has none.
+    _now = r.get("at_send") or {}
+    _centre = next((float(v) for v in (_now.get("last"), _now.get("open"))
+                    if v is not None), float(r["price"]))
+    opt = suggest_option(tk, _centre, r["trend"], r["atr"], r.get("strength", "Normal")) \
         if SUGGEST_OPTIONS else None
 
     if opt:
@@ -2534,6 +2545,15 @@ def _selftest_body() -> int:
             assert at_send({"trend": "Bullish", "entry": 100.0, "stop": 97.5, "target": 103.18}, None, None) is None \
                 and at_send({"trend": "Bullish"}, 100.0, 101.0) is None, "no price, or no levels, prints nothing"
             assert "under the tier's 1.0" in compose_alert({**_hq(_fr, "AAA"), "at_send": _w}, "AAA")
+            # N4: the contract's strike window is centred on the price at send,
+            # the close only when the run has none.
+            _centres = []
+            _g["suggest_option"] = lambda tk, px, *a, **k: _centres.append(px)
+            compose_alert({**_hq(_fr, "AAA"), "at_send": _w}, "AAA")
+            compose_alert({**_hq(_fr, "AAA"), "at_send": {**_w, "last": None}}, "AAA")
+            compose_alert(_hq(_fr, "AAA"), "AAA")
+            assert _centres == [102.3, 102.1, 100.0], _centres
+            _g["suggest_option"] = lambda *a, **k: None
             print("price at send            : the alert prints the move already made and the R:R from "
                   "the latest price, warns under the tier's R:R, and the alert row carries it (N2)")
             assert gapped_at_fill({"trend": "Bearish", "stop": 102.0, "target": 94.0}, 103.0) and \

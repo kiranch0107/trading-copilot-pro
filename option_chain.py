@@ -99,6 +99,20 @@ def _fetch_chain_with_retry(stock, expiry: str):
     return None
 
 
+def et_today() -> pd.Timestamp:
+    """
+    Today's date in New York, as a normalised Timestamp: the date DTE is
+    counted from (review 2026-11-03, N3). pandas' today() reads the
+    HOST clock; the app's server and the Actions runners are UTC, so after
+    20:00 ET (19:00 in summer) a 46-DTE contract read as 45, passed the
+    window, and the journal (which dates the trade in ET) then refused it.
+    exit_monitor.days_to_expiry() was fixed for the same defect earlier.
+    """
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+    return pd.Timestamp(_dt.now(ZoneInfo("America/New_York")).date())
+
+
 def in_dte_window(dte: int, min_dte: int, max_dte: int | None = None) -> bool:
     """
     Whether an expiry is inside the window the selector reads: at least
@@ -159,7 +173,7 @@ def get_full_chain_data(ticker: str, min_dte: int, max_dte: int | None = None) -
                              f"Try again shortly.",
                     "expiries": []}
 
-        today   = pd.Timestamp.today().normalize()
+        today   = et_today()                     # ET, not the host clock (N3)
         result  = []
         checked = 0
         for expiry in all_expiries:
@@ -529,6 +543,15 @@ def selftest() -> int:
     print("side              : bearish rejection reports a PUT")
 
     print("=" * 70)
+    # ── DTE IS COUNTED FROM THE ET DATE (review 2026-11-03, N3) ──
+    from datetime import datetime as _dtn
+    from pathlib import Path as _P
+    from zoneinfo import ZoneInfo as _Z
+    assert et_today() == pd.Timestamp(_dtn.now(_Z("America/New_York")).date()), "et_today() is New York's date"
+    for _f in ("option_chain.py", "scanner.py", "app.py"):
+        _src = _P(__file__).with_name(_f).read_text(encoding="utf-8", errors="replace")
+        assert ("Timestamp." + "today()") not in _src, f"{_f}: DTE must be counted from et_today(), not the host clock"
+    print("DTE clock          : counted from the New York date in the selector, the scanner and the app (N3)")
     print("All self-tests passed.")
     return 0
 

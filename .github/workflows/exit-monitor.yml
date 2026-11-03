@@ -159,7 +159,12 @@ jobs:
         # whenever you log or close a position. If it committed between our
         # checkout and our push, a plain push is rejected. --rebase replays our
         # state change on top of yours instead of discarding either.
-        if: ${{ !inputs.dry_run }}
+        #
+        # always(): the monitor exits nonzero when an alert failed to send or
+        # nothing could be priced (review 2026-11-03, N7), and a bare `if:`
+        # carries an implicit success(): the state of the alerts that DID go
+        # out that run was then dropped and they were re-sent next run.
+        if: ${{ always() && !inputs.dry_run }}
         run: |
           if [[ -n "$(git status --porcelain open_positions.json)" ]]; then
             git config user.name  "exit-monitor"
