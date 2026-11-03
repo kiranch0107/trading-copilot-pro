@@ -522,6 +522,24 @@ RISK_PCT     = st.sidebar.number_input("Risk per trade (%)",
 # the snapshot themselves and pass it into journal_store.open_option_position()
 # as `entry_features` — see that function's docstring for why.
 # ─────────────────────────────────────────────
+def underlying_price_now(ticker: str) -> float | None:
+    """
+    The latest price the app can read for `ticker`: today's bar as it forms
+    during the session, the settled close after it. The journal's moneyness
+    leg (review 2026-11-03 D2: a signal trade's strike within 5 % of the
+    money) is asked against it. None when nothing can be read; the leg is
+    then not asked, as every data leg here fails open.
+    """
+    try:
+        df = get_data(ticker)
+        if df is None or len(df) == 0:
+            return None
+        v = float(df["Close"].iloc[-1])
+        return v if v > 0 else None
+    except Exception:                                  # noqa: BLE001
+        return None
+
+
 def capture_entry_features(ticker: str) -> dict:
     """
     Snapshot indicator state at the moment a position is opened.
@@ -1136,6 +1154,18 @@ def check_manual_contract(ticker: str, right: str, strike: float,
         f"{dte} DTE (minimum {MIN_DTE})")
     add("DTE at or below maximum", dte <= MAX_DTE,
         f"{dte} DTE (maximum {MAX_DTE}; a signal trade above it is refused by the journal)")
+    # D2 (review 2026-11-03): the strike is within the structure's moneyness
+    # band of the latest price, the leg the journal refuses a signal trade on.
+    _u = underlying_price_now(ticker)
+    _mp = float(risk_params.MEASURED_OPTION_STRUCTURE["moneyness_pct"])
+    if _u:
+        _away = abs(float(strike) / _u - 1) * 100
+        add("Strike near the money", _away <= _mp + 1e-9,
+            f"strike {float(strike):g} is {_away:.1f}% from the underlying {_u:,.2f} "
+            f"(the measured structure is at the money; a signal trade beyond {_mp:g}% is refused)")
+    else:
+        add("Strike near the money", True, "underlying price unavailable — not checked",
+            blocking=False)
 
     # Informational: the scanner would never surface a contract this far out,
     # since it only looks at the nearest few expiries. Not a rule violation —
@@ -1325,7 +1355,7 @@ def _analyze_uncached(df: pd.DataFrame, ticker: str,
     r["option"] = (get_option_data(ticker, r["price"], r["trend"],
                                    r["strength"], MIN_DTE, ATR_TGT_MULT,
                                    BUDGET_MAX, is_market_open, atr=r["atr"],
-                                   max_dte=MAX_DTE)
+                                   max_dte=MAX_DTE, target=r.get("target"))   # D2
                    if fetch_options else
                    {"error": "Not fetched during scan — open the Stock "
                              "Analysis tab for options."})
@@ -2160,7 +2190,8 @@ with TAB_STOCK:
                                                            "max_hold_bars": q_hold,
                                                            "invalidate_ema": q_thesis},
                                                     notes=q_notes,
-                                                    entry_features=capture_entry_features(ticker))
+                                                    entry_features=capture_entry_features(ticker),
+                                                    underlying_px=underlying_price_now(ticker))
                                               except ValueError as _qve:
                                                 # refused by journal_store (F4; BACKLOG 32):
                                                 # say why and keep the form
@@ -2645,7 +2676,8 @@ with TAB_POSITIONS:
                            "dte_exit": rule_dte, "max_hold_bars": rule_hold,
                            "invalidate_ema": rule_thesis},
                     notes=o_notes,
-                    entry_features=capture_entry_features(o_tkr))
+                    entry_features=capture_entry_features(o_tkr),
+                    underlying_px=underlying_price_now(o_tkr))
             except ValueError as _ve:
                 # A signal trade without its signal bar is refused by
                 # journal_store (F4); say so and keep the form.
@@ -3229,7 +3261,8 @@ with TAB_CHECK:
                                        "max_hold_bars": chk_hold,
                                        "invalidate_ema": False},
                                 notes=chk_notes,
-                                entry_features=capture_entry_features(res["ticker"]))
+                                entry_features=capture_entry_features(res["ticker"]),
+                                underlying_px=underlying_price_now(res["ticker"]))
                             st.success("Logged. The exit monitor will track it "
                                        "from the next run.")
                             st.session_state.pop("chk_result", None)

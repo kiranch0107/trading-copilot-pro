@@ -226,7 +226,8 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
                          mode: str = "live",
                          traded_at: str | None = None,
                          source: str = "discretionary",
-                         signal_key: str | None = None) -> dict:
+                         signal_key: str | None = None,
+                         underlying_px: float | None = None) -> dict:
     """
     Record an OPTION contract you bought so the exit monitor can watch it.
 
@@ -301,7 +302,11 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
         import risk_params as _rp
         _as_of = (str(traded_at)[:10] if traded_at
                   else datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d"))
-        _why = _rp.option_structure_violation(expiry, _as_of, rules)
+        # D2 (review 2026-11-03): the moneyness leg is asked when the caller
+        # knows the underlying's price at the trade (the app passes the
+        # latest it can read); without it the leg cannot be asked.
+        _why = _rp.option_structure_violation(expiry, _as_of, rules,
+                                              strike=strike, underlying=underlying_px)
         if _why:
             raise ValueError(f"not the measured structure ({_why}); {_rp.STRUCTURE_REASON}")
         # THE HOLD RULE IS NOT PART OF THE STRUCTURE and cannot bind inside
@@ -330,6 +335,7 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
         "mode":             _mode,
         "source":           source,
         "signal_key":       signal_key or None,
+        "underlying_at_entry": (round(float(underlying_px), 4) if underlying_px else None),
         "traded_at":        traded_at or datetime.now(
                                 pytz.timezone("America/New_York")
                             ).strftime("%Y-%m-%d %H:%M ET"),
@@ -926,7 +932,10 @@ def selftest() -> int:
                 (dict(source="signal", signal_key="PFE|Bullish|2026-10-07", traded_at="2026-10-07 10:00 ET",
                       expiry="2026-11-20", rules=dict(_rules, tp_pct=100)), "take profit 100"),
                 (dict(source="signal", signal_key="PFE|Bullish|2026-10-07", traded_at="2026-10-07 10:00 ET",
-                      expiry="2026-11-20", rules=dict(_rules, invalidate_ema=False)), "thesis exit off")):
+                      expiry="2026-11-20", rules=dict(_rules, invalidate_ema=False)), "thesis exit off"),
+                # D2: a strike 36 % from the underlying (the NOW 150 call at 110)
+                (dict(source="signal", signal_key="PFE|Bullish|2026-10-07", traded_at="2026-10-07 10:00 ET",
+                      expiry="2026-11-20", strike=39.5, underlying_px=29.0), "outside 5% of the money")):
             _args = dict(ticker="PFE", right="CALL", strike=29.0, expiry="2026-10-16", contracts=1,
                          entry_premium=0.5, rules=_rules)
             _args.update(_kw)
@@ -936,6 +945,12 @@ def selftest() -> int:
             except ValueError as _e:
                 assert _needle in str(_e), (_needle, str(_e))
         assert sum(1 for p in _mem["pos"] if p["ticker"] == "PFE") == 1, "refused = not written (only _pn is PFE)"
+        # D2: at the money with the underlying known is accepted and recorded
+        _atm = open_option_position("PFE", "CALL", 29.0, "2026-11-20", 1, 0.5, _rules, source="signal",
+                                    signal_key="PFE|Bullish|2026-10-07", traded_at="2026-10-07 10:00 ET",
+                                    underlying_px=29.4)
+        assert _atm["underlying_at_entry"] == 29.4, _atm
+        _mem["pos"] = [p for p in _mem["pos"] if p["id"] != _atm["id"]]
         _pp = open_option_position("PFE", "CALL", 29.0, "2026-10-16", 1, 0.5, dict(_rules, tp_pct=100),
                                    source="discretionary", mode="paper")
         assert _pp["mode"] == "paper", "a discretionary PAPER entry is allowed, on any rules"

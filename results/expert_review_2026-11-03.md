@@ -125,6 +125,27 @@ Financials); a name with no contract inside the 8 % ceiling (UNP) still takes a
 slot. Recommended: record `rs` and "cut by cap" on the row (plain), and decide
 the sector cap and the untradeable skip.
 
+## Decided 2026-11-03 (owner: "go with D1, D2, D4 and D5 as well") — built
+
+- **D1** built as an alert-path gate: the latest expiry whose 7-DTE exit
+  precedes the next release is `release − today + 6` DTE; under 21 the
+  alert is withheld (one `NOT SENT` row), otherwise the contract is chosen
+  only among expiries at or under it. An unknown release sends, with the
+  warning.
+- **D2** built: nearest the money among liquid strikes, inside 5 % of the
+  price at send, never beyond the target; the journal refuses a signal
+  trade outside 5 % of the underlying. The 5 % is a judgement (two strike
+  increments on a liquid large cap), not a measurement: the measurement is
+  ATM.
+- **D4** built: withheld when the R:R from the price at send is under 1.0.
+- **D5** built: STOP and TARGET read the bid on a two-sided quote; a
+  once-only expiry reminder (within 2 sessions, and after expiry) whatever
+  the rules say; `--diagnose` reports the monitor's own verdict.
+
+The forward record is untouched by all four (the intake note of
+2026-11-03 in `forward_record_preregistration.md` says so); D3, D6, D7 and
+D8 remain the owner's.
+
 ## Recorded, not fixed
 
 - **Do not set `TIINGO_API_KEY` yet (P0 if set).** Tiingo's close and volume

@@ -210,9 +210,21 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
                     min_dte: int, atr_tgt_mult: float, budget_max: float,
                     is_market_open, atr: float | None = None,
                     chain_data: dict | None = None,
-                    max_dte: int | None = None) -> dict:
+                    max_dte: int | None = None,
+                    target: float | None = None) -> dict:
     """
     Strike selection.
+
+    NEAREST THE MONEY, NEVER BEYOND THE TARGET (review 2026-11-03 D2; owner:
+    "go with D2"). The measured structure buys at the money (option_backtest:
+    strike = round(the entry open)); this used to name the MOST LIQUID strike
+    in a +/-2 ATR window, so on a price of 100 it could name the 103 call, and
+    with a resistance-capped target of 102.6 a strike above the alert's own
+    target (a correct signal that pins at the target expires worthless). Now:
+    among the strikes that pass every liquidity gate, inside the window AND
+    within risk_params.MEASURED_OPTION_STRUCTURE["moneyness_pct"] of `price`,
+    the one nearest `price`; liquidity breaks a tie (the same strike on two
+    expiries). With `target`, a call above it (a put below it) is never named.
 
     `min_dte` / `atr_tgt_mult` / `budget_max` / `is_market_open` are passed
     in — see the module docstring. `is_market_open` is a zero-arg callable
@@ -256,8 +268,20 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
         lo_mult, hi_mult = 1.0 - band, 1.0 + band        # symmetric ATM window
 
     lo, hi = price * lo_mult, price * hi_mult
+    # D2: inside the structure's moneyness band, and never beyond the target.
+    _m = float(risk_params.MEASURED_OPTION_STRUCTURE["moneyness_pct"]) / 100.0
+    lo, hi = max(lo, price * (1 - _m)), min(hi, price * (1 + _m))
+    try:
+        _tg = float(target) if target is not None else None
+    except (TypeError, ValueError):
+        _tg = None
+    if _tg is not None and _tg > 0:
+        if trend == "Bullish":
+            hi = min(hi, _tg)
+        else:
+            lo = max(lo, _tg)
 
-    best = None; best_score = 0.0
+    best = None; best_key = None
     # Diagnostics. "No liquid options found" on its own is a dead end — it does
     # not say whether the chain was empty, the strike window excluded
     # everything, or contracts existed and every one failed a liquidity gate.
@@ -366,9 +390,12 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
         if dte < days_needed:
             valid["score"] *= (dte / days_needed) ** 2   # quadratic theta penalty
 
-        top = valid.sort_values("score", ascending=False).iloc[0]
-        if top["score"] > best_score:
-            best = (top, expiry, dte); best_score = top["score"]
+        # D2: nearest the money first, liquidity second.
+        valid["dist"] = (valid["strike"] - price).abs()
+        top = valid.sort_values(["dist", "score"], ascending=[True, False]).iloc[0]
+        _key = (float(top["dist"]), -float(top["score"]))
+        if best_key is None or _key < best_key:
+            best = (top, expiry, dte); best_key = _key
 
     if best is None:
         if diag["expiries"] == 0:
@@ -376,7 +403,8 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
         elif diag["in_window"] == 0:
             why = (f"no strikes between ${diag['window_lo']} and "
                    f"${diag['window_hi']} (the ±ATR window around "
-                   f"${price:.2f})")
+                   f"${price:.2f}, inside {_m * 100:g}% of the money"
+                   f"{' and not beyond the target' if _tg else ''})")
         elif diag["had_bid"] == 0:
             why = f"all {diag['in_window']} strikes in range had no live bid"
             # Almost always the clock, not the chain. Yahoo returns zero or NaN
@@ -429,6 +457,7 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
             "volume":int(row.get("volume",0)),"oi":int(row.get("openInterest",0)),
             "spread":round(float(row["spread"]),2),"dte":dte,
             "strike_lo":round(lo,2),"strike_hi":round(hi,2),
+            "moneyness_pct":round((float(row["strike"]) / price - 1) * 100, 2) if price else None,
             "days_needed":days_needed,
             "dte_adequate":dte >= days_needed,
             "is_budget":row["mid"]<=budget_max}
@@ -541,6 +570,36 @@ def selftest() -> int:
     bear = _pick(_chain([(100, 1.00, 1.40, 10, 10)]), trend="Bearish")
     assert bear["diag"]["tightest"]["right"] == "PUT", bear["diag"]["tightest"]
     print("side              : bearish rejection reports a PUT")
+
+    # ── D2 (review 2026-11-03): NEAREST THE MONEY, NEVER BEYOND THE TARGET ──
+    # 103 is by far the most liquid; the old score named it. 100 is the money.
+    _d2 = _chain([(97, 4.00, 4.20, 50, 500), (100, 2.00, 2.10, 40, 300), (103, 0.90, 0.95, 900, 9000)])
+    _p = _pick(_d2, atr=2.0)
+    assert _p["strike"] == 100 and _p["moneyness_pct"] == 0.0, _p
+    # the alert's target is 102.6: a liquid 103 is never named, even when 100 fails the gates
+    _d2b = _chain([(100, 2.00, 2.60, 40, 300), (103, 0.90, 0.95, 900, 9000)])     # 100: 26 % spread
+    _pb = get_option_data("TEST", price, "Bullish", "Normal", 20, 3.0, 1e9, _open, atr=2.0,
+                          chain_data=_d2b, target=102.6)
+    assert "error" in _pb and _pb["diag"]["window_hi"] == 102.6, ("a call above the target is never named", _pb)
+    assert "error" not in get_option_data("TEST", price, "Bullish", "Normal", 20, 3.0, 1e9, _open, atr=2.0,
+                                          chain_data=_d2b), "without a target the 103 is still in the band"
+    # nothing inside 5 % of the money: refused, even with a wide ATR window (12 %)
+    _far = _chain([(106, 1.00, 1.04, 900, 9000), (94, 7.00, 7.20, 900, 9000)])
+    _pf = _pick(_far, atr=8.0)
+    assert "error" in _pf and _pf["diag"]["window_lo"] == 95.0 and _pf["diag"]["window_hi"] == 105.0, _pf
+    # the same strike on two expiries: liquidity breaks the tie
+    _a = pd.DataFrame([(100, 2.00, 2.10, 10, 100)], columns=["strike", "bid", "ask", "volume", "openInterest"])
+    _b = pd.DataFrame([(100, 2.50, 2.60, 500, 5000)], columns=["strike", "bid", "ask", "volume", "openInterest"])
+    _tie = {"expiries": [{"expiry": "2026-11-27", "dte": 24, "calls": _a, "puts": _a},
+                         {"expiry": "2026-12-04", "dte": 31, "calls": _b, "puts": _b}]}
+    assert _pick(_tie, atr=2.0)["expiry"] == "2026-12-04"
+    # nearer the money wins across expiries, even when less liquid
+    _c = pd.DataFrame([(101, 1.50, 1.55, 900, 9000)], columns=["strike", "bid", "ask", "volume", "openInterest"])
+    _near = {"expiries": [{"expiry": "2026-11-27", "dte": 24, "calls": _c, "puts": _c},
+                          {"expiry": "2026-12-04", "dte": 31, "calls": _a, "puts": _a}]}
+    assert _pick(_near, atr=2.0)["strike"] == 100
+    print("D2 strike         : nearest the money among liquid strikes, inside 5 %, never beyond the target; "
+          "liquidity only breaks a tie")
 
     print("=" * 70)
     # ── DTE IS COUNTED FROM THE ET DATE (review 2026-11-03, N3) ──

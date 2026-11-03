@@ -121,6 +121,44 @@ loops ask `gapped_at_fill()` between the key check and the send; the
 scanner's and the app's `evaluate()` calls pass the bar date; the stubs
 accept it).
 
+**Note 2026-11-03 (expert review, BACKLOG 46; owner: "go with D1, D2, D4
+and D5 as well") — two more ALERT-PATH gates and the contract the alert
+names; no row kind, reading, rule, threshold, tag or fingerprint changes.**
+*D4, the R:R from the price at send.* The tier's R:R leg is asked at the
+signal bar's close, a price no one can fill at; the alert goes out at 11:07
+the next session. After the fill gate (J1) passes, both alerting loops read
+the R:R from the latest print to the same stop and target (`at_send`, N2)
+and withhold when it is under `hq_min_rr` (1.0). No readable price sends.
+*D1, the next earnings release against the contract.* The blackout looks
+three days ahead; the structure's contract is 21-45 DTE held to 7 DTE.
+With the next release `d` days away, a contract held through it is one
+expiring after `d + dte_exit - 1` days. When that cap is under 21 (every
+contract in the window would be held through the release) the alert is
+withheld; otherwise the contract the alert names is chosen only among
+expiries at or under the cap, and the alert says so. An unknown next
+release sends, with the warning line (N9): the gate fails open, as the
+blackout does. Both gates sit where J1 sits: **the row is unchanged** (the
+signal stays `taken` with its tag; the grader grades it from the next
+open; the control row is written), a withheld alert leaves ONE `NOT SENT:
+<reason>` alert row per key (carrying `at_send`), a withheld pool name
+takes no cap slot, and a later run whose price or calendar no longer
+holds the alert sends it. `summary()` counts the withheld rows by reason
+(`alerts_withheld_by`: fill, R:R at send, earnings). *D2, the contract.*
+The selector names the strike nearest the price at send among the
+strikes that pass every liquidity gate, inside 5 % of the money
+(`MEASURED_OPTION_STRUCTURE["moneyness_pct"]`) and never beyond the
+alert's target; the journal refuses a signal trade whose strike is
+outside that band of the underlying at the trade. *D5* changes the exit
+monitor, not the record: STOP and TARGET read the bid on a two-sided
+quote. Enforcement: `scanner.py --selftest` (D4 and D1 through `run()`,
+the cap's edges, the chain fetch's cap), `option_chain` selftest (D2),
+`risk_params` and `journal_store` selftests (the moneyness leg),
+`exit_monitor.py --selftest` (D5), `forward_log` selftest (the counts by
+reason), `consistency_check.check_fill_gate_and_blackout_bar` (both loops
+hold between `at_send()` and the send) and `check_journal_hygiene` (every
+app logging path passes the underlying's price; both selector callers pass
+the target).
+
 ## Amendment 2026-10-28 (F) — the HQ tier's ADX leg is 30, not 35 (BACKLOG 33, owner's decision). THRESHOLD CHANGE on the tag and the alert tier, declared as an INTAKE choice; the fingerprint moves once and is declared
 
 **Note 2026-10-29 (review G1, owner: "go with G1 as well") — episodes

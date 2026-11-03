@@ -364,7 +364,7 @@ LONGS_ONLY = True
 # app's defaults read it from here. One home.
 MEASURED_OPTION_STRUCTURE = {
     "min_dte": 21, "max_dte": 45,           # days to expiry at entry
-    "tp_pct": 200.0, "sl_pct": 50.0,        # on the premium paid
+    "tp_pct": 200.0, "sl_pct": 50.0,        # on the premium paid; the monitor reads the BID (D5)
     "dte_exit": 7,                          # out at this many days left
     # THE THESIS EXIT IS PART OF THE STRUCTURE (review 2026-10-29 late, H1;
     # owner: "option (a)"). The run that measured the structure
@@ -376,21 +376,36 @@ MEASURED_OPTION_STRUCTURE = {
     # read this field. The HOLD rule is not part of the structure: out by
     # dte_exit a position lives at most ~27 sessions, so it cannot bind.
     "thesis": True,
+    # AT THE MONEY, AS MEASURED (review 2026-11-03 D2; owner: "go with D2").
+    # option_backtest prices strike = round(the entry open): at the money.
+    # The selector used to name the most liquid strike in a +/-2 ATR window,
+    # and the journal had no moneyness leg (the NOW 150 call was logged with
+    # the stock near 110, 36 % out of the money). A signal trade's strike is
+    # within this many percent of the underlying at the trade; the selector
+    # names the strike nearest the money inside the same band. 5 % is room
+    # for two strike increments on a liquid large cap (1-2.5 % apart), not a
+    # measured width: the measurement is ATM.
+    "moneyness_pct": 5.0,
 }
 STRUCTURE_REASON = ("the measured structure is {min_dte}-{max_dte} DTE at entry, "
+                    "a strike within {moneyness_pct:g}% of the underlying (at the money), "
                     "+{tp_pct:g}% / -{sl_pct:g}% on the premium, out at {dte_exit} DTE, "
                     "thesis exit on (EMA20 break); "
                     "a name where that is unaffordable at this account size is not "
                     "tradeable here (BACKLOG 32)").format(**MEASURED_OPTION_STRUCTURE)
 
 
-def option_structure_violation(expiry: str, as_of: str, rules: dict | None) -> str | None:
+def option_structure_violation(expiry: str, as_of: str, rules: dict | None,
+                               strike: float | None = None,
+                               underlying: float | None = None) -> str | None:
     """
     Why an option entry is NOT the measured structure, or None if it is.
     `expiry` and `as_of` are YYYY-MM-DD (as_of: the trade date); `rules` is
     the monitor's block ({tp_pct, sl_pct, dte_exit, ...}). The reason names
     the leg so the refusal says what to change; the sentence that follows it
-    (STRUCTURE_REASON) is the same every time.
+    (STRUCTURE_REASON) is the same every time. With `strike` and
+    `underlying` (the stock's price at the trade), the moneyness leg is
+    asked too (D2); without the underlying it cannot be, and is not.
     """
     import datetime as _dt
     m = MEASURED_OPTION_STRUCTURE
@@ -410,6 +425,14 @@ def option_structure_violation(expiry: str, as_of: str, rules: dict | None) -> s
             return f"{label} {got:g} is not the measured {m[key]:g}"
     if m.get("thesis") and not r.get("invalidate_ema"):
         return "thesis exit off is not the measured structure (it ran with the EMA20 exit on)"
+    if strike is not None and underlying is not None:
+        try:
+            k, u = float(strike), float(underlying)
+        except (TypeError, ValueError):
+            return "strike or underlying price unreadable"
+        if u > 0 and abs(k / u - 1) * 100 > float(m["moneyness_pct"]) + 1e-9:
+            return (f"strike {k:g} is {abs(k / u - 1) * 100:.1f}% from the underlying "
+                    f"{u:g}, outside {m['moneyness_pct']:g}% of the money")
     return None
 
 DIRECTION_REASON = (
@@ -593,6 +616,13 @@ def _selftest_structure() -> None:
     assert "time exit 0" in option_structure_violation("2026-11-20", "2026-10-28", dict(ok, dte_exit=0))
     assert "unreadable" in option_structure_violation("soon", "2026-10-28", ok)
     assert "21-45 DTE" in STRUCTURE_REASON and "+200% / -50%" in STRUCTURE_REASON and "thesis exit on" in STRUCTURE_REASON
+    # D2: the moneyness leg, asked only when the underlying is known.
+    assert option_structure_violation("2026-11-20", "2026-10-28", ok, strike=150, underlying=110).startswith("strike 150 is 36.4%")
+    assert option_structure_violation("2026-11-20", "2026-10-28", ok, strike=105, underlying=100) is None
+    assert "outside 5% of the money" in option_structure_violation("2026-11-20", "2026-10-28", ok, strike=105.01, underlying=100)
+    assert option_structure_violation("2026-11-20", "2026-10-28", ok, strike=95, underlying=100) is None
+    assert option_structure_violation("2026-11-20", "2026-10-28", ok, strike=150) is None, "no underlying: not asked"
+    assert "within 5% of the underlying" in STRUCTURE_REASON
     print("  measured structure: 21-45 DTE, +200/-50, out at 7, thesis on; every other leg named in the refusal")
 
 

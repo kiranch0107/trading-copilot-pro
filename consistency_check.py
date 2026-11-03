@@ -2988,7 +2988,8 @@ def check_journal_hygiene() -> None:
     # scanner's chain fetch and the ATM fetch all read one window function.
     import option_chain as oc
     import inspect as _insp
-    assert "max_dte=MAX_DTE)" in app, "app.py must pass max_dte=MAX_DTE to get_option_data()"
+    _goc = app[app.find("get_option_data(ticker, r[\"price\"]"):][:600]
+    assert "max_dte=MAX_DTE" in _goc, "app.py must pass max_dte=MAX_DTE to get_option_data()"
     assert "in_dte_window(dte, min_dte, max_dte)" in _insp.getsource(oc.get_full_chain_data)
     sc_src = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
     assert sc_src.count("option_chain.in_dte_window(dte, OPT_MIN_DTE, OPT_MAX_DTE)") == 2, \
@@ -3072,6 +3073,20 @@ def check_journal_hygiene() -> None:
         "a close form must not pre-fill the exit fill (N6)"
     assert _app_src.count("if _close_clicked and fill is None:") == 1 and \
         _app_src.count("if _cf_clicked and mf is None:") == 1, "both close forms refuse an empty fill (N6)"
+    # D2 (owner 2026-11-03): every logging path hands the journal the
+    # underlying's price so the moneyness leg is asked; both selector
+    # callers pass the alert's target so no strike beyond it is named.
+    for _n in _logs:
+        _call = next(_ast.unparse(x) for x in _n.body if "open_option_position(" in _ast.unparse(x))
+        assert "underlying_px=underlying_price_now(" in _call, \
+            f"app.py line {_n.lineno}: open_option_position must pass underlying_px (D2)"
+    assert 'max_dte=MAX_DTE, target=r.get("target"))' in _app_src.replace("\r\n", "\n"), \
+        "the app's selector call passes the target (D2)"
+    _sc_src = Path("scanner.py").read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+    assert 'target=r.get("target"), max_dte=_cap)' in _sc_src and "target=target)" in _sc_src, \
+        "the scanner's contract passes the alert's target to the selector (D2)"
+    assert "moneyness_pct" in m and "strike=strike, underlying=underlying_px" in \
+        Path("journal_store.py").read_text(encoding="utf-8"), "the journal asks the moneyness leg (D2)"
     print("  signal entries only in the measured structure (one dict; scanner window and app defaults read it); "
           "no discretionary live entry; no fixture row committed; every app call site catches the refusal; "
           "DTE ceiling everywhere; H1/H1' read from amendment F; a logged position says so only on success; "
@@ -3267,6 +3282,20 @@ def check_fill_gate_and_blackout_bar() -> None:
             f"a gapped fill records one NOT SENT row per key, counts as withheld and sends nothing ({loop.strip()})"
         assert "forward_log.record_signal" not in gate and "decision" not in gate, "the record is not touched by the alert gate"
     assert "fill check before alert" in sc_src, "the selftest proves it"
+    # D4 / D1 (owner 2026-11-03): both loops ask withhold_before_send() after
+    # at_send() and before the contract is fetched; a hold records one NOT
+    # SENT row (via _withhold) and counts as withheld.
+    _rb = run_body.replace("\r\n", "\n")
+    for loop in ("msg = compose_alert(r, tk)\n", "msg = compose_alert(r, tk, header=_hdr)"):
+        i = _rb.find(loop)
+        seg = _rb[i - 600:i]
+        assert i > 0 and seg.find("at_send(r, *fill_probe(") < seg.find("withhold_before_send(r, datetime.now(ET).date())") \
+            and "_withhold(tk, r, " in seg and "withheld += 1" in seg, \
+            f"the D4/D1 hold must sit between at_send() and the send ({loop.strip()})"
+    _wh = sc_src.replace("\r\n", "\n")
+    _wh = _wh[_wh.find("def _withhold("):][:600]
+    assert "if not withheld_on_bar(r.get(\"signal_key\")):" in _wh and '"NOT SENT: " + why' in _wh, \
+        "a hold records ONE NOT SENT row per key"
     # J2 — both callers pass the signal bar's date; the shared rule blocks the straddle.
     for path, src in (("scanner.py", sc_src), ("app.py", app_src)):
         assert "earnings=check_earnings_blackout(ticker, bar_date=_bar_for_earnings)" in src and \
