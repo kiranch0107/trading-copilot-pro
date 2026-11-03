@@ -2157,6 +2157,7 @@ with TAB_STOCK:
                                             f"maximum loss on this contract "
                                             f"({cost/ACCOUNT_SIZE*100:.1f}% of "
                                             f"\\${ACCOUNT_SIZE:,}).")
+                                        _q_traded = trade_time_input(f"qbuy_{_qkey}", "Traded at")
                                         _q_mode = mode_selector(f"qbuy_{_qkey}")
                                         _q_src = source_selector(f"qbuy_{_qkey}")
                                         _q_ok = size_gate(q_prem, q_qty, f"qbuy_{_qkey}")
@@ -2172,7 +2173,7 @@ with TAB_STOCK:
                                                         key=f"qbuy_confirm_{_qkey}"):
                                               try:
                                                 open_option_position(
-                                                    mode=_q_mode, source=_q_src,
+                                                    mode=_q_mode, source=_q_src, traded_at=_q_traded,
                                                     # Exactly this signal (BACKLOG 28):
                                                     # `df` is the frame analyze() read,
                                                     # so its last bar IS the signal bar.
@@ -3216,16 +3217,30 @@ with TAB_CHECK:
                     chk_contracts = int(st.number_input(
                         "Contracts", min_value=1, value=1, step=1,
                         key="chk_contracts"))
+                # THE CONTRACT CHECKER'S LOG FORM (review 2026-11-03; owner: "fix
+                # the contract-checker form bugs as well"). Its defaults were typed
+                # numbers, it had no thesis checkbox (it wrote invalidate_ema False,
+                # so the journal refused every signal trade logged here: "thesis
+                # exit off is not the measured structure"), it logged the chain's
+                # MID when no fill was typed, and it had no trade time. Now it reads
+                # the structure, asks the thesis, logs only a typed fill, and dates
+                # the trade as the other two forms do.
                 with lg2:
                     chk_tp = st.number_input("Take profit %", min_value=0,
-                                             value=200, step=25, key="chk_tp")
+                                             value=int(risk_params.MEASURED_OPTION_STRUCTURE["tp_pct"]),
+                                             step=25, key="chk_tp")
                 with lg3:
                     chk_sl = st.number_input("Stop loss %", min_value=0,
-                                             value=50, step=5, key="chk_sl")
+                                             value=int(risk_params.MEASURED_OPTION_STRUCTURE["sl_pct"]),
+                                             step=5, key="chk_sl")
                 with lg4:
                     chk_dte_exit = st.number_input("Exit at DTE", min_value=0,
-                                                   value=7, step=1,
-                                                   key="chk_dte_exit")
+                                                   value=int(risk_params.MEASURED_OPTION_STRUCTURE["dte_exit"]),
+                                                   step=1, key="chk_dte_exit")
+                chk_thesis = st.checkbox(
+                    "Thesis exit (EMA20 break)",
+                    value=bool(risk_params.MEASURED_OPTION_STRUCTURE["thesis"]), key="chk_thesis",
+                    help="Part of the measured structure: a signal trade without it is refused.")
                 chk_hold = int(st.number_input(
                     "Max hold (sessions)", min_value=0, value=MAX_HOLD, step=5,
                     key="chk_hold"))
@@ -3234,16 +3249,22 @@ with TAB_CHECK:
                     placeholder="DAY if this is a day trade — see the journal "
                                 "convention")
 
-                _chk_prem = res["entry_premium"] or (ct["mid"] if ct else 0.0)
+                # The fill is the premium typed in the check above, never the
+                # chain's mid: the gap between the two is what the record measures.
+                _chk_prem = float(res.get("entry_premium") or 0.0)
+                _chk_traded = trade_time_input("chk", "Traded at")
                 _chk_mode = mode_selector("chk")
                 _chk_src = source_selector("chk")
                 _chk_key = (signal_bar_input("chk", res["ticker"], res["right"])
                             if _chk_src == "signal" else None)
                 _chk_ok = size_gate(_chk_prem, chk_contracts, "chk")
                 if st.button("Log position", key="chk_log"):
-                    if not _chk_ok:
+                    if _chk_prem <= 0:
+                        st.error("Type what you paid in 'Entry premium' above and check "
+                                 "again: the journal records your fill, not the chain's mid.")
+                    elif not _chk_ok:
                         st.error("Position size not accepted — see above.")
-                    elif not (chk_tp or chk_sl or chk_dte_exit or chk_hold):
+                    elif not (chk_tp or chk_sl or chk_dte_exit or chk_hold or chk_thesis):
                         st.warning("At least one exit rule is required — a "
                                    "position with no exit rule is never "
                                    "monitored.")
@@ -3251,7 +3272,7 @@ with TAB_CHECK:
                         try:
                             open_option_position(
                                 mode=_chk_mode, source=_chk_src,
-                                signal_key=_chk_key,
+                                signal_key=_chk_key, traded_at=_chk_traded,
                                 ticker=res["ticker"], expiry=res["expiry"],
                                 strike=res["strike"], right=res["right"],
                                 entry_premium=_chk_prem,
@@ -3259,7 +3280,7 @@ with TAB_CHECK:
                                 rules={"tp_pct": chk_tp, "sl_pct": chk_sl,
                                        "dte_exit": chk_dte_exit,
                                        "max_hold_bars": chk_hold,
-                                       "invalidate_ema": False},
+                                       "invalidate_ema": bool(chk_thesis)},
                                 notes=chk_notes,
                                 entry_features=capture_entry_features(res["ticker"]),
                                 underlying_px=underlying_price_now(res["ticker"]))

@@ -2464,7 +2464,15 @@ counts holds by reason. Intake note 2026-11-03 in
 `forward_record_preregistration.md`. ~23 mutations falsified. **Seen while
 building, not fixed:** the app's contract-checker logging path writes
 `invalidate_ema: False` (so a signal trade logged there is refused by the
-structure) and defaults its premium to the chain's mid.
+structure) and defaults its premium to the chain's mid. **FIXED 2026-11-03
+(owner: "fix the contract-checker form bugs as well"):** the checker's log
+form asks the thesis exit (a checkbox defaulting to the structure's field),
+reads its TP/SL/DTE defaults from `MEASURED_OPTION_STRUCTURE`, logs only
+the premium typed in the check (refuses 0; never the mid) and takes a
+"Traded at"; the quick-buy form, which had no trade time either, takes one
+too. Pinned in `check_journal_hygiene` (an AST pass: every logging call
+dates the trade and none hard-codes the thesis off; no mid default; three
+thesis checkboxes read the structure). Five mutations falsified.
 
 **D6 AND D8 DECIDED AND BUILT 2026-11-03 (owner: "go with D6 and D8 as
 well").** **D6** `exit_monitor.in_closing_window()`: from
