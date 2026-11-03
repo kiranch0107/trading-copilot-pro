@@ -117,6 +117,19 @@ SPY_ADX_REPORT_WINDOW = 14
 # earnings_blackout_from_dates() below, and there is now only one of it.
 EARNINGS_BLACKOUT_DAYS = 3   # block this many days BEFORE earnings
 POST_EARNINGS_DAYS     = 1   # and this many days after, for the IV-crush tail
+# How long a release date the caller has SEEN stays in its memory after the
+# date (review 2026-11-03, N8): long enough to cover a weekend, a holiday and
+# a stale frame between the signal bar and the fill.
+EARNINGS_MEMORY_DAYS   = 10
+
+# The two details that mean "the earnings leg was NOT checked" (fail open).
+EARNINGS_UNKNOWN_PREFIXES = ("No earnings date available", "Earnings check unavailable")
+
+
+def earnings_unknown(detail: str | None) -> bool:
+    """True when an earnings detail says the leg passed because nothing could
+    be checked, not because no release is near (N8)."""
+    return str(detail or "").startswith(EARNINGS_UNKNOWN_PREFIXES)
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +389,46 @@ def earnings_blackout_from_dates(dates,
     if nxt:
         return True, f"Next earnings: {nxt[0]} ({(nxt[0] - today).days}d away)"
     return True, f"Last earnings: {dates[-1]} ({(today - dates[-1]).days}d ago)"
+
+
+def remember_release_dates(memory: dict | None, ticker: str, dates, today,
+                           blackout_days: int = EARNINGS_BLACKOUT_DAYS,
+                           post_days: int = POST_EARNINGS_DAYS,
+                           keep_days: int = EARNINGS_MEMORY_DAYS) -> list:
+    """
+    The calendar's dates PLUS the release dates already seen for `ticker`
+    (review 2026-11-03, N8). Yahoo's calendar drops a release once it has
+    happened and shows the next quarter's estimate: on 2026-10-29 at 11:07
+    NOW's 10-28 after-close release was already gone (with post_days 1 it
+    would otherwise have blocked), so the straddle rule (J2), which asks for
+    a release between the signal bar and today, had nothing to read. It
+    could not have stopped the alert it was built for.
+
+    A date is remembered only once it has been seen INSIDE the window
+    [today - post_days, today + blackout_days], where it is the announced
+    date and not an early estimate, and kept until `keep_days` after it.
+    `memory` ({ticker: [ISO dates]}) is updated in place; the caller
+    persists it. None means no memory: the calendar alone, as before.
+    """
+    import datetime as _dt
+    dates = sorted(set(dates or []))
+    if memory is None:
+        return dates
+    seen = set()
+    for s in memory.get(ticker) or []:
+        try:
+            seen.add(_dt.date.fromisoformat(str(s)[:10]))
+        except ValueError:
+            continue
+    for d in dates:
+        if -post_days <= (d - today).days <= blackout_days:
+            seen.add(d)
+    keep = sorted(d for d in seen if (today - d).days <= keep_days)
+    if keep:
+        memory[ticker] = [d.isoformat() for d in keep]
+    else:
+        memory.pop(ticker, None)
+    return sorted(set(dates) | set(keep))
 
 
 # ---------------------------------------------------------------------------
@@ -658,6 +711,42 @@ def selftest() -> int:
     assert get_earnings_blackout("X", lambda t: {"Earnings Date": [_dt.date(2026, 9, 14)]}, _t,
                                  bar_date=_dt.date(2026, 9, 14))[0] is False, "the wrapper passes the bar date through"
     print("earnings, the straddle  : a release between the signal bar and the fill blocks (J2)")
+
+    # ── A CASE ONLY THE STRADDLE CATCHES (review 2026-11-03, N8). The NOW
+    # assertion above passes without bar_date too (post_days 1 blocks a
+    # release 1 day ago), so it never proved the straddle. A Friday-close
+    # release read on Monday is 3 days past, outside the post window.
+    _fri, _mon = _dt.date(2026, 10, 30), _dt.date(2026, 11, 2)
+    assert earnings_blackout_from_dates([_fri], _mon)[0] is True and \
+        earnings_blackout_from_dates([_fri], _mon, bar_date=_fri)[0] is False, \
+        "Friday bar, Friday after-close release, Monday fill: only the straddle blocks it"
+    # ── RELEASE DATES SEEN ARE REMEMBERED (N8). Yahoo's calendar drops a
+    # release once it happens: NOW's 10-28 was gone at 10-29 11:07. The
+    # sequence: seen at +1 on 10-27, the calendar rolled to next quarter's
+    # estimate by 10-29.
+    _mem: dict = {}
+    _d27, _d28, _d29 = _dt.date(2026, 10, 27), _dt.date(2026, 10, 28), _dt.date(2026, 10, 29)
+    remember_release_dates(_mem, "NOW", [_d28], _d27)
+    assert _mem == {"NOW": ["2026-10-28"]}, _mem
+    _rolled = [_dt.date(2027, 1, 27)]
+    assert earnings_blackout_from_dates(_rolled, _d29, bar_date=_d28)[0] is True, \
+        "without memory the rolled calendar clears NOW's 10-28 bar (the 10-29 alert)"
+    _merged = remember_release_dates(_mem, "NOW", _rolled, _d29)
+    assert _d28 in _merged and earnings_blackout_from_dates(_merged, _d29, bar_date=_d28)[0] is False, \
+        "with memory the straddle blocks it"
+    _m2: dict = {}
+    remember_release_dates(_m2, "X", [_dt.date(2026, 11, 20)], _d27)
+    assert _m2 == {}, "an estimate weeks out is not remembered (only a date seen inside the window)"
+    remember_release_dates(_mem, "NOW", [], _d28 + _dt.timedelta(days=EARNINGS_MEMORY_DAYS + 1))
+    assert "NOW" not in _mem, "a remembered date is dropped keep_days after it"
+    assert remember_release_dates(None, "X", [_d28, _d28], _d29) == [_d28], "no memory: the calendar alone"
+    assert earnings_unknown("No earnings date available — proceed with caution") and \
+        earnings_unknown("Earnings check unavailable (boom) — proceed with caution") and \
+        not earnings_unknown("Next earnings: 2026-11-12 (9d away)") and not earnings_unknown(None)
+    _ok_e, _why_e = earnings_blackout_from_dates([], _t)
+    assert earnings_unknown(_why_e), "the prefix list must match the strings this module produces"
+    print("earnings, remembered    : a release seen inside the window is kept 10 days, so the "
+          "straddle can read it after Yahoo drops it (N8)")
 
     # Fails OPEN, and says which kind of open it is.
     _ok, _why = earnings_blackout_from_dates([], _t)
