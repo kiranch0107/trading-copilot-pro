@@ -31,7 +31,7 @@ from rate_limit import (
     RATE_LIMITER as _rl, RATE_LIMITER_SLOW as _rl_slow,
     is_rate_limit_error as _is_rate_limit_error,
 )
-from option_chain import get_option_data, _fetch_chain_with_retry, _OPT_MAX_EXPIRIES
+from option_chain import get_option_data, _fetch_chain_with_retry, _OPT_MAX_EXPIRIES, et_today
 
 
 def _bridge_secrets_to_env(*names: str) -> None:
@@ -1123,7 +1123,7 @@ def check_manual_contract(ticker: str, right: str, strike: float,
 
     # ── B. The contract itself ──
     try:
-        dte = (pd.Timestamp(expiry) - option_chain.et_today()).days   # ET, not the host clock (N3)
+        dte = (pd.Timestamp(expiry) - et_today()).days   # ET, not the host clock (N3)
     except Exception:
         out["error"] = f"Could not parse expiry {expiry!r} (use YYYY-MM-DD)"
         return out
