@@ -445,7 +445,7 @@ def record_scan(bar_date, tickers: list, n_signals: int, cfg: dict,
 
 
 def record_alert(ticker: str, trend: str, bar_date, bucket: str, delivered: bool,
-                 header: str = "", path: Path | None = None) -> dict:
+                 header: str = "", path: Path | None = None, at_send: dict | None = None) -> dict:
     """
     One row per alert the scanner SENT (or tried to): what reached the owner,
     and whether it did. Never deduped: a resend after a failed delivery is a
@@ -453,14 +453,23 @@ def record_alert(ticker: str, trend: str, bar_date, bucket: str, delivered: bool
     app READS these rows for its alert history, so "which alerts did I act on"
     is answerable from the same chain that holds the signals and outcomes
     (journal review 2026-10-13, BACKLOG 32).
+
+    `at_send` (review 2026-11-03, N2): the scanner's read of the session
+    when it sent, {open, last, moved_r, rr_now, below_hq}. Stored as given
+    when present, so the distance between the grader's fill (the open) and
+    a fill the owner could actually get (the alert time) is measured on
+    the chain. Never read by the grader; absent on rows before it existed.
     """
     if bucket not in BUCKETS:
         raise ValueError(f"bucket must be one of {BUCKETS}, not {bucket!r}")
-    return append("alert", {
+    body = {
         "ticker": ticker, "trend": trend, "bar_date": str(bar_date)[:10] if bar_date else None,
         "key": signal_key(ticker, trend, str(bar_date)[:10]) if bar_date else None,
         "bucket": bucket, "delivered": bool(delivered), "header": header,
-    }, path=path)
+    }
+    if at_send:
+        body["at_send"] = {k: at_send.get(k) for k in ("open", "last", "moved_r", "rr_now", "below_hq")}
+    return append("alert", body, path=path)
 
 
 def alerts_sent(path: Path | None = None) -> list[dict]:

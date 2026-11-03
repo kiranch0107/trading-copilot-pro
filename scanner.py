@@ -410,12 +410,23 @@ def gapped_at_fill(r: dict, open_px, last_px=None) -> str | None:
     alert path never asked: on 2026-10-29 the 11:07 scan alerted NOW's
     10-28 bar with the stock open 27 % below the recorded stop after the
     release, and the 16:09 pass voided the same row. The alert said "buy
-    at 149.85, stop 142.34" of a stock trading at 109. Mirrors the
-    grader's rule on the first bar after the signal bar (`open_px`, the
-    fill) and, when the run has one, the latest price (`last_px`): a stock
-    that opened inside the levels and has since run through them is the
-    same trade gone. Returns the reason to withhold, or None to send.
-    Unreadable prices never withhold (the grader still voids).
+    at 149.85, stop 142.34" of a stock trading at 109. Asked of the first
+    bar after the signal bar (`open_px`, the fill) and, when the run has
+    one, the latest price (`last_px`): a stock that opened inside the
+    levels and has since run through them is the same trade gone. Returns
+    the reason to withhold, or None to send. Unreadable prices never
+    withhold (the grader still voids).
+
+    THE GRADER IS ASKED, NOT COPIED (review 2026-11-03, N1). This used to
+    restate the gap rule as `px <= stop or px >= target` on the raw open.
+    The grader's void has two more legs: the 2 bps slippage on the fill,
+    and the risk floor (grading amendment 2026-10-29, L2), which voids a
+    fill within max($0.05, 0.3 %) of the stop. The floor landed a day
+    before this gate and was never wired into it, so an open in that band
+    (stop 97.50, open 97.55-97.70) was SENT and then voided at 16:09, the
+    exact NOW sequence J1 exists to stop. `_grader_voids_fill()` hands
+    the price to forward_log.resolve_signal() itself, so every leg the
+    grader has, or is amended to have, is the gate's leg too.
     """
     try:
         stop, target = float(r["stop"]), float(r["target"])
@@ -427,13 +438,45 @@ def gapped_at_fill(r: dict, open_px, last_px=None) -> str | None:
             px = float(px)
         except (TypeError, ValueError):
             continue
-        if px != px:                                        # NaN
+        if px != px or px <= 0:                             # NaN, or no price
             continue
-        beyond = (px <= stop or px >= target) if long else (px >= stop or px <= target)
-        if beyond:
-            return (f"{label} {px:.2f} is beyond the {'stop' if (px <= stop if long else px >= stop) else 'target'} "
-                    f"(stop {stop:.2f}, target {target:.2f}) — the grader would void this fill")
+        why = _grader_voids_fill(long, stop, target, px)
+        if why:
+            return (f"{label} {px:.2f} {why} (stop {stop:.2f}, target {target:.2f}) "
+                    f"— the grader would void this fill")
     return None
+
+
+def _grader_voids_fill(long: bool, stop: float, target: float, px: float) -> str | None:
+    """
+    Whether forward_log.resolve_signal() would VOID a fill at `px`
+    (gapped_before_fill, either note), asked of the grader itself on a
+    one-bar probe: a signal bar and one bar after it that opens, trades
+    and closes at `px`. The recorded close and the probe signal bar's
+    close are the same number, so the split check can never fire; the
+    grader reads nothing else of them. None when the grader would take
+    the fill (it then walks the bar, which is not this question).
+    """
+    ref = stop                                          # any positive close; see above
+    row = {"trend": "Bullish" if long else "Bearish", "bar_date": "2000-01-03",
+           "setup": {"price": ref, "stop": stop, "target": target}}
+    bars = [{"date": "2000-01-03", "open": ref, "high": ref, "low": ref, "close": ref},
+            {"date": "2000-01-04", "open": px, "high": px, "low": px, "close": px}]
+    try:
+        v = forward_log.resolve_signal(row, bars, today=date(2000, 1, 4))
+    except Exception:                                   # noqa: BLE001
+        return None
+    if not v or v.get("outcome") != "void" or v.get("reason") != "gapped_before_fill":
+        return None
+    if (px <= stop) if long else (px >= stop):
+        return "is beyond the stop"
+    if (px >= target) if long else (px <= target):
+        return "is beyond the target"
+    d = v.get("detail") or {}
+    if d.get("note") == "fill inside the risk floor":
+        return (f"is inside the risk floor of the stop (risk {d.get('fill_risk', 0):.2f} "
+                f"< floor {d.get('risk_floor', 0):.2f})")
+    return "is within the fill slippage of the target"
 
 
 def fill_probe(raw_df, cdf) -> tuple:
@@ -456,6 +499,45 @@ def fill_probe(raw_df, cdf) -> tuple:
         return float(after.iloc[0]["Open"]), float(after.iloc[-1]["Close"])
     except Exception:                                      # noqa: BLE001
         return None, None
+
+
+def at_send(r: dict, open_px, last_px) -> dict | None:
+    """
+    WHERE THE TRADE STANDS WHEN THE ALERT GOES OUT (review 2026-11-03, N2).
+    Every level in an alert is computed at the signal bar's CLOSE; the
+    alert is sent at 11:07 ET the next session, and the record grades the
+    trade from that session's OPEN. Neither is a price the owner can fill
+    at. In the record's first 7 graded HQ alerts the open alone had moved
+    WMT +0.84 R and V +0.60 R toward the target, leaving R:R 0.24 and 0.65
+    at the fill against the tier's 1.0. This says, in R of the planned
+    risk, how far the stock has already moved, and the R:R from the latest
+    price to the same stop and target. Display and measurement only: it
+    withholds nothing (the fill gate above does that) and changes no level.
+    None without a usable latest price.
+    """
+    try:
+        entry, stop, target = float(r["entry"]), float(r["stop"]), float(r["target"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    long = r.get("trend") == "Bullish"
+    def _px(v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return v if v == v and v > 0 else None
+    o, last = _px(open_px), _px(last_px)
+    now = last if last is not None else o
+    plan = (entry - stop) if long else (stop - entry)
+    if now is None or plan <= 0:
+        return None
+    risk_now = (now - stop) if long else (stop - now)
+    reward_now = (target - now) if long else (now - target)
+    rr_now = (reward_now / risk_now
+              if risk_now >= risk_params.min_risk(now) and reward_now > 0 else None)
+    return {"open": o, "last": last, "moved_r": round(((now - entry) if long else (entry - now)) / plan, 2),
+            "rr_now": None if rr_now is None else round(rr_now, 2),
+            "below_hq": rr_now is None or not sc.gate_rr(rr_now, PARAMS.hq_min_rr)}
 
 
 def withheld_on_bar(signal_key: str | None) -> bool:
@@ -1107,6 +1189,18 @@ def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
         f"you log the trade as a system signal, so its outcome attaches "
         f"to exactly this signal.",
     ]
+    _now = r.get("at_send")
+    if _now:
+        # N2: the levels above are the signal close's; this is the price now.
+        _px = _now["last"] if _now.get("last") is not None else _now["open"]
+        _o = _now.get("open")
+        _rrn = _now.get("rr_now")
+        lines.append(f"Now {_px:.2f} (open {'?' if _o is None else f'{_o:.2f}'}): "
+                     f"{_now['moved_r']:+.2f} R from the signal close; R:R from here "
+                     f"{'n/a' if _rrn is None else f'{_rrn:.2f}'} (at the close {r['rr']})")
+        if _now.get("below_hq"):
+            lines.append(f"⚠️ R:R from the current price is under the tier's {PARAMS.hq_min_rr:.1f}. "
+                         f"The record grades this signal from today's open, not from your fill.")
 
     # Chain fetch happens here — AFTER the cooldown check — so
     # suppressed alerts cost no API calls.
@@ -1177,7 +1271,8 @@ def _record_alert(tk: str, r: dict, bucket: str, delivered: bool, header: str,
     if dry_run:
         return
     try:
-        forward_log.record_alert(tk, r["trend"], r.get("bar_date"), bucket, delivered, header)
+        forward_log.record_alert(tk, r["trend"], r.get("bar_date"), bucket, delivered, header,
+                                 at_send=r.get("at_send"))
     except Exception as exc:                           # noqa: BLE001
         logger.warning("%s — alert row failed: %s", tk, exc)
 
@@ -1507,6 +1602,7 @@ def run(args) -> int:
                 withheld += 1
                 continue
 
+            r["at_send"] = at_send(r, *fill_probe(df, cdf))
             msg = compose_alert(r, tk)
             logger.info("ALERT %s %s rr=%s", tk, r["trend"], r["rr"])
             _ok = send_alert(msg, dry_run=args.dry_run)
@@ -1631,6 +1727,7 @@ def run(args) -> int:
                 continue
             _hdr = (f"🚨 POOL ALERT (wide universe, HQ tier, RS {r['rs']:+.1f})"
                     if r["rs"] is not None else "🚨 POOL ALERT (wide universe, HQ tier)")
+            r["at_send"] = at_send(r, *fill_probe(frames[tk], pool_cdfs.get(tk)))
             msg = compose_alert(r, tk, header=_hdr)
             logger.info("POOL ALERT %s %s rr=%s rs=%s", tk, r["trend"], r["rr"], r["rs"])
             pool_attempted += 1
@@ -2425,12 +2522,34 @@ def _selftest_body() -> int:
             _g["get_data"] = lambda tk: _with_fill(100.0, 101.0)    # a fill inside the levels
             run(_ap2.Namespace(force=True, dry_run=False))
             assert len(_sentk) == 1, "a fill inside the levels is alerted"
+            # THE PRICE AT SEND (review 2026-11-03, N2): the alert prints where the
+            # stock is now against the signal close's levels, and the alert row
+            # carries the same numbers; nothing is withheld on them.
+            assert "Now 101.00 (open 100.00): +0.50 R from the signal close; R:R from here 1.67" in _sentk[0] \
+                and "under the tier" not in _sentk[0], _sentk[0]
+            _as = [r for r in forward_log.read_all(_tmpl) if r["kind"] == "alert" and r["delivered"]][-1].get("at_send")
+            assert _as == {"open": 100.0, "last": 101.0, "moved_r": 0.5, "rr_now": 1.67, "below_hq": False}, _as
+            _w = at_send({"trend": "Bullish", "entry": 100.0, "stop": 97.5, "target": 103.18}, 102.1, 102.3)
+            assert _w["below_hq"] and _w["rr_now"] == 0.18 and _w["moved_r"] == 0.92, _w
+            assert at_send({"trend": "Bullish", "entry": 100.0, "stop": 97.5, "target": 103.18}, None, None) is None \
+                and at_send({"trend": "Bullish"}, 100.0, 101.0) is None, "no price, or no levels, prints nothing"
+            assert "under the tier's 1.0" in compose_alert({**_hq(_fr, "AAA"), "at_send": _w}, "AAA")
+            print("price at send            : the alert prints the move already made and the R:R from "
+                  "the latest price, warns under the tier's R:R, and the alert row carries it (N2)")
             assert gapped_at_fill({"trend": "Bearish", "stop": 102.0, "target": 94.0}, 103.0) and \
                 gapped_at_fill({"trend": "Bearish", "stop": 102.0, "target": 94.0}, 100.0, 93.0) and \
                 gapped_at_fill({"trend": "Bearish", "stop": 102.0, "target": 94.0}, 100.0, 100.0) is None and \
                 gapped_at_fill({"trend": "Bullish", "stop": 98.0, "target": 106.0}, None, None) is None and \
                 gapped_at_fill({"trend": "Bullish", "stop": 98.0, "target": 106.0}, float("nan")) is None and \
                 gapped_at_fill({"trend": "Bullish"}, 50.0) is None, "the short side mirrors; unreadable prices never withhold"
+            # THE GRADER IS ASKED, NOT COPIED (review 2026-11-03, N1): an open
+            # inside the risk floor of the stop, or within the fill slippage of
+            # the target, is a fill the grader voids; the restated rule sent both.
+            _rf = {"trend": "Bullish", "stop": 97.5, "target": 105.0}
+            assert "risk floor" in (gapped_at_fill(_rf, 97.6) or "") and \
+                "slippage" in (gapped_at_fill(_rf, 104.99) or "") and gapped_at_fill(_rf, 97.8) is None and \
+                "risk floor" in (gapped_at_fill(_rf, 100.0, 97.55) or "") and gapped_at_fill(_rf, 0.0) is None, \
+                "the gate withholds exactly what the grader voids: the risk floor and the slippage too (N1)"
             assert fill_probe(_fr, _fr) == (None, None), "a frame ending on the signal bar has no fill yet"
             print("fill check before alert : a next open beyond the stop, or a last print beyond the target, "
                   "withholds the alert and records one NOT SENT row; a fill inside sends (J1)")

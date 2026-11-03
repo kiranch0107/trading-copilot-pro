@@ -3147,8 +3147,8 @@ def check_alert_once_per_bar() -> None:
     assert n == 2, f"both alerting loops must ask alerted_on_bar() before sending (found {n})"
     for loop in ("compose_alert(r, tk)\n", "compose_alert(r, tk, header=_hdr)"):
         i = run_body.find(loop)
-        assert i > 0 and 'if alerted_on_bar(r.get("signal_key")):' in run_body[i - 1200:i] \
-            and "if recently_alerted(state, tk, r[\"trend\"]):" in run_body[i - 1200:i], \
+        assert i > 0 and 'if alerted_on_bar(r.get("signal_key")):' in run_body[i - 1500:i] \
+            and "if recently_alerted(state, tk, r[\"trend\"]):" in run_body[i - 1500:i], \
             f"the key check must sit between the stamp check and the send ({loop.strip()})"
     assert "one alert per signal bar" in sc_src, "the selftest proves it"
     print("  the same signal bar is never alerted twice: both loops read the delivered alert rows by key")
@@ -3208,6 +3208,29 @@ def check_fill_gate_and_blackout_bar() -> None:
         "gapped_at_fill() must mirror forward_log.resolve_signal's gap rule, inclusive, and never withhold on no price"
     gr = _ci.getsource(__import__("forward_log").resolve_signal)
     assert "gapped = ((fill <= stop or fill >= target) if long" in gr, "the grader's rule this mirrors"
+    # N1 (review 2026-11-03): the gate ASKS the grader rather than restating
+    # it, so the risk floor and the fill slippage are legs of the gate too.
+    # A grid over both directions: the gate withholds exactly where
+    # resolve_signal voids a fill at that price. The restated rule disagreed
+    # on 760 of 25,600 points of the review's grid.
+    _fl = __import__("forward_log")
+    assert "forward_log.resolve_signal(" in _ci.getsource(_sc._grader_voids_fill), \
+        "the alert gate must ask forward_log.resolve_signal, not restate its rule"
+    _bad = []
+    for _long, _px0, _stop, _tgt in ((True, 100.0, 97.5, 105.0), (False, 100.0, 102.5, 95.0),
+                                     (True, 12.0, 11.7, 12.6), (True, 640.0, 624.0, 691.2)):
+        _row = {"trend": "Bullish" if _long else "Bearish", "bar_date": "2026-10-28",
+                "setup": {"price": _px0, "stop": _stop, "target": _tgt}}
+        _sig = {"date": "2026-10-28", "open": _px0, "high": _px0, "low": _px0, "close": _px0}
+        _lo, _hi = min(_stop, _tgt), max(_stop, _tgt)
+        for _i in range(401):
+            _px = round(_lo * 0.98 + (_hi * 1.02 - _lo * 0.98) * _i / 400, 2)
+            _g = _fl.resolve_signal(_row, [_sig, {"date": "2026-10-29", "open": _px, "high": _px,
+                                                   "low": _px, "close": _px}], today=_dt.date(2026, 10, 29))
+            if (bool(_g) and _g["outcome"] == "void") != (_sc.gapped_at_fill(
+                    {"trend": _row["trend"], "stop": _stop, "target": _tgt}, _px) is not None):
+                _bad.append((_row["trend"], _stop, _tgt, _px))
+    assert not _bad, f"the alert gate and the grader disagree on {len(_bad)} fill price(s), e.g. {_bad[:3]}"
     run_body = sc_src[sc_src.find("\ndef run("):]
     for loop, probe in (("compose_alert(r, tk)\n", "gapped_at_fill(r, *fill_probe(df, cdf))"),
                         ("compose_alert(r, tk, header=_hdr)", "gapped_at_fill(r, *fill_probe(frames[tk], pool_cdfs.get(tk)))")):
