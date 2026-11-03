@@ -3838,8 +3838,17 @@ def check_tiingo_split_adjusted() -> None:
                             "Volume": [1e6] * len(raw)}, index=ds.pd.to_datetime([x[0] for x in raw]))
     w = fl.resolve_signal(row, _bars(flat), today=_dt.date(2026, 12, 1))
     assert w["outcome"] == "loss" and w["r"] < -10, ("raw bars grade the split as a loss (the bug)", w)
+    # AND ITS FILL IS CHECKED (owner 2026-11-03: "fix the Tiingo end-of-day fill
+    # gate gap as well"): a fallback frame has no forming bar, so both alerting
+    # loops ask fill_unchecked() first, fill_probe() reads the IEX quote, and
+    # get_data() tags every frame with its source.
+    _sc_src = Path("scanner.py").read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+    assert _sc_src.count("_hold = (fill_unchecked(") == 2, "both alerting loops ask fill_unchecked() first"
+    assert 'df.attrs["source"], df.attrs["ticker"] = source, ticker' in _sc_src and \
+        "q = _fallback_quote(raw_df)" in _sc_src and "data_source.fetch_tiingo_quote(" in _sc_src, \
+        "frames carry their source; a fallback frame's fill is read from the live quote"
     print(f"  Tiingo bars are split-adjusted: a split after the fill voids the row (raw bars graded it "
-          f"{w['r']:+.1f} R)")
+          f"{w['r']:+.1f} R); a fallback day's fill is read from the IEX quote, or the alert is withheld")
 
 CHECKS = [
     ("market calendars identical across 5 copies", check_calendars_identical),
@@ -3910,7 +3919,7 @@ CHECKS = [
     ("signal-trade fixtures never read the clock (M1)", check_fixtures_never_read_the_clock),
     ("forward record's power stated at its own sd (D7)", check_forward_power_stated),
     ("option target-exit arm pre-registered (D3)", check_option_target_exit_preregistered),
-    ("Tiingo fallback split-adjusted (review 11-03)", check_tiingo_split_adjusted),
+    ("Tiingo fallback split-adjusted, its fill checked (review 11-03)", check_tiingo_split_adjusted),
 ]
 
 
