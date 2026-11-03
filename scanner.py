@@ -1245,7 +1245,11 @@ def clocks_line() -> str:
     try:
         s = forward_log.summary()
         parts.append(f"pool {s['gate_settled_episodes']}/{forward_log.GATE_EPISODES} settled episodes")
-        parts.append(f"bar revisions {s.get('revisions', 0)}")
+        # THE SLOT STAYS (owner 2026-11-03, BACKLOG 39: "keep the slot"). The
+        # number that reopens it is the one printed: a revision that moved a
+        # decision or the HQ tag. A price a few cents off is the measurement.
+        parts.append(f"bar revisions {s.get('revisions', 0)} "
+                     f"({s.get('revisions_tag_moved', 0)} moved a decision or the tag; the slot moves if that is ever > 0)")
     except Exception as exc:                               # noqa: BLE001
         parts.append(f"forward log unreadable ({exc})")
     try:
@@ -2579,7 +2583,7 @@ def _selftest_body() -> int:
                                                + timedelta(days=1)) is None, \
                 "a heartbeat from another day is not today's"
             _cl = clocks_line()
-            assert all(w in _cl for w in ("pool ", "/349", "bar revisions", "basket ", "/52", "spread ", "/12", "IV premium")), _cl
+            assert all(w in _cl for w in ("pool ", "/349", "bar revisions", "moved a decision or the tag", "basket ", "/52", "spread ", "/12", "IV premium")), _cl
             print("post-close repeat       : skipped on today's heartbeat; clocks line reads every forward log")
         finally:
             _g.update(_saved)

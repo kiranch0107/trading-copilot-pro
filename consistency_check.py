@@ -3111,7 +3111,7 @@ def check_post_close_pass_hygiene() -> None:
         "the record pass must log the clocks line after the spread arms"
     clocks = sc_src[sc_src.find("def clocks_line("):sc_src.find("def basket_record_pass(")]
     for ref in ("forward_log.GATE_EPISODES", "basket_log.RESULT_WEEKS", "spread_log.RESULT_CYCLES",
-                "sp['unquoted_cycles']", "iv['graded']"):
+                "sp['unquoted_cycles']", "iv['graded']", "s.get('revisions_tag_moved', 0)"):
         assert ref in clocks, f"clocks_line() must read {ref}, not a literal"
     assert fl.GATE_EPISODES == 349 and bl.RESULT_WEEKS == 52 and bl.FIRST_READ_WEEKS == 26 \
         and sl.RESULT_CYCLES == 12, "the forward gates"
