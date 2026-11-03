@@ -124,8 +124,11 @@ def drop_unsettled_bars(df: "pd.DataFrame",
     # ROUTED THROUGH signal_core.drop_unsettled(). DROP_UNTIL_CLOSE is the live
     # policy: today's bar is unusable before the open (a stub) and during the
     # session (in progress), and is the freshest real data once the close has
-    # passed — which matters here, because the 20:00/21:00 UTC runs are the ones
-    # that should see the session that just ended.
+    # passed. (This said the 20:00/21:00 UTC runs see the session that just
+    # ended; they do not: run() skips every run after 16:00:00 ET, so THESIS is
+    # read on the NEXT session's first run, one session after the close that
+    # broke EMA20, where option_backtest exits at that close. Review
+    # 2026-11-03; re-measuring or a ~15:50 check is the owner's call.)
     #
     # The local version asked `not is_market_open(now)` and returned early, so it
     # kept the stub bar BEFORE the open. signal_core asks whether today has
@@ -247,8 +250,9 @@ def get_underlying_state(ticker: str,
         # instead of mis-reporting a number.
         #
         # Dropped only while the market is OPEN: after the close today's bar is
-        # settled and is the one the rule should use, so the 20:00/21:00 UTC runs
-        # still see the current session.
+        # settled and is the one the rule should use. (run() skips after 16:00 ET,
+        # so in practice THESIS reads the close on the next session's first run;
+        # see drop_unsettled_bars and the review of 2026-11-03.)
         df = drop_unsettled_bars(df, now=now)
         if len(df) < 25:
             return None
