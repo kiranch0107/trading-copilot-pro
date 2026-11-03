@@ -549,6 +549,57 @@ def at_send(r: dict, open_px, last_px) -> dict | None:
             "below_hq": rr_now is None or not sc.gate_rr(rr_now, PARAMS.hq_min_rr)}
 
 
+def earnings_cap_dte(r: dict, today) -> int | None:
+    """
+    D1 (review 2026-11-03; owner: "go with D1"): the latest DTE whose
+    structure exit (dte_exit days before expiry) still falls BEFORE the next
+    release: (release - today) + dte_exit - 1. A contract expiring later is
+    held through the release (event IV paid at entry, the crush after it),
+    which the measured structure never priced. Conservative by a day: the
+    calendar does not say whether the release is before the open or after
+    the close. None when the next release is unknown (fails open, and the
+    alert says so).
+    """
+    ne = r.get("next_earnings")
+    if not ne:
+        return None
+    try:
+        ned = date.fromisoformat(str(ne)[:10])
+    except ValueError:
+        return None
+    return (ned - today).days + int(risk_params.MEASURED_OPTION_STRUCTURE["dte_exit"]) - 1
+
+
+def withhold_before_send(r: dict, today) -> str | None:
+    """
+    The reason to withhold an alert that passed the fill gate, or None to
+    send (review 2026-11-03; owner: "go with D1, D2, D4 and D5"). Asked after
+    at_send() and before any chain fetch; a withheld alert records ONE
+    "NOT SENT" row per key, as the fill gate does, and the record (the row,
+    its tag, the grader) is untouched.
+
+    D4: the R:R from the price at send is under the tier's minimum. The tier
+        asks R:R at the signal close, a price no one can fill at; this asks
+        it where the owner would enter. No readable price: send.
+    D1: the next release is so close that every contract in the structure's
+        window would be held through it (its dte_exit falls on or after the
+        release). A later release only narrows the expiries the alert may
+        name (earnings_cap_dte, in compose_alert).
+    """
+    a = r.get("at_send")
+    if a and a.get("below_hq"):
+        rr = a.get("rr_now")
+        return (f"R:R from the price at send {'n/a' if rr is None else f'{rr:.2f}'} is under the "
+                f"tier's {PARAMS.hq_min_rr:.1f} (it was {r.get('rr')} at the signal close)")
+    cap = earnings_cap_dte(r, today)
+    if cap is not None and cap < OPT_MIN_DTE:
+        _dx = int(risk_params.MEASURED_OPTION_STRUCTURE["dte_exit"])
+        return (f"earnings {r.get('next_earnings')} is {(cap - _dx + 1)}d away: every {OPT_MIN_DTE}-"
+                f"{OPT_MAX_DTE} DTE contract would be held through it (its {_dx}-DTE exit falls on "
+                f"or after the release)")
+    return None
+
+
 def withheld_on_bar(signal_key: str | None) -> bool:
     """Whether the record already holds a NOT SENT row for this key (J1): the
     withheld alert is recorded once, not on every later run of the day."""
@@ -799,7 +850,9 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
 # ══════════════════════════════════════════════════════════════════
 def suggest_option(ticker: str, price: float, trend: str,
                    atr: float, strength: str = "Normal",
-                   chain_data: dict | None = None) -> dict | None:
+                   chain_data: dict | None = None,
+                   target: float | None = None,
+                   max_dte: int | None = None) -> dict | None:
     """
     The contract an alert names. The FETCH is this module's (its retry and
     rate-limit backoff, its 21-45 DTE window, at most OPT_MAX_EXPIRIES
@@ -812,13 +865,14 @@ def suggest_option(ticker: str, price: float, trend: str,
     """
     try:
         if chain_data is None:
-            chain_data = fetch_chain_data(ticker)
+            chain_data = fetch_chain_data(ticker, max_dte=max_dte)
         if not chain_data or chain_data.get("error") or not chain_data.get("expiries"):
             return None
         budget = risk_params.option_budget(ACCOUNT_SIZE, OPTION_BUDGET_PCT)
         pick = option_chain.get_option_data(
             ticker, price, trend, strength, OPT_MIN_DTE, PARAMS.atr_tgt_mult,
-            budget / 100.0, is_market_open, atr=atr, chain_data=chain_data)
+            budget / 100.0, is_market_open, atr=atr, chain_data=chain_data,
+            target=target)                       # D2: never a strike beyond the target
         if not pick or pick.get("error"):
             if pick and pick.get("error"):
                 logger.info("%s — no contract: %s", ticker, pick["error"])
@@ -832,6 +886,7 @@ def suggest_option(ticker: str, price: float, trend: str,
             "expiry": pick["expiry"], "dte": int(pick["dte"]), "mid": round(mid, 2),
             "bid": round(bid, 2), "ask": round(ask, 2),
             "spread_pct": round(spread / mid * 100, 1) if mid else 0.0,
+            "moneyness_pct": pick.get("moneyness_pct"),
             "volume": int(pick.get("volume") or 0), "oi": int(pick.get("oi") or 0),
             "cost": round(cost, 2),
             "pct_account": round(cost / ACCOUNT_SIZE * 100, 1),
@@ -845,7 +900,7 @@ def suggest_option(ticker: str, price: float, trend: str,
         return None
 
 
-def fetch_chain_data(ticker: str) -> dict | None:
+def fetch_chain_data(ticker: str, max_dte: int | None = None) -> dict | None:
     """
     The chain in option_chain.get_option_data()'s injectable shape, fetched
     with this module's retry and backoff and bounded to the alert window
@@ -878,6 +933,8 @@ def fetch_chain_data(ticker: str) -> dict | None:
         except Exception:
             continue
         if not option_chain.in_dte_window(dte, OPT_MIN_DTE, OPT_MAX_DTE):
+            continue
+        if max_dte is not None and dte > max_dte:      # D1: its exit must come before the release
             continue
         checked += 1
         chain = None
@@ -1288,7 +1345,10 @@ def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
     _now = r.get("at_send") or {}
     _centre = next((float(v) for v in (_now.get("last"), _now.get("open"))
                     if v is not None), float(r["price"]))
-    opt = suggest_option(tk, _centre, r["trend"], r["atr"], r.get("strength", "Normal")) \
+    _cap = earnings_cap_dte(r, datetime.now(ET).date())
+    _cap = _cap if (_cap is not None and _cap < OPT_MAX_DTE) else None      # D1: binding only
+    opt = suggest_option(tk, _centre, r["trend"], r["atr"], r.get("strength", "Normal"),
+                         target=r.get("target"), max_dte=_cap) \
         if SUGGEST_OPTIONS else None
 
     if opt:
@@ -1298,7 +1358,8 @@ def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
             f"Mid ${opt['mid']:.2f}  (bid {opt['bid']:.2f} / ask {opt['ask']:.2f}, "
             f"spread {opt['spread_pct']:.0f}%)",
             f"Cost ${opt['cost']:,.0f} per contract = {opt['pct_account']:.1f}% of account",
-            f"{opt['dte']} DTE · vol {opt['volume']:,} · OI {opt['oi']:,}",
+            f"{opt['dte']} DTE · vol {opt['volume']:,} · OI {opt['oi']:,}"
+            + (f" · strike {opt['moneyness_pct']:+.1f}% vs price" if opt.get("moneyness_pct") is not None else ""),
         ]
         if not opt["within_budget"]:
             lines.append(f"⚠️ Above your ${opt['budget']:,.0f} risk budget "
@@ -1312,6 +1373,14 @@ def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
         _m = risk_params.MEASURED_OPTION_STRUCTURE
         lines += ["", f"Rules (the measured structure): TP +{_m['tp_pct']:g}% · SL −{_m['sl_pct']:g}% · "
                       f"exit at {_m['dte_exit']} DTE · thesis {'ON (EMA20 break)' if _m.get('thesis') else 'OFF'}"]
+        if _cap is not None:
+            lines.append(f"Expiry kept to {_cap} DTE or less so the {risk_params.MEASURED_OPTION_STRUCTURE['dte_exit']}-DTE "
+                         f"exit comes before earnings {r.get('next_earnings')} (D1).")
+    elif SUGGEST_OPTIONS and _cap is not None:
+        _ne = r.get("next_earnings")
+        lines += ["", f"📄 No liquid contract found in the {OPT_MIN_DTE}-{_cap} DTE window (only "
+                      f"expiries that exit before earnings {_ne}; spread/volume/OI gates). Do not "
+                      f"substitute a contract held through the release."]
     elif SUGGEST_OPTIONS:
         lines += ["", "📄 No liquid contract found in the 21-45 DTE window "
                       "(spread/volume/OI gates). Check the chain yourself."]
@@ -1406,6 +1475,15 @@ def _record_alert(tk: str, r: dict, bucket: str, delivered: bool, header: str,
                                  at_send=r.get("at_send"))
     except Exception as exc:                           # noqa: BLE001
         logger.warning("%s — alert row failed: %s", tk, exc)
+
+
+def _withhold(tk: str, r: dict, bucket: str, why: str, dry_run: bool) -> None:
+    """An alert withheld before send (D4, D1): logged, and ONE "NOT SENT" row
+    per key, as the fill gate (J1) records. The row carries at_send."""
+    logger.warning("%s%s %s bar %s NOT SENT: %s", "pool: " if bucket == "pool" else "",
+                   tk, r.get("trend"), r.get("bar_date"), why)
+    if not withheld_on_bar(r.get("signal_key")):
+        _record_alert(tk, r, bucket, False, "NOT SENT: " + why, dry_run)
 
 
 def _record_pullback(tk: str, raw_df, cdf, spy_regime, bucket_src: str,
@@ -1738,6 +1816,11 @@ def run(args) -> int:
                 continue
 
             r["at_send"] = at_send(r, *fill_probe(df, cdf))
+            _hold = withhold_before_send(r, datetime.now(ET).date())      # D4, D1
+            if _hold:
+                _withhold(tk, r, "live", _hold, args.dry_run)
+                withheld += 1
+                continue
             msg = compose_alert(r, tk)
             logger.info("ALERT %s %s rr=%s", tk, r["trend"], r["rr"])
             _ok = send_alert(msg, dry_run=args.dry_run)
@@ -1863,6 +1946,11 @@ def run(args) -> int:
             _hdr = (f"🚨 POOL ALERT (wide universe, HQ tier, RS {r['rs']:+.1f})"
                     if r["rs"] is not None else "🚨 POOL ALERT (wide universe, HQ tier)")
             r["at_send"] = at_send(r, *fill_probe(frames[tk], pool_cdfs.get(tk)))
+            _hold = withhold_before_send(r, datetime.now(ET).date())      # D4, D1
+            if _hold:
+                _withhold(tk, r, "pool", _hold, args.dry_run)
+                withheld += 1
+                continue
             msg = compose_alert(r, tk, header=_hdr)
             logger.info("POOL ALERT %s %s rr=%s rs=%s", tk, r["trend"], r["rr"], r["rs"])
             pool_attempted += 1
@@ -2084,7 +2172,8 @@ def run(args) -> int:
     if not args.dry_run:
         save_state(state)
 
-    logger.info("Done. %d alert(s) sent, %d suppressed by cooldown, %d withheld at the fill, "
+    logger.info("Done. %d alert(s) sent, %d suppressed by cooldown, %d withheld before send "
+                "(fill, R:R at send, earnings), "
                 "%d ticker(s) failed.", hits, skipped, withheld, len(failed))
     if failed:
         logger.warning("Failed tickers: %s", ", ".join(failed))
@@ -2778,6 +2867,77 @@ def _selftest_body() -> int:
             compose_alert(_hq(_fr, "AAA"), "AAA")
             assert _centres == [102.3, 102.1, 100.0], _centres
             _g["suggest_option"] = lambda *a, **k: None
+            # ── D4 and D1 (owner 2026-11-03: "go with D1, D2, D4 and D5") ──
+            # D4: opened inside the levels, but by the alert the last print
+            # (104) leaves R:R 0.33 to the 106 target: withheld, one NOT SENT
+            # row carrying the prices at send; the record is untouched.
+            import datetime as _dt4
+            _tmpl.write_text("")
+            del _sentk[:]
+            _g["get_data"] = lambda tk: _with_fill(100.0, 104.0)
+            run(_ap2.Namespace(force=True, dry_run=False))
+            run(_ap2.Namespace(force=True, dry_run=False))
+            _ns4 = [r for r in forward_log.read_all(_tmpl) if r["kind"] == "alert"]
+            assert not _sentk and len(_ns4) == 1 and "R:R from the price at send 0.33" in _ns4[0]["header"] \
+                and _ns4[0]["at_send"]["rr_now"] == 0.33, _ns4
+            # D1: the next release 5 days out: every 21-45 DTE contract would hold
+            # through it (its 7-DTE exit is after the release), so nothing is sent.
+            _tmpl.write_text("")
+            _g["get_data"] = lambda tk: _with_fill(100.0, 101.0)
+            _today4 = datetime.now(ET).date()
+            _g["analyze"] = lambda df, tk, **k: dict(_hq(df, tk), next_earnings=(_today4 + _dt4.timedelta(days=5)).isoformat())
+            run(_ap2.Namespace(force=True, dry_run=False))
+            _ns1 = [r for r in forward_log.read_all(_tmpl) if r["kind"] == "alert"]
+            assert not _sentk and len(_ns1) == 1 and "would be held through it" in _ns1[0]["header"], _ns1
+            # a release 30 days out narrows the expiries the alert may name: at most 36 DTE
+            # (a 36-DTE contract's 7-DTE exit is on day 29, before the release on day 30)
+            _kw = []
+            _g["suggest_option"] = lambda *a, **k: _kw.append(k)
+            _g["analyze"] = lambda df, tk, **k: dict(_hq(df, tk), next_earnings=(_today4 + _dt4.timedelta(days=30)).isoformat())
+            _tmpl.write_text("")
+            run(_ap2.Namespace(force=True, dry_run=False))
+            assert len(_sentk) == 1 and _kw and _kw[-1].get("max_dte") == 36 and _kw[-1].get("target") == 106.0, (_kw, _sentk)
+            assert "Expiry kept to 36 DTE" not in _sentk[0] and "only expiries that exit before earnings" in _sentk[0], _sentk[0]
+            _g["analyze"] = _hq
+            _g["suggest_option"] = lambda *a, **k: None
+            # the rule's edges, unrounded: 21 DTE is the floor; a release 15 days out
+            # leaves exactly 21 (exit on day 14, before the release), 14 days out 20.
+            _t0 = _dt4.date(2026, 11, 3)
+            _w = lambda ne, a=None: withhold_before_send({"rr": 1.5, "next_earnings": ne, "at_send": a}, _t0)  # noqa: E731
+            assert _w("2026-11-18") is None and earnings_cap_dte({"next_earnings": "2026-11-18"}, _t0) == 21
+            assert "would be held through it" in _w("2026-11-17")
+            assert _w(None) is None and _w("not a date") is None, "an unknown release fails open (the alert says so)"
+            assert "R:R from the price at send" in _w(None, {"below_hq": True, "rr_now": 0.4}) and \
+                _w(None, {"below_hq": False, "rr_now": 1.2}) is None and _w(None, None) is None
+            # the chain fetch drops every expiry past the cap; the named contract says why
+            _t_et = option_chain.et_today()
+            _exps = [(_t_et + _pd2.Timedelta(days=d)).strftime("%Y-%m-%d") for d in (22, 30, 37)]
+            _cf = _pd2.DataFrame([(100.0, 2.0, 2.1, 50, 500)], columns=["strike", "bid", "ask", "volume", "openInterest"])
+            class _TkStub:
+                options = _exps
+                def __init__(self, t): pass
+                def option_chain(self, e):
+                    return type("C", (), {"calls": _cf, "puts": _cf})()
+            _real_tk, _real_sleep = yf.Ticker, time.sleep
+            try:
+                yf.Ticker, time.sleep = _TkStub, (lambda *_a: None)
+                assert [e["dte"] for e in fetch_chain_data("X", max_dte=30)["expiries"]] == [22, 30]
+                assert [e["dte"] for e in fetch_chain_data("X")["expiries"]] == [22, 30, 37]
+            finally:
+                yf.Ticker, time.sleep = _real_tk, _real_sleep
+            _optd = {"right": "CALL", "strike": 100.0, "expiry": _exps[0], "dte": 22, "mid": 2.05, "bid": 2.0,
+                     "ask": 2.1, "spread_pct": 4.9, "volume": 50, "oi": 500, "cost": 205.0, "pct_account": 4.1,
+                     "within_budget": True, "budget": 250.0, "dte_adequate": True, "days_needed": 12,
+                     "moneyness_pct": 0.0}
+            _g["suggest_option"] = lambda *a, **k: _optd
+            _msg1 = compose_alert(dict(_hq(_fr, "AAA"), next_earnings=(_today4 + _dt4.timedelta(days=30)).isoformat()), "AAA")
+            assert "Expiry kept to 36 DTE or less so the 7-DTE exit comes before earnings" in _msg1 and \
+                "strike +0.0% vs price" in _msg1, _msg1
+            assert "Expiry kept to" not in compose_alert(dict(_hq(_fr, "AAA"), next_earnings=(
+                _today4 + _dt4.timedelta(days=60)).isoformat()), "AAA"), "a cap past 45 DTE does not bind"
+            _g["suggest_option"] = lambda *a, **k: None
+            print("D4 / D1 before send     : R:R under 1.0 at send is withheld; a release before every "
+                  "contract's exit is withheld; a later one caps the expiry; unknown sends (owner 2026-11-03)")
             print("price at send            : the alert prints the move already made and the R:R from "
                   "the latest price, warns under the tier's R:R, and the alert row carries it (N2)")
             assert gapped_at_fill({"trend": "Bearish", "stop": 102.0, "target": 94.0}, 103.0) and \

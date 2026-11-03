@@ -472,6 +472,23 @@ def record_alert(ticker: str, trend: str, bar_date, bucket: str, delivered: bool
     return append("alert", body, path=path)
 
 
+def withheld_reasons(alerts: list) -> dict:
+    """NOT SENT alert rows by why they were withheld: the fill gate (J1),
+    the R:R from the price at send (D4) or the next release (D1)."""
+    out = {"fill": 0, "rr_at_send": 0, "earnings": 0}
+    for a in alerts:
+        h = str(a.get("header", ""))
+        if not h.startswith("NOT SENT"):
+            continue
+        if "R:R from the price at send" in h:
+            out["rr_at_send"] += 1
+        elif h.startswith("NOT SENT: earnings"):
+            out["earnings"] += 1
+        else:
+            out["fill"] += 1
+    return out
+
+
 def alerts_sent(path: Path | None = None) -> list[dict]:
     """Every alert row, oldest first."""
     return [r for r in read_all(path) if r.get("kind") == "alert"]
@@ -1412,6 +1429,10 @@ def summary(path: Path | None = None) -> dict:
         # Review 2026-10-30 (late): a NOT SENT row is a withheld alert (the
         # fill gate, J1), not a delivery failure; the report says which.
         "alerts_withheld": sum(1 for a in alerts if str(a.get("header", "")).startswith("NOT SENT")),
+        # Review 2026-11-03 (owner: D1, D4): an alert is also withheld when the
+        # R:R from the price at send is under the tier's, or the next release
+        # falls before every contract's exit. Counted by reason.
+        "alerts_withheld_by": withheld_reasons(alerts),
         # BACKLOG 39: how often the next morning's read of a recorded bar
         # differed from the row, and by how much on price.
         "revisions": len(revisions),
@@ -1441,7 +1462,9 @@ def report(path: Path | None = None) -> int:
     print(f"  {s['rows']} rows: {s['signals']} signals, {s['controls']} controls, "
           f"{s['outcomes']} outcomes, {s['scans']} scans, {s['alerts']} alerts "
           f"[{s['revisions']} bar revisions] [{s['void_risk_floor']} voided at the risk floor] "
-          f"({s['alerts_delivered']} delivered, {s['alerts_withheld']} withheld at the fill)")
+          f"({s['alerts_delivered']} delivered, {s['alerts_withheld']} withheld before send: "
+          f"fill {s['alerts_withheld_by']['fill']}, R:R at send {s['alerts_withheld_by']['rr_at_send']}, "
+          f"earnings {s['alerts_withheld_by']['earnings']})")
     print(f"  taken {s['taken']} ({s['headline_bucket']} bucket, the population: "
           f"{s['taken_headline']}: hq {s['taken_hq']}, base {s['taken_base']}; "
           f"live alerting view {s['taken_live']})   skipped {s['skipped']}")
@@ -2136,7 +2159,12 @@ def selftest() -> int:
     _bufa = _io.StringIO()
     with _ctx.redirect_stdout(_bufa):
         report(al)
-    assert "1 delivered, 2 withheld at the fill" in _bufa.getvalue(), _bufa.getvalue()
+    assert "1 delivered, 2 withheld before send: fill 2, R:R at send 0, earnings 0" in _bufa.getvalue(), _bufa.getvalue()
+    record_alert("AMD", "Bullish", "2026-10-15", "live", False,
+                 "NOT SENT: R:R from the price at send 0.33 is under the tier's 1.0 (it was 3.0 at the signal close)", path=al)
+    record_alert("TMO", "Bullish", "2026-10-15", "pool", False,
+                 "NOT SENT: earnings 2026-10-20 is 5d away: every 21-45 DTE contract would be held through it", path=al)
+    assert summary(al)["alerts_withheld_by"] == {"fill": 2, "rr_at_send": 1, "earnings": 1}, summary(al)["alerts_withheld_by"]
     assert grade_open_signals(lambda tk: None, path=al)["graded"] == 0, "alert rows are never graded"
     try:
         record_alert("X", "Bullish", "2026-10-13", "other", True, path=al)

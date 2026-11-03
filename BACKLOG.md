@@ -55,6 +55,13 @@ landed in the repo and the removal says so in the commit.
   already pass the secret, and Tiingo's raw bars defeat the grader's split
   guard (item 46). Eight owner decisions are listed in item 46 (D1–D8);
   D1, earnings inside the contract's life, is the one with money on it.
+- **2026-11-03 (later; item 46 D1, D2, D4, D5 built).** Correction to (2)
+  above: an EXPIRY reminder now comes for NOW on 11-18 (two sessions before
+  the 11-20 expiry) if it is still open; still no TIME alert. Close and log
+  it. From the next scan, an alert can be withheld for the R:R at send or
+  for earnings (a `NOT SENT` row says why), the contract named is the one
+  nearest the money, and the journal refuses a signal trade more than 5 %
+  from the money. Exits now trigger on the bid.
 
 ---
 
@@ -2368,7 +2375,7 @@ heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
 
 ---
 
-## 46. Expert review 2026-11-03 (evening): the alert, the contract, the exit and the record, read as a trader — NINE FIXES BUILT (N1–N9), EIGHT DECISIONS OPEN (D1–D8)
+## 46. Expert review 2026-11-03 (evening): the alert, the contract, the exit and the record, read as a trader — NINE FIXES BUILT (N1–N9); D1, D2, D4, D5 DECIDED AND BUILT 2026-11-03; D3, D6, D7, D8 OPEN
 
 `results/expert_review_2026-11-03.md`. Owner: "be an expert in trading
 stocks/options … strict review … identify any gaps and improve … better
@@ -2418,6 +2425,36 @@ gate was sized on sd 1.0 R; the record's sd is 1.78 R (episodes ~1.4):
 349 episodes detect ~0.21–0.27 R; amend the stated MDE or enlarge the
 gate. **D8** the pool's top five: record RS, a sector cap, skip
 untradeable names, no alphabetical ranking when SPY is missing.
+
+**D1, D2, D4 AND D5 DECIDED AND BUILT 2026-11-03 (owner: "go with D1, D2,
+D4 and D5 as well").** Alert-path gates sit where J1 sits (the row, its
+tag and the grader untouched; one `NOT SENT` row per key, carrying
+`at_send`; no pool cap slot): **D4** `scanner.withhold_before_send()`
+withholds when the R:R from the price at send is under 1.0 (no price:
+send). **D1** with the next release `d` days out, the latest expiry whose
+7-DTE exit precedes it is `d + 6` DTE (`earnings_cap_dte`); under 21 the
+alert is withheld, otherwise the chain fetch is capped there and the alert
+says so; an unknown release sends with the N9 warning. **D2**
+`option_chain.get_option_data()` names the strike nearest the price at
+send among liquid strikes, inside `MEASURED_OPTION_STRUCTURE
+["moneyness_pct"]` = 5 % (a judgement: two strike increments; the
+measurement is ATM) and never beyond the alert's target (`target=`, from
+the scanner and the app); the journal refuses a signal trade outside 5 %
+of the underlying (`underlying_px`, passed by all three app logging paths
+from `app.underlying_price_now`; no price, the leg is not asked); the
+app's contract checker shows the leg. **D5** the exit monitor's STOP and
+TARGET read the bid on a two-sided quote (the backtest's own convention
+with the market's spread), the alert shows bid/ask/mid and P&L at the
+bid, the recorded exit premium is the bid; a once-only reminder within 2
+sessions of expiry and once after it, whatever the rules say (NOW: 11-18
+if still open); `--diagnose` reports `run()`'s own verdict and includes
+EXIT_SIGNALLED positions. `forward_log.summary()["alerts_withheld_by"]`
+counts holds by reason. Intake note 2026-11-03 in
+`forward_record_preregistration.md`. ~23 mutations falsified. **Seen while
+building, not fixed:** the app's contract-checker logging path writes
+`invalidate_ema: False` (so a signal trade logged there is refused by the
+structure) and defaults its premium to the chain's mid. **Still open:**
+D3, D6, D7, D8.
 
 **Recorded, not fixed:** Tiingo fallback not split-adjusted (P0 if the
 secret is set; do not set it); the revision counter behind item 39's slot

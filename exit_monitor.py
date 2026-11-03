@@ -417,18 +417,28 @@ def check_option_position(pos: dict) -> dict:
         info.update(mid=None, pnl_pct=None, reliable=False)
     elif quote:
         mid = quote["mid"]
+        # THE RULES READ THE BID (review 2026-11-03 D5; owner: "go with D5").
+        # A long sells at the bid. The rules read the mid, and the backtest
+        # marked every exit half its modelled spread BELOW the mid: at bid
+        # 0.30 / ask 0.80 on a 1.00 entry the mid said -45 % (no STOP) where
+        # a sale fetched -70 %, and 1.80 / 4.40 fired TARGET at "+210 %" on a
+        # bid of +80 %. On a two-sided quote the price the rules read (the
+        # mark) is the bid: the backtest's own convention with the market's
+        # spread in place of the modelled 5 %. A one-sided or last-only quote
+        # is unchanged (below): a zero bid is read as no quote, not as zero.
+        mark = float(quote["bid"]) if quote.get("reliable") and quote.get("bid") else mid
         # A non-positive entry premium makes every percentage rule meaningless.
         # This used to set pnl_pct = 0, which is NOT missing data — it is a
         # number that satisfies `is not None` and then fails both comparisons,
         # so STOP and TARGET silently never fired for the rest of the position's
         # life. Treated as absent, like a missing quote.
         if entry_prem > 0:
-            pnl_pct = (mid - entry_prem) / entry_prem * 100
+            pnl_pct = (mark - entry_prem) / entry_prem * 100
         else:
             pnl_pct = None
             logger.warning("%s: entry_premium is %s — price rules cannot be "
                            "evaluated", pos.get("ticker"), entry_prem)
-        info.update(mid=mid,
+        info.update(mid=mid, mark=mark, bid=quote.get("bid"), ask=quote.get("ask"),
                     pnl_pct=round(pnl_pct, 1) if pnl_pct is not None else None,
                     reliable=quote["reliable"], spread_pct=quote.get("spread_pct"))
     else:
@@ -458,7 +468,7 @@ def check_option_position(pos: dict) -> dict:
     sl = rules.get("sl_pct") or 0
     if sl and price_ok and pnl_pct <= -abs(sl):
         return {**info, "exit": True, "reason": "STOP",
-                "detail": f"Premium {pnl_pct:+.1f}% (limit −{abs(sl):.0f}%)"}
+                "detail": f"Premium {pnl_pct:+.1f}% at the bid (limit −{abs(sl):.0f}%)"}
 
     # A ONE-SIDED QUOTE THAT PROVES A LEVEL (review 2026-11-03, N7). The rule
     # reads the mid. With no bid, the mid lies between ask/2 and the ask, so
@@ -489,7 +499,7 @@ def check_option_position(pos: dict) -> dict:
     tp = rules.get("tp_pct") or 0
     if tp and price_ok and pnl_pct >= abs(tp):
         return {**info, "exit": True, "reason": "TARGET",
-                "detail": f"Premium {pnl_pct:+.1f}% (target +{abs(tp):.0f}%)"}
+                "detail": f"Premium {pnl_pct:+.1f}% at the bid (target +{abs(tp):.0f}%)"}
 
     # 3. TIME — theta decay accelerates in the final weeks
     dte_floor = rules.get("dte_exit") or 0
@@ -545,12 +555,17 @@ def format_alert(pos: dict, ev: dict, escalated_from: str | None = None) -> str:
     lines = [head, "", f"<b>{contract}</b>", ""]
     lines.append(f"Reason:  {ev['detail']}")
     if ev.get("mid") is not None:
-        lines.append(f"Premium: {pos['entry_premium']:.2f} → {ev['mid']:.2f} "
+        _mk = ev.get("mark") if ev.get("mark") is not None else ev["mid"]
+        _on = "at the bid" if ev.get("reliable") and ev.get("mark") is not None else "last traded"
+        lines.append(f"Premium: {pos['entry_premium']:.2f} → {_mk:.2f} {_on} "
                      f"({ev['pnl_pct']:+.1f}%)")
+        if ev.get("reliable") and ev.get("ask"):
+            lines.append(f"Quote:   bid {float(ev['bid']):.2f} / ask {float(ev['ask']):.2f} "
+                         f"(mid {ev['mid']:.2f})")
         if pos.get("contracts"):
             n = float(pos["contracts"])
-            pnl_usd = (ev["mid"] - float(pos["entry_premium"])) * 100 * n
-            lines.append(f"P&L:     ${pnl_usd:+,.0f} on {n:g} contract(s)")
+            pnl_usd = (_mk - float(pos["entry_premium"])) * 100 * n
+            lines.append(f"P&L:     ${pnl_usd:+,.0f} on {n:g} contract(s) {_on}")
     if ev.get("dte") is not None:
         lines.append(f"DTE:     {ev['dte']}")
     if ev.get("bars_held") is not None:
@@ -604,8 +619,11 @@ def diagnose(positions: list) -> None:
 
     # 3. Positions
     print(f"\n[3] POSITIONS FILE — {len(positions)} record(s)")
-    open_pos = [p for p in positions if p.get("status") == "OPEN"]
-    print(f"    OPEN            : {len(open_pos)}")
+    # EXIT_SIGNALLED positions are still monitored (BACKLOG 19), so they are
+    # diagnosed too (review 2026-11-03: this read OPEN only and then told a
+    # signalled position's owner that "the app is not syncing").
+    open_pos = [p for p in positions if p.get("status") in MONITORED_STATUSES]
+    print(f"    OPEN            : {sum(1 for p in positions if p.get('status') == 'OPEN')}")
     print(f"    EXIT_SIGNALLED  : {sum(1 for p in positions if p.get('status')=='EXIT_SIGNALLED')}")
     if not open_pos:
         print("    -> Nothing to check. If you logged a position in the app but it")
@@ -668,42 +686,75 @@ def diagnose(positions: list) -> None:
                               float(r0.get("lastPrice") or 0))
             print(f"    Strike found   : YES")
             print(f"    bid/ask/last   : {bid:.2f} / {ask:.2f} / {last:.2f}")
-            if bid > 0 and ask > 0:
-                mid = (bid + ask) / 2
-                src_ = "bid/ask mid (reliable)"
-            elif last > 0:
-                mid = last
-                src_ = "lastPrice (NO two-sided market — may be stale)"
-            else:
-                print("    -> No usable price at all (bid, ask and last are 0).")
-                print("       This is common when the market is closed or the")
-                print("       contract is illiquid. PREMIUM RULES ARE SKIPPED —")
-                print("       this is the most likely reason you got no alert.")
-                continue
-            pnl = (mid - float(p["entry_premium"])) / float(p["entry_premium"]) * 100
-            print(f"    Price used     : {mid:.2f}  [{src_}]")
-            print(f"    P&L            : {pnl:+.1f}%")
-
-            fired = []
-            if rules.get("sl_pct") and pnl <= -abs(rules["sl_pct"]): fired.append("STOP")
-            if rules.get("tp_pct") and pnl >= abs(rules["tp_pct"]):  fired.append("TARGET")
-            if rules.get("dte_exit") and dte is not None and dte <= rules["dte_exit"]:
-                fired.append("TIME")
-            _held = bars_held(p)
-            if rules.get("max_hold_bars") and _held is not None \
-                    and _held >= rules["max_hold_bars"]:
-                fired.append("HOLD")
+            # THE VERDICT IS run()'s OWN (review 2026-11-03): this used to price
+            # the mid itself and fire STOP on a stale lastPrice that run()
+            # refuses, so the diagnosis disagreed with the monitor it explains.
+            ev = check_option_position(p)
+            if ev.get("mark") is not None:
+                print(f"    Rules read     : {ev['mark']:.2f} "
+                      f"[{'the bid (D5)' if ev.get('reliable') else 'lastPrice, NO two-sided market'}]")
+            if ev.get("pnl_pct") is not None:
+                print(f"    P&L            : {ev['pnl_pct']:+.1f}%")
+            if ev.get("price_rules_skipped"):
+                print(f"    -> {ev['price_rules_skipped']}")
+            elif ev.get("mid") is None and not ev.get("exit"):
+                print("    -> No usable price: STOP and TARGET are skipped this run (TIME and")
+                print("       THESIS still run). The monitor sends one notice a day about it.")
+            _held = ev.get("bars_held")
             if _held is not None:
                 print(f"    Sessions held  : {_held}"
                       f"{' / ' + str(rules['max_hold_bars']) if rules.get('max_hold_bars') else ''}")
-            print(f"    Would fire     : {', '.join(fired) if fired else 'nothing — all rules within limits'}")
-            if fired and p.get("exit_alerted"):
-                print("    -> Rule met BUT exit_alerted is already True, so no repeat")
-                print("       alert is sent. Close the position in the app.")
+            print(f"    Would fire     : {ev['reason'] + ' — ' + ev['detail'] if ev.get('exit') else 'nothing — all rules within limits'}")
+            _prev = p.get("exit_reason") if p.get("exit_alerted") else None
+            if ev.get("exit") and _prev and not outranks(ev["reason"], _prev):
+                print(f"    -> Rule met, but {_prev} was already alerted and {ev['reason']} does not")
+                print("       outrank it, so no repeat is sent. Close the position in the app.")
         except Exception as e:
             print(f"    !! Chain fetch failed: {e}")
 
     print("\n" + "=" * 72)
+
+
+EXPIRY_REMINDER_SESSIONS = 2   # remind when this many sessions (or fewer) remain after today
+
+
+def expiry_reminder(pos: dict, today=None) -> tuple | None:
+    """
+    THE EXPIRY REMINDER (review 2026-11-03 D5; owner: "go with D5"). Once
+    STOP or TARGET has alerted, nothing else ever alerts (EXIT_PRIORITY): no
+    TIME, and nothing on expiry day, so an unsold in-the-money call rides to
+    automatic exercise (one 150 call is $15,000 of stock) and an expired
+    position sits EXIT_SIGNALLED for ever. This is sent whatever the rules
+    say: ("near", text) once when EXPIRY_REMINDER_SESSIONS or fewer sessions
+    remain after today, ("past", text) once after expiry. None otherwise,
+    or when already sent (pos["expiry_reminded"]).
+    """
+    today = today or datetime.now(ET).date()
+    try:
+        exp = datetime.strptime(str(pos["expiry"])[:10], "%Y-%m-%d").date()
+    except (KeyError, ValueError):
+        return None
+    done = pos.get("expiry_reminded")
+    contract = (f"{pos['ticker']} {pos['expiry']} ${float(pos['strike']):g} "
+                f"{str(pos.get('right', '')).upper()}")
+    if exp < today:
+        if done == "past":
+            return None
+        return "past", "\n".join([
+            f"⏰ <b>EXPIRED {exp}</b>", "", f"<b>{contract}</b> is past expiry and still open in "
+            f"the monitor.", "Log the close in the app (an option that expired worthless closes at 0)."])
+    left = trading_sessions_between(today, exp)
+    if left > EXPIRY_REMINDER_SESSIONS or done in ("near", "past"):
+        return None
+    n = float(pos.get("contracts") or 1)
+    _was = (f" ({pos.get('exit_reason')} was alerted {pos.get('exit_detected', '')})"
+            if pos.get("exit_alerted") else "")
+    return "near", "\n".join([
+        f"⏰ <b>EXPIRING {exp}</b> ({left} more session{'s' if left != 1 else ''} after today)", "",
+        f"<b>{contract}</b> is still open in the monitor{_was}.",
+        "Sell it or log the close in the app. An in-the-money call left to expiry is usually "
+        f"exercised automatically: 100 shares at ${float(pos['strike']):g} a contract, "
+        f"${float(pos['strike']) * 100 * n:,.0f} for {n:g}."])
 
 
 def _price_matters(pos: dict, ev: dict) -> bool:
@@ -799,6 +850,14 @@ def run(args) -> int:
             continue
 
         attempted += 1
+        # D5: the expiry reminder goes whatever the rules say this run.
+        _rem = expiry_reminder(pos)
+        if _rem:
+            if send_telegram(_rem[1], dry_run=args.dry_run):
+                if not args.dry_run:
+                    pos["expiry_reminded"] = _rem[0]
+            else:
+                send_failed += 1
         try:
             ev = check_option_position(pos)
         except Exception as e:
@@ -871,7 +930,7 @@ def run(args) -> int:
                 pos.update({
                     "exit_alerted": True, "status": "EXIT_SIGNALLED",
                     "exit_reason": ev["reason"], "exit_detail": ev["detail"],
-                    "exit_premium": ev.get("mid"), "exit_pnl_pct": ev.get("pnl_pct"),
+                    "exit_premium": ev.get("mark", ev.get("mid")), "exit_pnl_pct": ev.get("pnl_pct"),
                     "exit_detected": datetime.now(ET).strftime("%Y-%m-%d %H:%M ET"),
                     "last_check_epoch": now_epoch,
                 })
@@ -1278,6 +1337,67 @@ def selftest() -> int:
     assert _rc6 == 0 and not _m6, "a priced, quiet position is a green run"
     print("unpriced/undelivered: one notice a day, nonzero when nothing needing a price was priced or "
           "an alert did not go; a STOP already sent needs no price (N7)")
+
+    # ── D5 (owner 2026-11-03): THE RULES READ THE BID ──
+    _q = lambda b, a: {"mid": round((b + a) / 2, 2), "bid": b, "ask": a, "reliable": True,  # noqa: E731
+                       "spread_pct": round((a - b) / ((a + b) / 2) * 100, 1)}
+    _s = _ev(_q(0.30, 0.80))
+    assert _s["exit"] and _s["reason"] == "STOP" and _s["pnl_pct"] == -70.0 and "at the bid" in _s["detail"], _s
+    assert not _ev(_q(1.80, 4.40))["exit"], "the mid says +210 %; the bid +80 %: no TARGET"
+    assert _ev(_q(3.00, 3.10))["reason"] == "TARGET"
+    assert _ev(_q(0.50, 0.60))["reason"] == "STOP", "exactly -50 % at the bid fires (the mid, -45 %, did not)"
+    assert not _ev(_q(0.51, 0.53))["exit"]
+    _fa = format_alert(dict(_pos1, contracts=2), _s)
+    assert "1.00 → 0.30 at the bid (-70.0%)" in _fa and "bid 0.30 / ask 0.80 (mid 0.55)" in _fa \
+        and "$-140 on 2 contract(s) at the bid" in _fa, _fa
+    _rcb, _mb, _rb = _run_full([dict(_open)], _q(0.30, 0.80))
+    assert _rcb == 0 and len(_mb) == 1 and _rb[0]["exit_premium"] == 0.30 and _rb[0]["exit_pnl_pct"] == -70.0, _rb
+    print("D5 bid            : STOP and TARGET read the bid on a two-sided quote; the alert shows bid/ask/mid "
+          "and the P&L at the bid; the recorded exit premium is the bid")
+
+    # ── D5: THE EXPIRY REMINDER, whatever the rules say ──
+    _nw = {"ticker": "NOW", "expiry": "2026-11-20", "strike": 150.0, "right": "CALL", "contracts": 2,
+           "exit_alerted": True, "exit_reason": "STOP", "exit_detected": "2026-10-30 14:00 ET"}
+    assert expiry_reminder(_nw, date(2026, 11, 17)) is None, "three sessions left: not yet"
+    _n = expiry_reminder(_nw, date(2026, 11, 18))
+    assert _n[0] == "near" and "2 more sessions after today" in _n[1] and "STOP was alerted" in _n[1] \
+        and "$30,000 for 2" in _n[1], _n
+    assert expiry_reminder(_nw, date(2026, 11, 20))[0] == "near", "expiry day itself"
+    assert expiry_reminder(dict(_nw, expiry_reminded="near"), date(2026, 11, 20)) is None, "once"
+    assert expiry_reminder(dict(_nw, expiry_reminded="near"), date(2026, 11, 21))[0] == "past"
+    assert expiry_reminder(dict(_nw, expiry_reminded="past"), date(2026, 11, 23)) is None
+    _soon = datetime.now(ET).date()
+    while True:                                   # the next trading day: one session after today
+        _soon += timedelta(days=1)
+        if trading_sessions_between(datetime.now(ET).date(), _soon) == 1:
+            break
+    _ex = dict(_base, exit_reason="STOP", expiry=_soon.isoformat())
+    _rcr, _mr, _rr = _run_full([dict(_ex)], None)
+    assert _rcr == 0 and len(_mr) == 1 and "EXPIRING" in _mr[0] and _rr[0]["expiry_reminded"] == "near", (_rcr, _mr)
+    _rcr2, _mr2, _ = _run_full(_rr, None)
+    assert _rcr2 == 0 and not _mr2, "sent once"
+    _rcr3, _mr3, _rr3 = _run_full([dict(_ex)], None, send_ok=False)
+    assert _rcr3 == 1 and "expiry_reminded" not in _rr3[0], "an undelivered reminder is retried and the run says so"
+    # --diagnose reports run()'s own verdict, EXIT_SIGNALLED positions included
+    import io as _io, contextlib as _cl
+    class _DTk:
+        options = ["2099-01-01"]
+        def __init__(self, t): pass
+        def option_chain(self, e):
+            return _Chain([{"strike": 10.0, "bid": 0.30, "ask": 0.80, "lastPrice": 0.95}])
+    _buf = _io.StringIO()
+    yf.Ticker = _DTk
+    _g["get_underlying_state"] = lambda *a, **k: None
+    try:
+        with _cl.redirect_stdout(_buf):
+            diagnose([dict(_base, exit_reason="THESIS")])
+    finally:
+        yf.Ticker = _real_tk
+        _g["get_underlying_state"] = _real_under
+    assert "Rules read     : 0.30 [the bid (D5)]" in _buf.getvalue() and \
+        "Would fire     : STOP" in _buf.getvalue() and "EXIT_SIGNALLED  : 1" in _buf.getvalue(), _buf.getvalue()
+    print("D5 expiry         : one reminder within 2 sessions of expiry and one after it, even after STOP; "
+          "undelivered retries")
 
     print("=" * 66)
     print("All self-tests passed.")
