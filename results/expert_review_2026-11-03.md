@@ -173,7 +173,11 @@ Every decision of this review is now taken.
 
 ## Recorded, not fixed
 
-- **Do not set `TIINGO_API_KEY` yet (P0 if set).** Tiingo's close and volume
+- **FIXED 2026-11-03 (owner: "fix the Tiingo split adjustment as well"):
+  `data_source.fetch_tiingo()` now builds split-only bars from Tiingo's
+  `splitFactor`, and a split after the fill voids the row as on Yahoo's bars
+  (`check_tiingo_split_adjusted`).** As found: **Do not set `TIINGO_API_KEY`
+  yet (P0 if set).** Tiingo's close and volume
   are not split-adjusted, Yahoo's are; the grader's split guard relies on the
   provider rewriting the signal bar. On a constructed frame, a 2:1 split
   after the fill grades as **LOSS −19.02 R** on Tiingo-style bars where Yahoo-style bars void it. Both

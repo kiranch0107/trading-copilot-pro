@@ -37,15 +37,28 @@ which is what the scan, the signal, the charts and the universe all run on.
 That is the majority of the calls and all of the ones that block the app from
 working.
 
-Fallback daily bars match what every caller in this repo now expects: Tiingo's
-RAW columns, because all of them — app.py, scanner.py, exit_monitor.py and,
-since 2026-09-02, backtest.py — fetch Yahoo with auto_adjust=False. The
-backtest used to be the one exception; that was measured and closed (adjusted
-bars are not reproducible, see backtest.py's AUTO_ADJUST note), so the
-fallback and the primary source no longer disagree about adjustment at all.
-For indicators computed over a year of data (EMA, ADX, RSI, ATR) that is
-immaterial unless the ticker split inside the window — and a split would be
-visible as an obvious step in the chart. Worth knowing, not worth blocking on.
+Fallback daily bars match what every caller in this repo expects: every one
+of them (app.py, scanner.py, exit_monitor.py and, since 2026-09-02,
+backtest.py) fetches Yahoo with auto_adjust=False, whose bars are SPLIT-
+adjusted and not dividend-adjusted. Tiingo's raw columns are neither, and its
+adj* columns are both, so fetch_tiingo() builds split-only bars from Tiingo's
+own splitFactor (review 2026-11-03; owner: "fix the Tiingo split adjustment as
+well").
+
+THIS SAID THE OPPOSITE until 2026-11-03: that the raw columns matched Yahoo
+"at all", and that a split would be "an obvious step in the chart, worth
+knowing, not worth blocking on". It was worth blocking on. The grader's split
+guard (forward_grading_preregistration.md) relies on the provider rewriting
+the signal bar's close after a split: on raw bars it does not, and a 2:1
+split after the fill graded as a LOSS of -19 R where Yahoo-style bars void
+it; the exit monitor's THESIS read a halved close as a break of EMA20; and the
+scanner's indicators spanned the step. A response without splitFactor is
+refused, never passed through raw.
+
+Still true of the fallback, and not fixed here: Tiingo is end of day only, so
+on a fallback day there is no forming bar (the alert's fill gate and its
+price-at-send line have no intraday price), and the post-close pass may read
+yesterday's bar if Tiingo has not published today's yet.
 """
 
 from __future__ import annotations
@@ -134,12 +147,10 @@ def fetch_tiingo(ticker: str, period: str = "1y", interval: str = "1d",
     Daily only — an intraday `interval` returns None and the caller falls
     through to the next leg, same contract as fetch_stooq() always had.
 
-    Uses Tiingo's RAW open/high/low/close/volume, not its adjusted columns.
-    Most callers in this repo (app.py, scanner.py, exit_monitor.py) fetch
-    Yahoo with auto_adjust=False and expect raw bars; matching that here
-    means a mid-session fallback doesn't also silently switch adjustment
-    convention. backtest.py wants auto_adjust=True and documents the small
-    resulting mismatch at its own call site instead.
+    SPLIT-ADJUSTED, NOT DIVIDEND-ADJUSTED, as Yahoo's auto_adjust=False bars
+    are (see the module docstring): built from the raw columns and Tiingo's
+    splitFactor by split_adjust(). A response with no splitFactor is
+    refused (None), so the caller falls through rather than read raw bars.
 
     `_get` is injected for offline tests (default: requests.get).
     """
@@ -172,14 +183,40 @@ def fetch_tiingo(ticker: str, period: str = "1y", interval: str = "1d",
         if missing:
             logger.warning("Tiingo %s: response missing %s", ticker, missing)
             return None
+        if "splitFactor" not in df.columns:
+            logger.warning("Tiingo %s: no splitFactor in the response — refused "
+                           "(raw bars are not Yahoo's split-adjusted bars)", ticker)
+            return None
         df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
         df = df.set_index("date").sort_index()
         df.index.name = "Date"
+        factors = df["splitFactor"]
         df = df.rename(columns=keep)[list(keep.values())]
-        return df
+        return split_adjust(df, factors)
     except Exception as e:
         logger.warning("Tiingo fetch failed for %s: %s", ticker, e)
         return None
+
+
+def split_adjust(df: pd.DataFrame, split_factor: pd.Series) -> pd.DataFrame:
+    """
+    Split-only adjustment, the convention of Yahoo's auto_adjust=False bars.
+    `split_factor` is Tiingo's per-day splitFactor (2.0 on the first session
+    after a 2:1 split, 1.0 otherwise); the raw bar on that day is already
+    post-split. Each bar's prices are divided, and its volume multiplied, by
+    the product of every factor dated AFTER it, so the whole frame is on the
+    last bar's share basis. A missing, non-finite or non-positive factor is
+    read as 1.0 (no split). Dividends are not touched.
+    """
+    import numpy as np
+    f = pd.to_numeric(split_factor, errors="coerce").to_numpy(dtype=float)
+    f = np.where(np.isfinite(f) & (f > 0), f, 1.0)
+    later = np.concatenate([np.cumprod(f[::-1])[::-1][1:], [1.0]])   # product of factors after each bar
+    out = df.copy()
+    for c in ("Open", "High", "Low", "Close"):
+        out[c] = out[c].to_numpy(dtype=float) / later
+    out["Volume"] = out["Volume"].to_numpy(dtype=float) * later
+    return out
 
 
 def fetch_daily(ticker: str, period: str = "1y", interval: str = "1d",
@@ -255,7 +292,8 @@ def selftest() -> int:
             status_code = 200
             def json(self):
                 return [{"date": "2026-08-27T00:00:00.000Z", "open": 1.0,
-                         "high": 1.2, "low": 0.9, "close": 1.1, "volume": 1000}]
+                         "high": 1.2, "low": 0.9, "close": 1.1, "volume": 1000,
+                         "splitFactor": 1.0}]
         got_url = {}
         def _fake_get(url, params=None, timeout=None):
             got_url["url"] = url; got_url["params"] = params
@@ -275,6 +313,38 @@ def selftest() -> int:
 
         assert fetch_tiingo("TGT", interval="1h", _get=_unexpected_get) is None
         print("  intraday interval   : returns None, no call (daily-only)")
+
+        # SPLIT-ONLY ADJUSTMENT (review 2026-11-03): a 2:1 split on 08-28 and
+        # a 3:1 on 08-31. Raw closes 300, 306 | 153, 154 | 52; the frame comes
+        # back on the last bar's basis, volume scaled the other way, and the
+        # raw post-split bars are untouched.
+        _raw = [("2026-08-26", 300.0, 100, 1.0), ("2026-08-27", 306.0, 100, 1.0),
+                ("2026-08-28", 153.0, 200, 2.0), ("2026-08-31", 52.0, 600, 3.0),
+                ("2026-08-25", 294.0, 100, 1.0)]                        # out of order on purpose
+        class _RespSplit:
+            status_code = 200
+            def json(self):
+                return [{"date": f"{d}T00:00:00.000Z", "open": c, "high": c * 1.01,
+                         "low": c * 0.99, "close": c, "volume": v, "splitFactor": s,
+                         "adjClose": -1.0, "divCash": 0.5} for d, c, v, s in _raw]
+        ds = fetch_tiingo("TGT", _get=lambda *a, **k: _RespSplit())
+        assert [round(x, 6) for x in ds["Close"]] == [49.0, 50.0, 51.0, 51.0, 52.0], list(ds["Close"])
+        assert list(ds["Volume"]) == [600.0, 600.0, 600.0, 600.0, 600.0], list(ds["Volume"])
+        assert abs(ds["High"].iloc[0] - 49.0 * 1.01) < 1e-9 and list(ds.columns) == \
+            ["Open", "High", "Low", "Close", "Volume"], "every price column, and no adj/dividend column"
+        class _RespNoSplit:
+            status_code = 200
+            def json(self):
+                return [{"date": "2026-08-27T00:00:00.000Z", "open": 1.0, "high": 1.2,
+                         "low": 0.9, "close": 1.1, "volume": 1000}]
+        assert fetch_tiingo("TGT", _get=lambda *a, **k: _RespNoSplit()) is None, \
+            "no splitFactor: refused, never raw"
+        _odd = split_adjust(pd.DataFrame({"Open": [10.0, 10.0], "High": [10.0, 10.0], "Low": [10.0, 10.0],
+                                          "Close": [10.0, 10.0], "Volume": [1.0, 1.0]}),
+                            pd.Series([float("nan"), 0.0]))
+        assert list(_odd["Close"]) == [10.0, 10.0], "a missing or zero factor is no split"
+        print("  splits              : prices / and volume x the later factors (Yahoo's "
+              "auto_adjust=False basis); no splitFactor -> refused")
     finally:
         os.environ.pop(TIINGO_KEY_ENV, None)
 
