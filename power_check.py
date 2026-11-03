@@ -12,8 +12,11 @@ same output it gives for an edge of exactly zero.
 
 Two negatives from this repo, and only one of them means what it appeared to:
 
-    backtest.py directional  1,386 trades, detectable 0.075 R, observed -0.048 R
-                             -> adequately powered. The negative is real.
+    backtest.py directional  1,386 trades, sd 1.855 R, detectable 0.14 R, observed -0.048 R
+                             -> its 95% CI [-0.146, +0.050] excludes any edge above +0.05 R.
+                             The negative is real for any edge worth trading. (This line
+                             said "detectable 0.075 R": that was the PAIRED ATR-stop test's
+                             threshold, not this test's; corrected 2026-11-03, D7.)
     spread_backtest.py       83 cycles, detectable +18%/yr, observed +3.8%/yr
                              -> underpowered. "Not significant" said nothing.
 

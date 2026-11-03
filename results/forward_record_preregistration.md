@@ -5,6 +5,54 @@ and tagging HQ"). Written and committed BEFORE the first row under the new rule
 is recorded.** Everything below is fixed. Nothing here may be changed after a
 result is seen; the timestamp on this file in git is the point of it.
 
+## Amendment 2026-11-03 (D7) — the STATED POWER corrected; the gate, the hypotheses and every rule unchanged (BACKLOG 46, owner's decision)
+
+**Owner's decision 2026-11-03 ("go with D3 and D7 as well"), on the expert
+review's D7, recommendation taken: state the limit, do not move the gate.**
+Made after 46 settled pool episodes, so it says so: it changes no rule,
+threshold, gate, hypothesis or reading, only the power the document claims
+for them, and the claim it replaces was wrong on its own terms.
+
+**What was wrong.** The power paragraph below ("Per-trade R has sd ≈ 1.0 on
+the 1,386-trade record (its detectable effect of 0.075 R at n = 1,386 implies
+that)") took 0.075 R from `atr_stop_run1`, where it is the detectable
+threshold of a PAIRED comparison (paired sd ≈ 0.97). The research record's own
+per-trade sd is **1.855 R** (`longshort_split.md`, backed out of its printed
+intervals; 1.75-1.97 across its runs). The forward record's settled pool
+episodes measure **1.34 R** (46 episodes, 2026-11-03); its graded rows 1.74.
+Every figure built on sd 1.0 understated what the gate needs: the 349 for H1
+(`power_check.py`), the 2,070 and +0.37 R for H1′ (amendment D), and the
+grading pre-registration's "349 settled episodes for the +0.15 R bar at sd
+1.0 R" (`forward_grading_preregistration.md`).
+
+**The power, at the record's own sd** (80 % power, 5 % two-sided; at 1.34 R,
+re-measured on every report):
+
+| question | detectable at the 349 gate | needed for +0.15 R |
+|---|---|---|
+| H0 / H1 (one sample of pool episodes) | **+0.20 R** | ~630 episodes |
+| H1′ (the rank tier, a fifth of episodes, against the rest) | **+0.49 R** | ~3,800 episodes |
+| H2 (signal minus control, paired) | ±0.21 R as declared at paired sd 1.4; the 15 pairs settled so far measure 1.07 | ~680 pairs at 1.4 |
+
+At sd 1.855 (the research record's) the H0/H1 row reads +0.28 R and ~1,200.
+
+**What this changes.** Only the sentences that say what the gate can see.
+The gate stays **349 settled pool episodes** (owner's choice). At the gate, a
+difference under the detectable effect above is reported as **NOT
+ESTABLISHED**, never as refuted, exactly as amendment D already said for H1′;
+the +0.15 R bars of H1 and H1′ are reachable only well past the gate, and the
+record keeps running. **What does NOT change:** the hypotheses, their bars,
+the gate, the episode unit, every row kind and every rule.
+
+**Enforcement.** `forward_log.mde()` / `n_for()` compute the figures;
+`report()` prints them from the settled pool episodes' own sd
+(`_episode_stats()["sd_r"]`) beside the reading, so a typed constant cannot
+outlive its basis again (the line it replaces printed "+0.37 R; ~2,070" from
+sd 1.0); `forward_log` selftest (sd 1.0 reproduces the figures as declared;
+the research record's sd detects ~0.14 R at 1,386; no typed MDE in the
+report); `power_check.py`'s docstring no longer calls 0.075 R that test's
+threshold; `consistency_check.check_forward_power_stated` pins the three.
+
 ## Amendment 2026-10-28 (G) — the HQ tier no longer requires the "Strong" tag (BACKLOG 24, owner's decision). THRESHOLD CHANGE on the tag and the alert tier, declared as an INTAKE choice; the fingerprint moves once and is declared
 
 **Owner's decision 2026-10-28 ("go with the Strong leg as well, make it its
