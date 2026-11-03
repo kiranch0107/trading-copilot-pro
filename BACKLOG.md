@@ -83,6 +83,16 @@ landed in the repo and the removal says so in the commit.
   --target-exit-ab`, at IV 1.15 and 1.00), teed to
   `results/option_target_exit_run1_iv1.15.txt` / `_iv1.00.txt`. Retire this
   line when both files are committed with their reading.
+- **2026-11-03 (revision counter fixed; item 39).** The post-close slot
+  question is open again, by the rule decided this morning ("the slot
+  moves if that is ever > 0"): the corrected counter reads **3**, three
+  signals the 16:10–16:22 ET pass read and did not give that the next
+  session's read of the same bar did (PFE 10-29; CME and TMO 10-30, both
+  alerted from the pool on 11-02). The owner's call, on cron-job.org:
+  move the record-only job from 16:20 to **17:30 ET** (inside the
+  workflow's post-close window; no code change), or keep 16:20 and accept
+  that the morning scan records what the pass misses. Every post-close log's
+  `clocks:` line now prints the corrected number. Retire when decided.
 
 ---
 
@@ -2558,8 +2568,17 @@ fallback's. Pinned in the scanner selftest (through `run()`) and
 this sandbox: the IEX field names are Tiingo's documented ones, parsed on
 that shape.
 
-**Recorded, not fixed:** the revision counter behind item 39's slot
-decision cannot see a signal that appears or vanishes between reads; the
+**The revision counter's blind spot, FIXED 2026-11-03 (owner: "fix the
+revision counter blind spot as well"):** a signal that vanishes on a later
+read writes a `revision` row, one the post-close pass missed is counted
+from the chain, and a tag flipped by a filter's other input or a config
+change is counted apart (item 39, which carries the detail). The corrected
+number is 3 (PFE 10-29; CME, TMO 10-30), so item 39's slot reopens by its
+own rule: the owner's setting.
+
+**Recorded, not fixed:** ~~the revision counter behind item 39's slot
+decision cannot see a signal that appears or vanishes between reads~~
+(fixed above); the
 research engine's NaN-row ADX blanking, truncated look-back on the first 19
 bars, open-beyond-target-then-stop booked −1 R, MaxDD in ticker order,
 overlapping trades under independent CIs (each needs a re-run on the
@@ -2815,7 +2834,7 @@ mismatches, the engines AGREE; run 1's note retired. No verdict changed.
 
 ---
 
-## 39. The first alerts (2026-10-29): seven genuine by the rules; the post-close pass records a bar Yahoo has not finished; a journal key named the alert's day — ASSESSED 2026-10-29, TWO FIXES, DECIDED 2026-11-03 (keep the slot)
+## 39. The first alerts (2026-10-29): seven genuine by the rules; the post-close pass records a bar Yahoo has not finished; a journal key named the alert's day — ASSESSED 2026-10-29, TWO FIXES, DECIDED 2026-11-03 (keep the slot); COUNTER CORRECTED 2026-11-03: THE NUMBER IS 3, THE SLOT REOPENS BY ITS OWN RULE (OWNER)
 
 The 11:07 ET scan of 2026-10-29, the first under `4ddd12a3095f`, sent the
 record's first seven alerts on bar 2026-10-28: ACN and NOW (live), AMGN,
@@ -2864,6 +2883,51 @@ is ever > 0)", so the one number that reopens this is in every log
 rather than in a report someone has to run. Pinned in
 `check_post_close_pass_hygiene` (the clocks line reads
 `revisions_tag_moved`) and the scanner selftest.
+**The counter's blind spot, FIXED 2026-11-03 (owner: "fix the revision
+counter blind spot as well"; item 46).** The number above could not see
+the event the slot is about. `record_revision()` ran only when BOTH reads
+signalled, so a bar the post-close pass recorded that a later read no
+longer signals, or one the pass read and did not signal that a later read
+does, wrote nothing; and a tag flipped by an input that is not the bar
+(the earnings window, anchored on the scan day; a missing SPY regime or
+weekly read) or by a config change between the reads counted as a moved
+tag. Now: (1) **vanished**: `scanner.analyze()` asks at both no-signal
+returns (the base fast path and the evaluate block, whose three reasons
+are all computed from the bar) whether the record holds a signal on this
+bar, and `forward_log.record_vanished()` writes one `revision` row per key,
+decision [recorded, "none"], the fields that moved and the rule that now
+blocks; a trend flip notes the other trend's row the same way. (2)
+**missed**: `forward_log.missed_by_post_close()` reads them from the chain:
+a live or pool signal row recorded after the stamped post-close heartbeat
+that names its ticker on that bar (the heartbeat is written after the
+pass, so the pass's own rows precede it), under the same config. No row
+is written for them, so the count covers the record from the first stamped
+pass (10-29). (3) **cause**: every revision row says `cause` "bar",
+"inputs" (the tag moved and every leg whose verdict changed is one of
+`forward_log.INPUT_LEGS`: Earnings Blackout, Macro Regime, Multi-TF
+Alignment) or "config" (the fingerprints differ), and `legs`. The slot's
+number, `revisions_tag_moved`, is the bar-caused revisions that moved a
+decision or the tag plus the misses; input and config flips are counted
+apart and printed as not counted. The clocks line reads "bar revisions N
++ M missed by the post-close pass (K moved a decision or the tag, V
+vanished; the slot moves if that is ever > 0; not counted: …)". Pinned in
+`check_bar_revision_note_wired` (both returns, one writer, the call passes
+the config, `INPUT_LEGS` are signal_core's filter names and not ADX, the
+summary's formula, the clocks line) and both selftests; eighteen mutations
+falsified. **What it says on the record as committed: 3**, all misses,
+none vanished (unknowable before this fix: a read that did not signal left
+no trace). PFE on bar 10-29 (the 16:10 ET pass read it, no signal; the
+11:07 scan of 10-30 signalled, R:R 3.21); CME and TMO on bar 10-30 (the
+16:22 ET pass read both, no signal; both rotated to the pool list over the
+weekend, and the pool's 11-02 read of the same bar signalled both, HQ;
+both were alerted). Same config on every read, same `get_data()` path.
+ACN on 10-28 (this item's first finding) predates the stamp and is not
+counted. **By the rule decided above the slot moves; that is the owner's
+setting, not code** (the dispatch is cron-job.org's): 17:30 ET is inside
+the guard's two-hour post-close window, so moving the record-only job
+there needs no change here. Whether 17:30 is late enough is what the same
+counter measures after the move. Not done: no slot was moved; no row was
+written for the three past misses (they are counted from the chain).
 
 **Fixed 2026-10-29 (owner: "go ahead and fix per your recommendation").**
 The first NOW trade was logged with signal bar 2026-10-29 (the alert's

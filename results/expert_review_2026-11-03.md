@@ -186,7 +186,13 @@ Every decision of this review is now taken.
   workflows already pass the secret, so setting it turns this on with no code
   change. Fix: split-only-adjusted bars from Tiingo's split factor, or have the
   grader refuse non-Yahoo frames.
-- **The post-close slot was decided on a counter with a blind spot** (item 39):
+- **FIXED 2026-11-03 (owner: "fix the revision counter blind spot as well"):
+  a signal that vanishes on a later read writes a `revision` row, one the
+  post-close pass missed is counted from the chain, and each row's `cause`
+  keeps input and config flips out of the slot's number
+  (`check_bar_revision_note_wired`). The corrected number on the record is
+  3 (PFE 10-29; CME, TMO 10-30): item 39's slot reopens, the owner's call.**
+  As found: **The post-close slot was decided on a counter with a blind spot** (item 39):
   `record_revision` only runs when both reads signal, so a bar that signals at
   16:20 and not on the settled morning read (or the reverse) writes nothing
   (PFE 10-29/10-30); and the earnings window, anchored on the scan day, can
