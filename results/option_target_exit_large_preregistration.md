@@ -10,6 +10,11 @@ committed BEFORE the run; nothing below may change after a number from it
 is seen. Config: **live** (`backtest.live_cfg()`, BACKLOG 23). Engine: the
 default (the six fixes, BACKLOG 47), printed on the file's data line.
 
+> **Run 1 read 2026-11-04** (`results/option_target_exit_large_run1.md`):
+> NOT ESTABLISHED; EQUIVALENT within ±5 points of premium. B − A +1.23
+> (IV 1.15) and +1.02 (IV 1.00) on 2,817 pairs. Nothing above or below
+> changes.
+
 **Why this is not what run 1 ruled out.** Run 1's reading said that
 re-running it, or adding years or tickers to it, after seeing its numbers
 would be choosing the analysis by its result. This test does neither: it
