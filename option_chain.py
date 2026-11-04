@@ -113,6 +113,29 @@ def et_today() -> pd.Timestamp:
     return pd.Timestamp(_dt.now(ZoneInfo("America/New_York")).date())
 
 
+def sessions_to_time_exit(dte: int, dte_exit: int | None = None) -> int:
+    """
+    About how many trading sessions a contract with `dte` calendar days left
+    is held before the structure's time exit sells it at `dte_exit` days left
+    (five sessions in seven days; holidays ignored, so slightly long).
+
+    THE THETA CHECK'S CLOCK (review 2026-11-03 hygiene; owner: "go with
+    1-4"). The check compared DTE with the ~12 sessions a 4-ATR target needs,
+    and with the window's floor at 21 it could never fail: "theta adequate ✅"
+    on every contract. The structure sells at 7 DTE, so a 21-DTE contract is
+    held about 10 sessions, not 21, and that is what the target has.
+    """
+    if dte_exit is None:
+        dte_exit = int(risk_params.MEASURED_OPTION_STRUCTURE["dte_exit"])
+    return max(0, int((int(dte) - int(dte_exit)) * 5 / 7))
+
+
+def target_sessions_needed(atr_tgt_mult: float, atr: float | None = None) -> int:
+    """The selector's long-standing heuristic for the sessions a target needs:
+    about three per ATR of target distance, at least five; ten without an ATR."""
+    return max(5, int(atr_tgt_mult * 3)) if (atr and atr > 0) else 10
+
+
 def in_dte_window(dte: int, min_dte: int, max_dte: int | None = None) -> bool:
     """
     Whether an expiry is inside the window the selector reads: at least
@@ -381,12 +404,12 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
         # realistically reach target is a theta trap no matter how liquid it is.
         # We SCALE the score rather than hard-filtering, so a very liquid short
         # contract can still win if nothing better exists — but it gets flagged.
-        if atr and atr > 0:
-            # Scales with the sidebar target multiplier (was hardcoded 2.5 —
-            # inconsistent after the default target moved to 3.0× ATR).
-            days_needed = max(5, int(atr_tgt_mult * 3))
-        else:
-            days_needed = 10
+        # Scales with the sidebar target multiplier (was hardcoded 2.5 —
+        # inconsistent after the default target moved to 3.0× ATR). This
+        # penalty reads calendar DTE and so only bites below the 21-DTE
+        # window; the contract chosen is unchanged by design. The flag the
+        # app shows reads the time-exit clock (sessions_to_time_exit).
+        days_needed = target_sessions_needed(atr_tgt_mult, atr)
         if dte < days_needed:
             valid["score"] *= (dte / days_needed) ** 2   # quadratic theta penalty
 
@@ -449,7 +472,8 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
         return {"error": f"No liquid options found: {why}.", "diag": diag}
 
     row, expiry, dte = best
-    days_needed = max(5, int(atr_tgt_mult * 3)) if (atr and atr > 0) else 10
+    days_needed = target_sessions_needed(atr_tgt_mult, atr)
+    to_exit = sessions_to_time_exit(dte)
     return {"label":"CALL" if trend=="Bullish" else "PUT",
             "strike":round(float(row["strike"]),2),
             "expiry":expiry,"mid":round(float(row["mid"]),2),
@@ -459,7 +483,8 @@ def get_option_data(ticker: str, price: float, trend: str, strength: str,
             "strike_lo":round(lo,2),"strike_hi":round(hi,2),
             "moneyness_pct":round((float(row["strike"]) / price - 1) * 100, 2) if price else None,
             "days_needed":days_needed,
-            "dte_adequate":dte >= days_needed,
+            "sessions_to_exit":to_exit,
+            "dte_adequate":to_exit >= days_needed,
             "is_budget":row["mid"]<=budget_max}
 
 
@@ -593,6 +618,18 @@ def selftest() -> int:
     _tie = {"expiries": [{"expiry": "2026-11-27", "dte": 24, "calls": _a, "puts": _a},
                          {"expiry": "2026-12-04", "dte": 31, "calls": _b, "puts": _b}]}
     assert _pick(_tie, atr=2.0)["expiry"] == "2026-12-04"
+    # THE THETA FLAG READS THE TIME-EXIT CLOCK (owner 2026-11-04: "go with 1-4"):
+    # held until 7 DTE, a 24-DTE contract has ~12 sessions (a 4-ATR target's ~12),
+    # a 23-DTE one ~11; it used to compare DTE itself and could never fail.
+    assert [sessions_to_time_exit(d) for d in (7, 21, 23, 24, 30, 45)] == [0, 10, 11, 12, 16, 27]
+    assert target_sessions_needed(4.0, 2.0) == 12 and target_sessions_needed(1.0, 2.0) == 5 \
+        and target_sessions_needed(4.0, None) == 10
+    _t24 = _pick(_tie, atr=2.0)                                         # 31 DTE wins the tie
+    assert _t24["sessions_to_exit"] == 17 and _t24["dte_adequate"] is True, _t24
+    _short = {"expiries": [{"expiry": "2026-11-25", "dte": 21, "calls": _a, "puts": _a}]}
+    _s21 = get_option_data("TEST", price, "Bullish", "Normal", 20, 4.0, 1e9, _open, atr=2.0, chain_data=_short)
+    assert _s21["days_needed"] == 12 and _s21["sessions_to_exit"] == 10 and _s21["dte_adequate"] is False, _s21
+    print("theta flag       : sessions to the 7-DTE exit against the target's; 21-23 DTE flagged, 24+ not")
     # nearer the money wins across expiries, even when less liquid
     _c = pd.DataFrame([(101, 1.50, 1.55, 900, 9000)], columns=["strike", "bid", "ask", "volume", "openInterest"])
     _near = {"expiries": [{"expiry": "2026-11-27", "dte": 24, "calls": _c, "puts": _c},

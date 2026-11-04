@@ -176,6 +176,11 @@ jobs:
           if [[ -n "$(git status --porcelain open_positions.json)" ]]; then
             git config user.name  "exit-monitor"
             git config user.email "actions@github.com"
+            # The two versions a conflict is merged from, by position: the file
+            # as this run checked it out, and as the monitor left it.
+            git show HEAD:open_positions.json > "$RUNNER_TEMP/pos_base.json" 2>/dev/null \
+              || echo "[]" > "$RUNNER_TEMP/pos_base.json"
+            cp open_positions.json "$RUNNER_TEMP/pos_ours.json"
             git add open_positions.json
             git commit -m "chore: update position state [skip ci]"
             BRANCH="${GITHUB_REF_NAME:-main}"
@@ -187,8 +192,21 @@ jobs:
                 echo "State pushed on attempt $attempt."
                 exit 0
               fi
-              echo "Push attempt $attempt failed — retrying in 5s."
+              echo "Push attempt $attempt failed — merging by position, retrying in 5s."
               git status --short || true
+              # A failed rebase leaves the repo mid-rebase and every later
+              # `pull --rebase` refuses, so abort it (BACKLOG 46 hygiene). The
+              # app writes this file too, and a conflict on its lines comes back
+              # on every attempt, so take the remote file and lay this run's
+              # changes on it position by position (exit_monitor.py --merge-state:
+              # the app's own edits and closes stand).
+              git rebase --abort 2>/dev/null || true
+              if git fetch origin "$BRANCH" && git reset --hard "origin/$BRANCH" \
+                 && python exit_monitor.py --merge-state "$RUNNER_TEMP/pos_base.json" \
+                      "$RUNNER_TEMP/pos_ours.json" open_positions.json; then
+                git add open_positions.json
+                git diff --cached --quiet || git commit -m "chore: update position state [skip ci]"
+              fi
               sleep 5
             done
             echo "::warning::Could not push position state after 3 attempts. \

@@ -420,6 +420,73 @@ EXIT_PRIORITY = {"STOP": 0, "TARGET_U": 1, "TARGET": 2, "TIME": 3, "HOLD": 4, "T
 MONITORED_STATUSES = ("OPEN", "EXIT_SIGNALLED")
 
 
+def merge_position_state(base: list, ours: list, theirs: list) -> list:
+    """
+    THE MONITOR'S STATE, MERGED BY POSITION (BACKLOG 46 hygiene; owner: "go
+    with 1-4"). The workflow commits this run's open_positions.json and
+    rebases it on the remote. The app writes the same file (a position logged
+    or closed), and when both touched it the rebase conflicted on the JSON's
+    lines: the loop never aborted the rebase, every retry then refused, and
+    the run's alert flags were lost (one duplicate alert next run). Aborting
+    alone is not enough, because the same lines conflict again, so the three
+    versions are merged by position id instead:
+      base    the file as this run checked it out
+      ours    the file after the monitor ran
+      theirs  the remote file now
+    The result is `theirs` (every position the app added, closed or edited
+    stays as the app left it) with, on each position still in it, every field
+    the monitor changed from `base` laid on top, except a field the app also
+    changed: the app's stands (a person's act wins). A position the app
+    removed stays removed. Order is theirs'.
+    """
+    def _by_id(rows):
+        return {r.get("id"): r for r in (rows or []) if isinstance(r, dict) and r.get("id")}
+    b, o = _by_id(base), _by_id(ours)
+    _gone = object()
+    out = []
+    for t in theirs or []:
+        if not isinstance(t, dict) or t.get("id") not in o:
+            out.append(t)
+            continue
+        bo, oo, m = b.get(t["id"], {}), o[t["id"]], dict(t)
+        for k in set(oo) | set(bo):
+            ov, bv = oo.get(k, _gone), bo.get(k, _gone)
+            if ov == bv or t.get(k, _gone) != bv:
+                continue                  # the monitor left it, or the app changed it too
+            if ov is _gone:
+                m.pop(k, None)
+            else:
+                m[k] = ov
+        out.append(m)
+    return out
+
+
+def merge_state_files(base_path: str, ours_path: str, out_path: str) -> int:
+    """`--merge-state BASE OURS OUT`: OUT holds the remote file (theirs) and
+    is rewritten with merge_position_state(), in run()'s format. An
+    unreadable remote file is left alone (exit 1); a missing base is []."""
+    from pathlib import Path
+
+    def _load(pth, required):
+        try:
+            rows = json.loads(Path(pth).read_text())
+        except (OSError, ValueError):
+            if required:
+                raise
+            return []
+        return rows if isinstance(rows, list) else []
+    try:
+        theirs = _load(out_path, True)
+        ours = _load(ours_path, True)
+    except (OSError, ValueError) as e:
+        print(f"merge-state: cannot read {e}; nothing written")
+        return 1
+    merged = merge_position_state(_load(base_path, False), ours, theirs)
+    Path(out_path).write_text(json.dumps(merged, indent=2, default=str))
+    print(f"merge-state: {len(merged)} position(s) written, the monitor's fields laid on the remote file")
+    return 0
+
+
 def outranks(new_reason: str, previous_reason: str | None) -> bool:
     """
     True when `new_reason` is urgent enough to alert again.
@@ -1319,6 +1386,42 @@ def selftest() -> int:
     print("priority          : STOP outranks THESIS/TARGET; THESIS never outranks; TARGET_U between STOP "
           "and TARGET")
 
+    # ── THE PUSH RETRY'S MERGE (BACKLOG 46 hygiene; owner: "go with 1-4") ──
+    import contextlib
+    import io
+    import tempfile
+    from pathlib import Path
+    _b0 = [{"id": "A", "status": "OPEN", "exit_alerted": False, "last_check_epoch": 1, "skip": "x", "notes": ""},
+           {"id": "B", "status": "OPEN", "last_check_epoch": 1},
+           {"id": "D", "status": "OPEN", "rules": {"tp_pct": 200}}]
+    _o0 = [{"id": "A", "status": "EXIT_SIGNALLED", "exit_alerted": True, "exit_reason": "STOP",
+            "last_check_epoch": 2, "notes": ""},                                  # 'skip' removed by the monitor
+           {"id": "B", "status": "OPEN", "last_check_epoch": 2},
+           {"id": "D", "status": "EXIT_SIGNALLED", "rules": {"tp_pct": 200}}]
+    _t0 = [{"id": "C", "status": "OPEN"},                                          # logged in the app
+           {"id": "A", "status": "OPEN", "exit_alerted": False, "last_check_epoch": 1, "skip": "x",
+            "notes": "app edit"},
+           {"id": "D", "status": "OPEN_REARMED", "rules": {"tp_pct": 200}}]       # B closed in the app
+    _m0 = merge_position_state(_b0, _o0, _t0)
+    assert [r["id"] for r in _m0] == ["C", "A", "D"], ([r["id"] for r in _m0], "the app's positions, in its order")
+    _ma = _m0[1]
+    assert _ma["exit_alerted"] is True and _ma["status"] == "EXIT_SIGNALLED" and _ma["exit_reason"] == "STOP" \
+        and _ma["last_check_epoch"] == 2 and _ma["notes"] == "app edit" and "skip" not in _ma, _ma
+    assert _m0[2]["status"] == "OPEN_REARMED", "a field both changed keeps the app's value"
+    assert _m0[0] == {"id": "C", "status": "OPEN"}, "a position the app added is untouched"
+    _td = Path(tempfile.mkdtemp())
+    (_td / "base.json").write_text(json.dumps(_b0)); (_td / "ours.json").write_text(json.dumps(_o0))
+    (_td / "out.json").write_text(json.dumps(_t0))
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert merge_state_files(str(_td / "base.json"), str(_td / "ours.json"), str(_td / "out.json")) == 0
+    assert json.loads((_td / "out.json").read_text()) == _m0
+    (_td / "out.json").write_text("{not json")
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert merge_state_files(str(_td / "base.json"), str(_td / "ours.json"), str(_td / "out.json")) == 1
+    assert (_td / "out.json").read_text() == "{not json", "an unreadable remote file is left alone"
+    print("push-retry merge  : the monitor's fields laid on the remote file by position; the app's edits, "
+          "closes and new positions stand")
+
     def _run_once(rows, quote):
         """run() over a temp positions file. Returns (sent, rows_after)."""
         d = _P(_tf.mkdtemp()) / "pos.json"
@@ -1594,6 +1697,9 @@ def parse_args():
                    help="Send one test message to verify credentials.")
     p.add_argument("--selftest", action="store_true",
                    help="Run the offline rule tests. No network, no alerts.")
+    p.add_argument("--merge-state", nargs=3, metavar=("BASE", "OURS", "OUT"),
+                   help="Merge the monitor's position state onto the remote file by "
+                        "position (the workflow's push retry). OUT holds the remote file.")
     return p.parse_args()
 
 
@@ -1601,6 +1707,8 @@ if __name__ == "__main__":
     _args = parse_args()
     if _args.selftest:
         sys.exit(selftest())
+    if _args.merge_state:
+        sys.exit(merge_state_files(*_args.merge_state))
     if _args.test_telegram:
         sys.exit(test_telegram())
     sys.exit(run(_args))
