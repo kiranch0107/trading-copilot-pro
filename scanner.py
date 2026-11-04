@@ -1441,7 +1441,11 @@ def compose_alert(r: dict, tk: str, header: str = "🚨 TRADE ALERT") -> str:
         # said "thesis OFF" while the measurement ran with the thesis exit on.
         _m = risk_params.MEASURED_OPTION_STRUCTURE
         lines += ["", f"Rules (the measured structure): TP +{_m['tp_pct']:g}% · SL −{_m['sl_pct']:g}% · "
-                      f"exit at {_m['dte_exit']} DTE · thesis {'ON (EMA20 break)' if _m.get('thesis') else 'OFF'}"]
+                      f"exit at {_m['dte_exit']} DTE · thesis {'ON (EMA20 break)' if _m.get('thesis') else 'OFF'}"
+                      # THE TARGET EXIT (D3; owner 2026-11-04: "go with the target exit"): the
+                      # option is sold at the close that reaches the alert's own target.
+                      + (f" · sell when {tk} CLOSES at or {'below' if r.get('trend') == 'Bearish' else 'above'} "
+                         f"the target {r['target']}" if _m.get('target_exit') and r.get('target') else "")]
         if _cap is not None:
             lines.append(f"Expiry kept to {_cap} DTE or less so the {risk_params.MEASURED_OPTION_STRUCTURE['dte_exit']}-DTE "
                          f"exit comes before earnings {r.get('next_earnings')} (D1).")
@@ -3173,6 +3177,9 @@ def _selftest_body() -> int:
             _msg1 = compose_alert(dict(_hq(_fr, "AAA"), next_earnings=(_today4 + _dt4.timedelta(days=30)).isoformat()), "AAA")
             assert "Expiry kept to 36 DTE or less so the 7-DTE exit comes before earnings" in _msg1 and \
                 "strike +0.0% vs price" in _msg1, _msg1
+            # D3 (owner 2026-11-04): the rules line names the target exit at the alert's own target
+            _tg1 = _hq(_fr, "AAA")["target"]
+            assert f"thesis ON (EMA20 break) · sell when AAA CLOSES at or above the target {_tg1}" in _msg1, _msg1
             assert "Expiry kept to" not in compose_alert(dict(_hq(_fr, "AAA"), next_earnings=(
                 _today4 + _dt4.timedelta(days=60)).isoformat()), "AAA"), "a cap past 45 DTE does not bind"
             _g["suggest_option"] = lambda *a, **k: None

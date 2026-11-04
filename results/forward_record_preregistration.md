@@ -234,6 +234,20 @@ read), `forward_log` selftest (the counts), and
 `consistency_check.check_pool_bucket_wired` (the pool loop asks `pool_gate`, the
 universe's cap, the fallback rank, RS and the cut recorded).
 
+**Note 2026-11-04 (BACKLOG 46 D3; owner: "go with the target exit") — the
+option structure's exit, not the record; no row kind, reading, rule,
+threshold, tag or fingerprint changes.** The record grades the signal on
+the stock (stop-distance R), which this does not touch. The traded option
+is now sold when the stock CLOSES at or beyond the alert's own target, as
+well as on the structure's other exits (`MEASURED_OPTION_STRUCTURE
+["target_exit"]`, measured as arm B of the larger D3:
+`results/option_target_exit_large_run1.md`, EQUIVALENT within ±5 points
+of premium). A premium-basis outcome attached from a signal trade logged
+from this date carries that exit; its rules block names
+`underlying_target`. Enforcement: `risk_params`, `journal_store` and
+`exit_monitor.py --selftest`, `scanner.py --selftest` (the alert's rules
+line), and `consistency_check.check_target_exit_in_structure`.
+
 ## Amendment 2026-10-28 (F) — the HQ tier's ADX leg is 30, not 35 (BACKLOG 33, owner's decision). THRESHOLD CHANGE on the tag and the alert tier, declared as an INTAKE choice; the fingerprint moves once and is declared
 
 **Note 2026-10-29 (review G1, owner: "go with G1 as well") — episodes

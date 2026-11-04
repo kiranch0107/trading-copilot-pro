@@ -12,13 +12,16 @@ Cloud sleeps idle apps. A "check every 30 minutes" loop inside the app silently
 stops the moment you close the tab — exactly when you'd be relying on it. So
 the monitor lives here, driven by an external scheduler (GitHub Actions cron).
 
-THE FOUR EXIT TRIGGERS
-----------------------
+THE EXIT TRIGGERS
+-----------------
 Price stops on the underlying fit options badly: an option can lose 40% while
 the stock barely moves, purely from theta and IV. These trigger on the things
 that actually govern an option position, and are checked in this priority:
 
   1. STOP      — premium fell to −X% of what you paid (risk first)
+  1b. TARGET_U — the underlying CLOSED at or beyond the alert's target (part
+                 of the measured structure since 2026-11-04, owner: "go with
+                 the target exit"; rules underlying_target)
   2. TARGET    — premium rose to +Y%
   3. TIME      — DTE at or below your floor; theta decay accelerates sharply
                  in the final weeks and this is the rule people most often skip
@@ -407,7 +410,10 @@ def days_to_expiry(expiry: str) -> int | None:
 #   THESIS after STOP   -> silent. You have already been told the worse thing.
 #   THESIS after THESIS -> silent. No new information, and a repeat every hour
 #                          is what the exit_alerted flag was added to stop.
-EXIT_PRIORITY = {"STOP": 0, "TARGET": 1, "TIME": 2, "HOLD": 3, "THESIS": 4}
+#   TARGET_U ranks between STOP and the premium TARGET, the order the rules
+#   are evaluated in (and option_backtest's arm B): the alert's own target
+#   reached outranks the premium level and the softer signals.
+EXIT_PRIORITY = {"STOP": 0, "TARGET_U": 1, "TARGET": 2, "TIME": 3, "HOLD": 4, "THESIS": 5}
 
 # Statuses run() still evaluates. EXIT_SIGNALLED is in here deliberately; see
 # EXIT_PRIORITY above.
@@ -430,8 +436,9 @@ def outranks(new_reason: str, previous_reason: str | None) -> bool:
 
 def check_option_position(pos: dict) -> dict:
     """
-    Evaluate every enabled exit rule. Priority: STOP, TARGET, TIME, HOLD,
-    THESIS — risk before reward, and both before the softer signals.
+    Evaluate every enabled exit rule. Priority: STOP, TARGET_U, TARGET,
+    TIME, HOLD, THESIS — risk before reward, and both before the softer
+    signals. The underlying is fetched at most once, for TARGET_U and THESIS.
 
     HOLD sits after TIME because the theta cliff is the more urgent of the
     two clocks: a contract at 5 DTE needs out today regardless of how many
@@ -442,6 +449,14 @@ def check_option_position(pos: dict) -> dict:
     entry_prem = float(pos["entry_premium"])
     dte = days_to_expiry(pos["expiry"])
     info = {"dte": dte}
+    _ucache: dict = {}
+
+    def _under():
+        # One read of the underlying per position per run, shared by TARGET_U
+        # and THESIS; in the closing window it is the live price (D6).
+        if "u" not in _ucache:
+            _ucache["u"] = get_underlying_state(pos["ticker"], live_close=in_closing_window())
+        return _ucache["u"]
 
     quote = get_option_quote(pos["ticker"], pos["expiry"],
                              pos["strike"], pos["right"])
@@ -522,6 +537,35 @@ def check_option_position(pos: dict) -> dict:
             return {**info, "exit": True, "reason": "STOP", "mid": None, "pnl_pct": round(_p, 1),   # the bound, not a stale last
                     "detail": f"No bid; even the ask {_ask:.2f} is {_p:+.1f}% "
                               f"(limit −{abs(sl):.0f}%)"}
+
+    # 1b. TARGET_U — the underlying CLOSED at or beyond the alert's target
+    # (review 2026-11-03 D3; owner 2026-11-04: "go with the target exit").
+    # Part of the measured structure: option_backtest's arm B sells at the
+    # close that reaches the signal's target, after STOP and before the
+    # premium take-profit, and the larger D3 read it EQUIVALENT within +/-5
+    # points of premium (results/option_target_exit_large_run1.md). Read like
+    # THESIS: settled closes, and in the closing window the live price as a
+    # stand-in for the close the measured exit leaves at (D6). It reads the
+    # underlying, not the quote, so it runs on an unreliable or missing quote.
+    try:
+        tgt_u = float(rules.get("underlying_target") or 0)
+    except (TypeError, ValueError):
+        tgt_u = 0.0
+    if tgt_u > 0:
+        u = _under()
+        if u:
+            info.update(underlying=u["close"], target_u=tgt_u)
+            _call = pos["right"].upper() == "CALL"
+            if (u["close"] >= tgt_u) if _call else (u["close"] <= tgt_u):
+                _how = (f"is trading {u['close']} near the close (live price, D6: the "
+                        f"measured exit is at this close; sell before it)"
+                        if u.get("live") else f"closed {u['close']}")
+                return {**info, "exit": True, "reason": "TARGET_U",
+                        "detail": f"{pos['ticker']} {_how} — at or {'above' if _call else 'below'} "
+                                  f"the alert's target {tgt_u:g}. The measured structure sells "
+                                  f"the option here."}
+
+    if not price_ok and quote and entry_prem > 0:
         tp_ = rules.get("tp_pct") or 0
         if tp_ and _ask <= 0 < _bid and (_bid - entry_prem) / entry_prem * 100 >= abs(tp_):
             _p = (_bid - entry_prem) / entry_prem * 100
@@ -560,7 +604,7 @@ def check_option_position(pos: dict) -> dict:
 
     # 5. THESIS — underlying invalidated the setup
     if rules.get("invalidate_ema"):
-        u = get_underlying_state(pos["ticker"], live_close=in_closing_window())
+        u = _under()
         if u:
             info.update(underlying=u["close"], ema20=u["ema20"])
             broke = (u["close"] < u["ema20"]) if pos["right"].upper() == "CALL" \
@@ -579,7 +623,7 @@ def check_option_position(pos: dict) -> dict:
 
 
 def format_alert(pos: dict, ev: dict, escalated_from: str | None = None) -> str:
-    icons = {"TARGET": "🎯", "STOP": "🛑", "TIME": "⏳", "HOLD": "📆",
+    icons = {"TARGET": "🎯", "TARGET_U": "🎯", "STOP": "🛑", "TIME": "⏳", "HOLD": "📆",
              "THESIS": "📉"}
     icon = icons.get(ev["reason"], "⚠️")
     contract = (f"{pos['ticker']} {pos['expiry']} "
@@ -676,14 +720,14 @@ def diagnose(positions: list) -> None:
         rules = p.get("rules", {}) or {}
         print(f"    Rules          : TP +{rules.get('tp_pct')}%  SL -{rules.get('sl_pct')}%  "
               f"DTE<={rules.get('dte_exit')}  HOLD<={rules.get('max_hold_bars')}  "
-              f"thesis={rules.get('invalidate_ema')}")
+              f"thesis={rules.get('invalidate_ema')}  target={rules.get('underlying_target')}")
         # max_hold_bars was missing from this check, so a position whose only
         # active rule was HOLD got reported as "can never alert" — the exact
         # opposite of the truth, from the tool you reach for when an alert
         # does not arrive.
         if not any([rules.get("tp_pct"), rules.get("sl_pct"),
                     rules.get("dte_exit"), rules.get("max_hold_bars"),
-                    rules.get("invalidate_ema")]):
+                    rules.get("invalidate_ema"), rules.get("underlying_target")]):
             print("    -> ALL RULES DISABLED. This position can never alert.")
             continue
 
@@ -759,7 +803,7 @@ EXPIRY_REMINDER_SESSIONS = 2   # remind when this many sessions (or fewer) remai
 def expiry_reminder(pos: dict, today=None) -> tuple | None:
     """
     THE EXPIRY REMINDER (review 2026-11-03 D5; owner: "go with D5"). Once
-    STOP or TARGET has alerted, nothing else ever alerts (EXIT_PRIORITY): no
+    STOP, TARGET_U or TARGET has alerted, nothing lower ever alerts (EXIT_PRIORITY): no
     TIME, and nothing on expiry day, so an unsold in-the-money call rides to
     automatic exercise (one 150 call is $15,000 of stock) and an expired
     position sits EXIT_SIGNALLED for ever. This is sent whatever the rules
@@ -1160,6 +1204,60 @@ def selftest() -> int:
             "a PUT is invalidated ABOVE the EMA20, not below"
         print("THESIS            : direction-aware for CALL and PUT")
 
+        # ── TARGET_U (D3; owner 2026-11-04): the underlying CLOSES at the alert's target ──
+        _tgt = {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "invalidate_ema": True,
+                "underlying_target": 110.0}
+        _calls = []
+
+        def _ust(close, ema=100.0, live=False):
+            def _f(*a, **k):
+                _calls.append(k)
+                return {"close": close, "ema20": ema, "as_of": "2026-11-04", "live": live}
+            return _f
+        _q(2.00)
+        _g["get_underlying_state"] = _ust(110.0)
+        ev = check_option_position(_base(rules=_tgt))
+        assert ev["exit"] and ev["reason"] == "TARGET_U" and "closed 110.0" in ev["detail"] \
+            and "target 110" in ev["detail"], ev
+        _g["get_underlying_state"] = _ust(109.99)
+        assert not check_option_position(_base(rules=_tgt))["exit"], "a close under the target is not the target"
+        _g["get_underlying_state"] = _ust(130.0)
+        assert not check_option_position(_base(rules=dict(_tgt, underlying_target=0)))["exit"], \
+            "no alert target: the rule cannot fire"
+        _g["get_underlying_state"] = _ust(88.0, ema=80.0)
+        ev = check_option_position(_base(right="PUT", rules=dict(_tgt, underlying_target=90.0)))
+        assert ev["exit"] and ev["reason"] == "TARGET_U" and "below" in ev["detail"], "a PUT's target is BELOW"
+        # the order: STOP first, then TARGET_U, then the premium TARGET
+        _g["get_underlying_state"] = _ust(115.0)
+        _q(0.90)
+        assert check_option_position(_base(rules=_tgt))["reason"] == "STOP", "risk first"
+        _q(6.10)
+        assert check_option_position(_base(rules=_tgt))["reason"] == "TARGET_U", \
+            "the alert's target is checked before the premium take-profit"
+        # it reads the underlying, so an unreliable quote does not silence it
+        _q(2.00, reliable=False)
+        ev = check_option_position(_base(rules=_tgt))
+        assert ev["exit"] and ev["reason"] == "TARGET_U" and ev.get("price_rules_skipped"), ev
+        # one read of the underlying, shared with THESIS; the live read in the closing window
+        _q(2.00)
+        _calls.clear()
+        _g["get_underlying_state"] = _ust(105.0)
+        assert not check_option_position(_base(rules=_tgt))["exit"]
+        assert len(_calls) == 1, (_calls, "TARGET_U and THESIS share one fetch")
+        _calls.clear()
+        _real_cw0 = _g["in_closing_window"]
+        _g["in_closing_window"] = lambda *a, **k: True
+        _g["get_underlying_state"] = _ust(111.0, live=True)
+        try:
+            ev = check_option_position(_base(rules=_tgt))
+        finally:
+            _g["in_closing_window"] = _real_cw0
+        assert ev["reason"] == "TARGET_U" and "near the close (live price" in ev["detail"] \
+            and _calls == [{"live_close": True}], (ev, _calls)
+        assert "EXIT TARGET_U" in format_alert(_base(rules=_tgt), ev) and "🎯" in format_alert(_base(rules=_tgt), ev)
+        print("TARGET_U          : a close at the alert's target sells, after STOP and before the premium "
+              "TARGET; direction-aware; quote-free; one fetch with THESIS; live near the close")
+
         # ── and the WIRING: get_underlying_state() must itself drop the bar ──
         # Testing drop_unsettled_bars() alone passed even with the call removed
         # from get_underlying_state — a guard that exists but is not reached is
@@ -1215,7 +1313,11 @@ def selftest() -> int:
     assert outranks("STOP", None), "a never-alerted position always alerts"
     assert outranks("STOP", "WHAT_IS_THIS"), \
         "an unrecognised previous reason must not be able to suppress a STOP"
-    print("priority          : STOP outranks THESIS/TARGET; THESIS never outranks")
+    assert outranks("STOP", "TARGET_U") and outranks("TARGET_U", "TARGET") and outranks("TARGET_U", "THESIS")
+    assert not outranks("TARGET", "TARGET_U") and not outranks("THESIS", "TARGET_U") \
+        and not outranks("TARGET_U", "TARGET_U")
+    print("priority          : STOP outranks THESIS/TARGET; THESIS never outranks; TARGET_U between STOP "
+          "and TARGET")
 
     def _run_once(rows, quote):
         """run() over a temp positions file. Returns (sent, rows_after)."""

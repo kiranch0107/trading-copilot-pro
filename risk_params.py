@@ -376,6 +376,20 @@ MEASURED_OPTION_STRUCTURE = {
     # read this field. The HOLD rule is not part of the structure: out by
     # dte_exit a position lives at most ~27 sessions, so it cannot bind.
     "thesis": True,
+    # THE TARGET EXIT IS PART OF THE STRUCTURE (review 2026-11-03 D3; owner
+    # 2026-11-04: "go with the target exit"). Sell the option when the
+    # UNDERLYING CLOSES at or beyond the alert's own target, checked after
+    # STOP and before the premium take-profit, as option_backtest's arm B
+    # does. The larger D3 (results/option_target_exit_large_run1.md, 2,817
+    # pairs on the 77 pool names) read it NOT ESTABLISHED and EQUIVALENT
+    # within +/-5 points of premium: about +1 point against holding for
+    # +200 %, at most 0.9 worse (95 %). Taken on coherence: the alert names
+    # one level and the option leaves there. A signal trade carries the
+    # alert's target (journal rules `underlying_target`); the exit monitor
+    # sells on a close at or beyond it (TARGET_U). option_backtest's default
+    # runs stay without it, so every committed sweep reproduces; arm B of
+    # --target-exit-ab / --d3-large is this structure's measurement.
+    "target_exit": True,
     # AT THE MONEY, AS MEASURED (review 2026-11-03 D2; owner: "go with D2").
     # option_backtest prices strike = round(the entry open): at the money.
     # The selector used to name the most liquid strike in a +/-2 ATR window,
@@ -390,14 +404,16 @@ MEASURED_OPTION_STRUCTURE = {
 STRUCTURE_REASON = ("the measured structure is {min_dte}-{max_dte} DTE at entry, "
                     "a strike within {moneyness_pct:g}% of the underlying (at the money), "
                     "+{tp_pct:g}% / -{sl_pct:g}% on the premium, out at {dte_exit} DTE, "
-                    "thesis exit on (EMA20 break); "
+                    "thesis exit on (EMA20 break), target exit on (sell when the stock "
+                    "closes at the alert's target); "
                     "a name where that is unaffordable at this account size is not "
                     "tradeable here (BACKLOG 32)").format(**MEASURED_OPTION_STRUCTURE)
 
 
 def option_structure_violation(expiry: str, as_of: str, rules: dict | None,
                                strike: float | None = None,
-                               underlying: float | None = None) -> str | None:
+                               underlying: float | None = None,
+                               right: str | None = None) -> str | None:
     """
     Why an option entry is NOT the measured structure, or None if it is.
     `expiry` and `as_of` are YYYY-MM-DD (as_of: the trade date); `rules` is
@@ -405,7 +421,10 @@ def option_structure_violation(expiry: str, as_of: str, rules: dict | None,
     the leg so the refusal says what to change; the sentence that follows it
     (STRUCTURE_REASON) is the same every time. With `strike` and
     `underlying` (the stock's price at the trade), the moneyness leg is
-    asked too (D2); without the underlying it cannot be, and is not.
+    asked too (D2); without the underlying it cannot be, and is not. The
+    target exit (D3) needs the alert's target in `rules["underlying_target"]`;
+    with `underlying` and `right` known it must lie beyond the stock (above
+    it for a CALL), or the exit would sell at the first close.
     """
     import datetime as _dt
     m = MEASURED_OPTION_STRUCTURE
@@ -425,6 +444,15 @@ def option_structure_violation(expiry: str, as_of: str, rules: dict | None,
             return f"{label} {got:g} is not the measured {m[key]:g}"
     if m.get("thesis") and not r.get("invalidate_ema"):
         return "thesis exit off is not the measured structure (it ran with the EMA20 exit on)"
+    tgt = 0.0
+    if m.get("target_exit"):
+        try:
+            tgt = float(r.get("underlying_target") or 0)
+        except (TypeError, ValueError):
+            tgt = 0.0
+        if not tgt > 0:
+            return ("target exit off is not the measured structure (it sells when the stock "
+                    "closes at the alert's target; enter the alert's Target)")
     if strike is not None and underlying is not None:
         try:
             k, u = float(strike), float(underlying)
@@ -433,6 +461,16 @@ def option_structure_violation(expiry: str, as_of: str, rules: dict | None,
         if u > 0 and abs(k / u - 1) * 100 > float(m["moneyness_pct"]) + 1e-9:
             return (f"strike {k:g} is {abs(k / u - 1) * 100:.1f}% from the underlying "
                     f"{u:g}, outside {m['moneyness_pct']:g}% of the money")
+    if tgt > 0 and underlying is not None and right:
+        try:
+            u = float(underlying)
+        except (TypeError, ValueError):
+            return "underlying price unreadable"
+        call = str(right).upper().startswith("C")
+        if u > 0 and ((call and tgt <= u) or (not call and tgt >= u)):
+            return (f"the alert's target {tgt:g} is not {'above' if call else 'below'} the "
+                    f"underlying {u:g}: the stock is already there, so the target exit would "
+                    f"sell at the first close")
     return None
 
 DIRECTION_REASON = (
@@ -603,8 +641,10 @@ def _selftest_sweep_table() -> None:
 def _selftest_structure() -> None:
     """The measured structure is one dict and the violation reads it."""
     m = MEASURED_OPTION_STRUCTURE
-    assert (m["min_dte"], m["max_dte"], m["tp_pct"], m["sl_pct"], m["dte_exit"], m["thesis"]) == (21, 45, 200.0, 50.0, 7, True)
-    ok = {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "max_hold_bars": 20, "invalidate_ema": True}
+    assert (m["min_dte"], m["max_dte"], m["tp_pct"], m["sl_pct"], m["dte_exit"], m["thesis"], m["target_exit"]) \
+        == (21, 45, 200.0, 50.0, 7, True, True)
+    ok = {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "max_hold_bars": 20, "invalidate_ema": True,
+          "underlying_target": 110.0}
     assert "thesis exit off" in option_structure_violation("2026-11-20", "2026-10-28", dict(ok, invalidate_ema=False))
     assert "thesis exit off" in option_structure_violation("2026-11-20", "2026-10-28", {k: v for k, v in ok.items() if k != "invalidate_ema"})
     assert option_structure_violation("2026-11-20", "2026-10-28", ok) is None            # 23 DTE
@@ -623,7 +663,27 @@ def _selftest_structure() -> None:
     assert option_structure_violation("2026-11-20", "2026-10-28", ok, strike=95, underlying=100) is None
     assert option_structure_violation("2026-11-20", "2026-10-28", ok, strike=150) is None, "no underlying: not asked"
     assert "within 5% of the underlying" in STRUCTURE_REASON
-    print("  measured structure: 21-45 DTE, +200/-50, out at 7, thesis on; every other leg named in the refusal")
+    # D3 (owner 2026-11-04): the target exit, and the target beyond the stock
+    for _t in (None, 0, "", "x", -5):
+        assert "target exit off" in option_structure_violation("2026-11-20", "2026-10-28",
+                                                               dict(ok, underlying_target=_t)), _t
+    assert "target exit off" in option_structure_violation(
+        "2026-11-20", "2026-10-28", {k: v for k, v in ok.items() if k != "underlying_target"})
+    assert option_structure_violation("2026-11-20", "2026-10-28", ok, strike=100, underlying=100,
+                                      right="CALL") is None
+    assert "already there" in option_structure_violation("2026-11-20", "2026-10-28", ok, strike=110,
+                                                          underlying=110, right="CALL")
+    assert "not above" in option_structure_violation("2026-11-20", "2026-10-28", ok, strike=112,
+                                                     underlying=112, right="CALL")
+    assert option_structure_violation("2026-11-20", "2026-10-28", dict(ok, underlying_target=90), strike=100,
+                                      underlying=100, right="PUT") is None
+    assert "not below" in option_structure_violation("2026-11-20", "2026-10-28", ok, strike=100,
+                                                     underlying=100, right="PUT")
+    assert option_structure_violation("2026-11-20", "2026-10-28", ok, strike=112, underlying=112) is None, \
+        "no right: the side is not asked"
+    assert "target exit on" in STRUCTURE_REASON
+    print("  measured structure: 21-45 DTE, +200/-50, out at 7, thesis on, target exit on; every other leg "
+          "named in the refusal")
 
 
 def _selftest_direction() -> None:

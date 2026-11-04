@@ -2421,7 +2421,8 @@ def check_signal_key_round_trip() -> None:
         # the 21-DTE floor on 2026-10-31 — the check went red by calendar.
         pos = js.open_option_position("NVDA", "CALL", 250.0, "2026-10-16", 1, 3.0,
                                       {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7,
-                                       "max_hold_bars": 20, "invalidate_ema": True},
+                                       "max_hold_bars": 20, "invalidate_ema": True,
+                                       "underlying_target": 300.0},
                                       source="signal", signal_key=key,
                                       traded_at="2026-09-11 10:00 ET")
         js.close_position(pos["id"], 4.5, "WIN")
@@ -2971,7 +2972,8 @@ def check_journal_hygiene() -> None:
     assert "thesis exit off" in (rp.option_structure_violation("2026-11-20", "2026-10-28",
                                                                {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7}) or "")
     assert rp.option_structure_violation("2026-11-20", "2026-10-28",
-                                         {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "invalidate_ema": True}) is None
+                                         {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "invalidate_ema": True,
+                                          "underlying_target": 110.0}) is None
     assert app.count('value=bool(risk_params.MEASURED_OPTION_STRUCTURE["thesis"])') == 3, \
         "every thesis checkbox (quick-buy, positions, contract checker) must default to the structure's thesis field"
     _sc = Path("scanner.py").read_text(encoding="utf-8", errors="replace")
@@ -3027,8 +3029,12 @@ def check_journal_hygiene() -> None:
     try:
         js.load_positions = lambda: list(mem["pos"])
         js.save_positions = lambda d: mem.__setitem__("pos", list(d))
-        rules = {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "max_hold_bars": 20, "invalidate_ema": True}
+        rules = {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "max_hold_bars": 20, "invalidate_ema": True,
+                 "underlying_target": 12.0}
         for kw, needle in ((dict(source="discretionary", mode="live"), "discretionary"),
+                           (dict(source="signal", signal_key="X|Bullish|2026-10-07",
+                                 traded_at="2026-10-07 10:00 ET", rules=dict(rules, underlying_target=0)),
+                            "target exit off"),
                            (dict(source="signal", signal_key="X|Bullish|2026-10-07",
                                  traded_at="2026-10-07 10:00 ET", rules=dict(rules, invalidate_ema=False)), "thesis exit off"),
                            (dict(source="signal", signal_key="X|Bullish|2026-10-07",
@@ -3874,6 +3880,58 @@ def check_option_target_exit_large_preregistered() -> None:
     print("  the larger D3: 77 names outside run 1, arm A the measured structure, the bar and both commands fixed")
 
 
+
+def check_target_exit_in_structure() -> None:
+    """
+    The target exit is part of the measured structure (review 2026-11-03 D3;
+    owner 2026-11-04: "go with the target exit", on the larger D3's
+    NOT ESTABLISHED / EQUIVALENT reading). Pinned end to end: the structure
+    names it; the journal refuses a signal trade without the alert's target
+    or with one the stock already passed (it hands the side to the check);
+    the exit monitor sells on a close at or beyond it (TARGET_U), after STOP
+    and before the premium TARGET, from the one read of the underlying THESIS
+    also uses; every app logging path asks for the target and writes it into
+    the rules; the alert's rules line names it at the alert's own target;
+    option_backtest's default runs stay without it (committed sweeps
+    reproduce); the reading records the decision.
+    """
+    import inspect as _i
+    import risk_params as rp
+    import exit_monitor as em
+    import journal_store as js
+    import option_backtest as ob
+    m = rp.MEASURED_OPTION_STRUCTURE
+    assert m.get("target_exit") is True and "target exit on" in rp.STRUCTURE_REASON, "the structure names it"
+    base = {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7, "invalidate_ema": True}
+    assert "target exit off" in (rp.option_structure_violation("2026-11-20", "2026-10-28", base) or "")
+    assert rp.option_structure_violation("2026-11-20", "2026-10-28", dict(base, underlying_target=110.0)) is None
+    assert "already there" in (rp.option_structure_violation("2026-11-20", "2026-10-28",
+                                                             dict(base, underlying_target=100.0), strike=100,
+                                                             underlying=100.0, right="CALL") or "")
+    assert "right=right" in _i.getsource(js.open_option_position), "the journal hands the side to the check"
+    pr = em.EXIT_PRIORITY
+    assert pr["STOP"] < pr["TARGET_U"] < pr["TARGET"] < pr["THESIS"], pr
+    src = _i.getsource(em.check_option_position)
+    i_stop, i_tu, i_tp = src.find("# 1. STOP"), src.find("# 1b. TARGET_U"), src.find("# 2. TARGET")
+    assert -1 < i_stop < i_tu < i_tp, "TARGET_U is evaluated after STOP and before the premium TARGET"
+    assert 'rules.get("underlying_target")' in src and src.count("u = _under()") == 2 \
+        and src.count("get_underlying_state(") == 1, "TARGET_U and THESIS share one read of the underlying"
+    app = Path("app.py").read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+    assert app.count("target_exit_input(") == 4, "the helper and its three logging paths (quick-buy, positions, checker)"
+    assert app.count('"underlying_target": ') == 3, "every logging path writes the target into the rules"
+    assert 'default=r.get("target")' in app, "the quick-buy form defaults to the setup's own target"
+    sc = Path("scanner.py").read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+    assert "sell when {tk} CLOSES at or" in sc and "_m.get('target_exit') and r.get('target')" in sc, \
+        "the alert's rules line names the target exit at the alert's target"
+    main = _i.getsource(ob.main)
+    assert "tgt_exit" not in main[:main.find("if a.target_exit_ab:")], \
+        "option_backtest's default runs stay without it, so committed results reproduce"
+    rd = Path("results/option_target_exit_large_run1.md").read_text(encoding="utf-8")
+    assert 'DECIDED 2026-11-04 (owner: "go with the target exit")' in rd, "the reading records the decision"
+    print("  the target exit: in the structure, refused without the alert's target, sold on a close at it "
+          "(after STOP, before TARGET), asked by every app path, named in the alert")
+
+
 def check_engine_fixes_default() -> None:
     """
     Expert review 2026-11-03, the research-engine items (owner: "fix the
@@ -4170,6 +4228,7 @@ CHECKS = [
     ("forward record's power stated at its own sd (D7)", check_forward_power_stated),
     ("option target-exit arm pre-registered (D3)", check_option_target_exit_preregistered),
     ("the larger D3 pre-registered (77 names outside run 1)", check_option_target_exit_large_preregistered),
+    ("the target exit is part of the structure (owner 11-04)", check_target_exit_in_structure),
     ("Tiingo fallback split-adjusted, its fill checked (review 11-03)", check_tiingo_split_adjusted),
     ("research-engine fixes, all six the default (BACKLOG 47)", check_engine_fixes_default),
     ("rows on file re-graded under H+I (owner 11-04)", check_regrade_on_file),

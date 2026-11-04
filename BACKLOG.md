@@ -146,6 +146,18 @@ landed in the repo and the removal says so in the commit.
   worse (95 %), on 2,817 pairs. Tie the option's exit to the alert's
   target (one change to `MEASURED_OPTION_STRUCTURE`, the exit monitor and
   the journal), or keep the structure as measured. Retire when decided.
+  *(Decided 2026-11-04, owner: "go with the target exit"; built the same
+  day. Retired.)*
+- **2026-11-04 (item 46, the target exit built).** From your next signal
+  trade, each of the app's three trade forms asks **"Sell when the stock
+  CLOSES at (the alert's target)"**. It is filled from the setup, or from
+  the forward log's row for the signal bar; check it against the `target`
+  on the alert's Underlying line. A signal trade without it is refused. The
+  monitor sends **🎯 EXIT TARGET_U** when the stock closes at or above it
+  (from about 15:25 ET on the live price, as THESIS does). The alert's
+  rules line now ends "sell when X CLOSES at or above the target …". The NOW
+  position predates it and is unaffected. Retire when the first trade
+  carrying it is logged.
 
 ---
 
@@ -2659,7 +2671,7 @@ unchanged, the forward rows on file not re-graded.
 
 ---
 
-## 46. Expert review 2026-11-03 (evening): the alert, the contract, the exit and the record, read as a trader — NINE FIXES BUILT (N1–N9); ALL EIGHT DECISIONS TAKEN 2026-11-03 (D1, D2, D4–D8 BUILT; D3 RUN 1 UNDERPOWERED 2026-11-04; THE LARGER D3 RUN 2026-11-04: NOT ESTABLISHED, EQUIVALENT WITHIN ±5 POINTS; TYING THE OPTION'S EXIT TO THE TARGET IS THE OWNER'S CALL)
+## 46. Expert review 2026-11-03 (evening): the alert, the contract, the exit and the record, read as a trader — NINE FIXES BUILT (N1–N9); ALL EIGHT DECISIONS TAKEN 2026-11-03 (D1, D2, D4–D8 BUILT; D3 RUN 1 UNDERPOWERED 2026-11-04; THE LARGER D3 RUN 2026-11-04: NOT ESTABLISHED, EQUIVALENT WITHIN ±5 POINTS; THE TARGET EXIT DECIDED AND BUILT 2026-11-04)
 
 `results/expert_review_2026-11-03.md`. Owner: "be an expert in trading
 stocks/options … strict review … identify any gaps and improve … better
@@ -2852,6 +2864,27 @@ D3: arm A averages −2.85 % of premium at IV x1.15 and +2.87 % at x1.00 on
 these 77 names (run 1's seven tech names: +0.07 % / +10 %), so the
 structure's measured numbers may flatter it on the names the live system
 alerts; a question for the IV premium reading (2027-04-08), not a finding.
+**THE TARGET EXIT DECIDED AND BUILT 2026-11-04 (owner: "go with the target
+exit").** On the larger D3's reading (at most 0.9 points worse, most likely
+about 1 better), the option is now also sold when the stock CLOSES at or
+beyond the alert's own target. `MEASURED_OPTION_STRUCTURE["target_exit"]`
+and `STRUCTURE_REASON` name it; `option_structure_violation()` refuses a
+signal trade without `rules["underlying_target"]`, or (with the side and the
+underlying known) one the stock already passed, and the journal hands it the
+side. The exit monitor's `TARGET_U` fires on a settled close at or beyond
+it, or the live price in the closing window (D6), after STOP and before the
+premium TARGET, reading the underlying once with THESIS, and runs on an
+unreliable quote; `EXIT_PRIORITY` ranks it between STOP and TARGET. The
+app's three trade forms ask for the target (`target_exit_input`: the
+setup's own on quick-buy, else the forward log's row for the signal key),
+write it into the rules and show it on the position; the EV panel says the
+sweep ran without it. The alert's rules line names it at the alert's own
+target. `option_backtest`'s default runs stay without it, so every
+committed sweep reproduces; arm B is its measurement. A dated note in
+`forward_record_preregistration.md` says the record is unchanged.
+`check_target_exit_in_structure` (74); twelve guards broken on purpose,
+every one caught. Open positions logged before it (NOW) carry no target and
+are unaffected.
 
 **Tiingo fallback split-adjusted: FIXED 2026-11-03 (owner: "fix the Tiingo
 split adjustment as well").** `data_source.fetch_tiingo()` builds split-only
@@ -3264,8 +3297,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 73 cross-module
-  invariants (73 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 74 cross-module
+  invariants (74 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on

@@ -124,7 +124,10 @@ def simulate_option_trade(df: pd.DataFrame, signal_i: int, trend: str,
     or beyond the signal's own `target` (the level the alert names), at the
     close's mark like every other rule here; checked after STOP and before
     the premium TARGET. results/option_target_exit_preregistration.md fixes how it is
-    read. Every committed run had it off and is unchanged.
+    read. Every committed run had it off and is unchanged. The LIVE structure
+    carries it since 2026-11-04 (owner: "go with the target exit", on the
+    larger D3's EQUIVALENT reading); this engine's default runs stay without
+    it so the committed sweeps reproduce, and arm B is its measurement.
     """
     n = len(df)
     entry_i = signal_i + 1

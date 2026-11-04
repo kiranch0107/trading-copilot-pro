@@ -236,6 +236,9 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
     barely moves, purely from theta and IV. So each position carries its own
     `rules` block, and the monitor checks them in this priority:
         STOP   — premium fell to −sl_pct% of what you paid   (risk first)
+        TARGET_U — the underlying CLOSED at or beyond the alert's target
+                 (rules underlying_target; part of the structure since
+                 2026-11-04, owner: "go with the target exit")
         TARGET — premium rose to +tp_pct%
         TIME   — DTE at or below dte_exit (theta cliff)
         HOLD   — max_hold_bars trading sessions elapsed
@@ -305,8 +308,11 @@ def open_option_position(ticker: str, right: str, strike: float, expiry: str,
         # D2 (review 2026-11-03): the moneyness leg is asked when the caller
         # knows the underlying's price at the trade (the app passes the
         # latest it can read); without it the leg cannot be asked.
+        # D3 (owner 2026-11-04): the alert's target rides in the rules block
+        # (`underlying_target`) and must lie beyond the stock at the trade.
         _why = _rp.option_structure_violation(expiry, _as_of, rules,
-                                              strike=strike, underlying=underlying_px)
+                                              strike=strike, underlying=underlying_px,
+                                              right=right)
         if _why:
             raise ValueError(f"not the measured structure ({_why}); {_rp.STRUCTURE_REASON}")
         # THE HOLD RULE IS NOT PART OF THE STRUCTURE and cannot bind inside
@@ -904,7 +910,7 @@ def selftest() -> int:
         _g["load_journal"] = lambda: list(_mem["jrn"])
         _g["save_journal"] = lambda d: _mem.__setitem__("jrn", list(d))
         _rules = {"tp_pct": 200, "sl_pct": 50, "dte_exit": 7,
-                  "max_hold_bars": 20, "invalidate_ema": True}
+                  "max_hold_bars": 20, "invalidate_ema": True, "underlying_target": 300.0}
         _pk = open_option_position("NVDA", "CALL", 250.0, "2026-11-20", 1, 3.0,
                                    _rules, source="signal",
                                    signal_key="NVDA|Bullish|2026-10-07",
@@ -912,7 +918,8 @@ def selftest() -> int:
         # The HOLD rule is recorded off on a signal trade (H2); the thesis
         # exit stays on, as the structure requires (H1).
         _nv = next(p for p in _mem["pos"] if p["ticker"] == "NVDA")
-        assert _nv["rules"]["max_hold_bars"] == 0 and _nv["rules"]["invalidate_ema"] is True, _nv["rules"]
+        assert _nv["rules"]["max_hold_bars"] == 0 and _nv["rules"]["invalidate_ema"] is True \
+            and _nv["rules"]["underlying_target"] == 300.0, _nv["rules"]
         try:
             open_option_position("PFE", "CALL", 29.0, "2026-10-16", 1, 0.5,
                                  _rules, source="signal", traded_at="2026-09-11 10:00 ET")
@@ -933,6 +940,12 @@ def selftest() -> int:
                       expiry="2026-11-20", rules=dict(_rules, tp_pct=100)), "take profit 100"),
                 (dict(source="signal", signal_key="PFE|Bullish|2026-10-07", traded_at="2026-10-07 10:00 ET",
                       expiry="2026-11-20", rules=dict(_rules, invalidate_ema=False)), "thesis exit off"),
+                # D3 (owner 2026-11-04): no alert target, or one the stock already passed
+                (dict(source="signal", signal_key="PFE|Bullish|2026-10-07", traded_at="2026-10-07 10:00 ET",
+                      expiry="2026-11-20", rules=dict(_rules, underlying_target=0)), "target exit off"),
+                (dict(source="signal", signal_key="PFE|Bullish|2026-10-07", traded_at="2026-10-07 10:00 ET",
+                      expiry="2026-11-20", rules=dict(_rules, underlying_target=29.0), underlying_px=29.4),
+                 "already there"),
                 # D2: a strike 36 % from the underlying (the NOW 150 call at 110)
                 (dict(source="signal", signal_key="PFE|Bullish|2026-10-07", traded_at="2026-10-07 10:00 ET",
                       expiry="2026-11-20", strike=39.5, underlying_px=29.0), "outside 5% of the money")):
