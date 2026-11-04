@@ -137,7 +137,15 @@ landed in the repo and the removal says so in the commit.
   fetches 77 names × 10 years from Yahoo; if it prints `NOT RUN` (a name
   failed to load; no number is computed) run it again, and once a file
   prints a `VERDICT` line commit it as it stands. Retire this line when
-  the file is committed with its reading.
+  the file is committed with its reading. *(Run 2026-11-04 in the
+  Codespace; committed with `results/option_target_exit_large_run1.md`:
+  NOT ESTABLISHED, EQUIVALENT within ±5 points. Retired.)*
+- **2026-11-04 (item 46, the larger D3 read): one decision open, yours.**
+  Selling the option when the stock CLOSES at the alert's target was about
+  1 point of premium better than holding for +200 %, and at most 0.9
+  worse (95 %), on 2,817 pairs. Tie the option's exit to the alert's
+  target (one change to `MEASURED_OPTION_STRUCTURE`, the exit monitor and
+  the journal), or keep the structure as measured. Retire when decided.
 
 ---
 
@@ -2651,7 +2659,7 @@ unchanged, the forward rows on file not re-graded.
 
 ---
 
-## 46. Expert review 2026-11-03 (evening): the alert, the contract, the exit and the record, read as a trader — NINE FIXES BUILT (N1–N9); ALL EIGHT DECISIONS TAKEN 2026-11-03 (D1, D2, D4–D8 BUILT; D3 RUN 1 UNDERPOWERED 2026-11-04; A LARGER D3 PRE-REGISTERED 2026-11-04, RUN OWED IN THE CODESPACE)
+## 46. Expert review 2026-11-03 (evening): the alert, the contract, the exit and the record, read as a trader — NINE FIXES BUILT (N1–N9); ALL EIGHT DECISIONS TAKEN 2026-11-03 (D1, D2, D4–D8 BUILT; D3 RUN 1 UNDERPOWERED 2026-11-04; THE LARGER D3 RUN 2026-11-04: NOT ESTABLISHED, EQUIVALENT WITHIN ±5 POINTS; TYING THE OPTION'S EXIT TO THE TARGET IS THE OWNER'S CALL)
 
 `results/expert_review_2026-11-03.md`. Owner: "be an expert in trading
 stocks/options … strict review … identify any gaps and improve … better
@@ -2826,6 +2834,24 @@ between −3 and +2 at both multipliers, NOT ESTABLISHED and EQUIVALENT.
 Data stated plainly: no clean data remains (BACKLOG 15); the 77 are
 unexamined for B − A only. `check_option_target_exit_large_preregistered`
 (73). **Owed:** the one command, in the Codespace.
+**THE LARGER D3 RUN 2026-11-04 (owner's Codespace; fingerprint
+`v2-312f2f28a4920341`, 77 of 77 names, window 2017-04-17 .. 2026-11-03):
+NOT ESTABLISHED; EQUIVALENT WITHIN ±5 POINTS OF PREMIUM.**
+`results/option_target_exit_large_run1.md`. On 2,817 pairs B − A is +1.23
+(95 % CI [−0.68, +3.14]) at IV 1.15 and +1.02 ([−0.87, +2.91]) at 1.00; the
+90 % CIs lie inside ±5 at both. The prediction held. The design beat its aim
+(half-width 1.9 against 3.5, MDE 2.7): fewer pairs than projected (3.7 a
+name-year), but month DEFF only 1.6. Selling at the target costs at most
+0.7–0.9 points and most likely gains about 1; holding for the overshoot
+earns nothing measurable. The structure stays as measured; tying the
+option's exit to the alert's target is the owner's call (hand-off). Not
+anticipated: 44 of the 77 series came from the Codespace's never-expiring
+cache (the 12 validation names and tranche B, cached by earlier 10-year
+runs), ending about two months before the other 33. Descriptive, outside
+D3: arm A averages −2.85 % of premium at IV x1.15 and +2.87 % at x1.00 on
+these 77 names (run 1's seven tech names: +0.07 % / +10 %), so the
+structure's measured numbers may flatter it on the names the live system
+alerts; a question for the IV premium reading (2027-04-08), not a finding.
 
 **Tiingo fallback split-adjusted: FIXED 2026-11-03 (owner: "fix the Tiingo
 split adjustment as well").** `data_source.fetch_tiingo()` builds split-only
