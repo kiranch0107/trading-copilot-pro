@@ -3987,7 +3987,7 @@ def check_hold_preregistered() -> None:
     for phrase in ("`HOLD_SESSIONS` = 21", "15 and 31 sessions", "`VOL_LOOKBACK` = 20", "`HOLD_Z` x sigma",
                    "HOLD_Z = 1", "LONG_Z = 2", "`COST_FRAC_SINGLE` = 1.0", "349 pool pairs",
                    "`python hold_test.py --power`", "VETOED as underpowered",
-                   "Nothing is built by this document"):
+                   "Nothing is built by this document", 'DECIDED 2026-11-04 (owner: "go with option 2")'):
         assert phrase in doc, f"the pre-registration must state {phrase!r}"
     users = [q.name for q in sorted(Path(".").glob("*.py"))
              if q.name not in ("hold_test.py", "consistency_check.py")

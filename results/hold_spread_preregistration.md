@@ -14,6 +14,16 @@ plausible effect is 0–3. Detecting 3 points needs about 1,800–6,600 pairs,
 2 to 7 years of signals. Section 6 says why, and section 8 what is offered
 instead. Nothing is built by this document.
 
+> **DECIDED 2026-11-04 (owner: "go with option 2").** The hold test is not
+> built, not even as a descriptive reading. Whether selling 21–45-day
+> premium pays is read from the two records already running, with no
+> signal involved: the always-on SPY/QQQ spreads (`spread_log`: first
+> settlements 2026-11-30, a first reading at 6 graded 30-day cycles per
+> arm, around April–May 2027, the result at 12) and the single-name IV
+> premium (`iv_snapshot`: first reading at 126 snapshot sessions,
+> 2027-04-08). The rules, bar and power check below stay on file in case
+> the question is reopened.
+
 ## 1. The question
 
 The alerts buy a call with 21–45 days to expiry (`MEASURED_OPTION_STRUCTURE`)

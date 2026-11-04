@@ -112,6 +112,13 @@ landed in the repo and the removal says so in the commit.
   second basis (a reading change; about a third are on dividend payers and
   are understated). The post-close logs say when a settled row is waiting
   for a dividend history.
+- **2026-11-04 (item 48: the premium question, decided).** The 21–45-day
+  hold test is not built; whether selling premium pays is read from the
+  records already running. When due: the SPY/QQQ spread arms' first
+  settlements 2026-11-30 and their first reading at 6 graded cycles per arm
+  (around April–May 2027; `python spread_log.py` prints it), and the
+  single-name IV premium's first reading 2027-04-08 (`python
+  iv_snapshot.py --report`). Retire this line at those readings.
 - **2026-11-04 (re-grade decided and built; item 47).** The rows on file are
   being re-graded under H+I by the post-close pass, about 20 names a run
   (three runs for the 55 names). Each post-close log says how many were
@@ -2432,7 +2439,7 @@ heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
 
 ---
 
-## 48. "Does the price hold over the option's life?" — the 21–45-day hold test and a signal-timed put spread — PRE-REGISTERED 2026-11-04; VETOED AS A DECISION TEST BY ITS OWN POWER CHECK; OPTIONS OPEN (OWNER)
+## 48. "Does the price hold over the option's life?" — the 21–45-day hold test and a signal-timed put spread — PRE-REGISTERED 2026-11-04; VETOED AS A DECISION TEST BY ITS OWN POWER CHECK; DECIDED 2026-11-04: NOT BUILT, READ FROM THE PREMIUM RECORDS (OPTION 2)
 
 **Owner's question 2026-11-04:** "as we are mostly dealing with stock
 options, should we consider if the price holds for the 20–45 day period
@@ -2466,6 +2473,11 @@ premium pay at all" from the records already running: the always-on
 SPY/QQQ spreads (first settlements 2026-11-30) and the single-name IV
 premium (first rows 2026-11-09/10). No historical test: the clean
 tranches are spent. `check_hold_preregistered` (72).
+**DECIDED 2026-11-04 (owner: "go with option 2"):** not built, not even
+descriptively. The premium question is read from `spread_log` (first
+settlements 2026-11-30; first reading at 6 graded cycles per arm, around
+April–May 2027; result at 12) and `iv_snapshot` (first reading at 126
+snapshot sessions, 2027-04-08). The pre-registration stays on file.
 
 ---
 
