@@ -2884,9 +2884,9 @@ frozen bars, fix and re-run as one change)~~ (built, off; item 47); option engin
 marking vs ~13 live polls; ~~inert DTE adequacy check; the exit workflow's
 retry after a rebase conflict~~ (both fixed 2026-11-04, below); ~~`--diagnose`
 vs `run()`~~ (fixed 2026-11-03, above); hygiene items in the review file
-(~~the IV placeholder~~ fixed 2026-11-04; the rest open: `liquidity_check`'s
-9-DTE default, `churn_tracker`'s copy of the ranking, the `live_cfg`
-docstring, unpinned packages in `universe-snapshot.yml`).
+(~~the IV placeholder~~ fixed 2026-11-04; ~~`liquidity_check`'s 9-DTE
+default, `churn_tracker`'s copy of the ranking, the `live_cfg` docstring,
+unpinned packages in `universe-snapshot.yml`~~ cleaned 2026-11-04, below).
 
 **FOUR FOLLOW-UPS BUILT 2026-11-04 (owner: "go with 1-4").** (1) **The IV
 record refuses Yahoo's placeholder.** A contract quoting under
@@ -2917,6 +2917,24 @@ read "decisions open" or "recommended" now say what was decided; six
 hand-off notes whose subject has landed are removed. 
 `check_review_followups_1_to_4` (75); thirteen guards broken on purpose,
 every one caught.
+
+**THE REVIEW'S HYGIENE LIST CLEANED 2026-11-04 (owner: "go with the cleanup
+as well").** `universe-snapshot.yml`, the job that picks the names the
+scanner trades, installs pinned to `requirements.txt` like the other two
+unattended workflows; `check_unattended_workflows_pinned_and_alarmed` now
+covers it and sees an install inside a multi-line `run: |`, which is how it
+had slipped past. `churn_tracker` reads the universe's ranking
+(`universe.rank_pool`, which `select_universe` now calls too) instead of
+its own copy, which sorted on the ROUNDED RS so a 2-dp tie fell to pool
+order there and to the exact value in the scanner's universe.
+`liquidity_check` defaults to the measured structure's DTE floor (21), not
+9. `backtest.live_cfg()`'s docstring says it is the signal, not the alert:
+the tier's R:R, the direction gate, the blackout and D1, the fill gate, the
+R:R at send, the SPY tag and the pool's cap are the scanner's, applied after
+the signal. `check_review_hygiene_cleaned` (76); seven guards broken on
+purpose, every one caught. With this, every finding of the 2026-11-03 review
+is fixed or decided except the option engine's close-only marking (needs
+intraday option prices, which this data source does not have).
 
 ---
 
@@ -3278,8 +3296,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 75 cross-module
-  invariants (75 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 76 cross-module
+  invariants (76 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on

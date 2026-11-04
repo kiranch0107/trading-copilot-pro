@@ -126,7 +126,13 @@ def assess(ticker: str, min_dte: int, account: float, risk_pct: float) -> dict:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--tickers", default=",".join(DEFAULT_CANDIDATES))
-    p.add_argument("--min-dte", type=int, default=9)
+    # THE STRUCTURE'S FLOOR (review 2026-11-03 hygiene; owner: "go with the
+    # cleanup"). It defaulted to 9 DTE, so its spreads and costs described
+    # contracts the journal refuses (the measured structure is 21-45 DTE).
+    p.add_argument("--min-dte", type=int,
+                   default=int(risk_params.MEASURED_OPTION_STRUCTURE["min_dte"]),
+                   help="nearest expiry at or past this many days (default: the "
+                        "measured structure's floor)")
     p.add_argument("--account", type=float,
                    default=risk_params.DEFAULT_ACCOUNT_SIZE,
                    help="reference account size; derives from risk_params "

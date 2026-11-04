@@ -408,12 +408,20 @@ def live_cfg(tickers=None, years=None, **overrides) -> dict:
     """
     THE LIVE CONFIG AS A BACKTEST CFG (BACKLOG 23, decided 2026-10-28): every
     key build_signal_params() reads is taken from signal_core.DEFAULTS through
-    CFG_TO_PARAMS, so this is the signal the scanner runs by construction,
-    not a hand copy of it. Everything else (max_hold, cooldown, slippage,
-    tickers, years) is DEFAULTS unless overridden. From 2026-10-28 every NEW
-    research run starts from this; the record's studies keep DEFAULTS and
-    say so. The direction gate (risk_params.LONGS_ONLY) is not a SignalParams
-    field: a study applies it to the trades, as adx_retest --longs-only does.
+    CFG_TO_PARAMS, so the SIGNAL is the one the scanner evaluates, by
+    construction, not a hand copy. Everything else (max_hold, cooldown,
+    slippage, tickers, years) is DEFAULTS unless overridden. From 2026-10-28
+    every NEW research run starts from this; the record's studies keep
+    DEFAULTS and say so.
+
+    IT IS THE SIGNAL, NOT THE ALERT (review 2026-11-03 hygiene: this said
+    more). A backtest on it takes every signal at the signal's own R:R floor
+    (`min_rr` 0.5); what the scanner applies AFTER the signal is not here and
+    a study adds it itself: the alert tier's R:R (`hq_min_rr` 1.0, via
+    signal_core.gate_rr), the direction gate (risk_params.LONGS_ONLY, as
+    adx_retest --longs-only and option_backtest's pair runner do), the
+    earnings blackout and D1, the fill gate (J1), the R:R at send (D4), the
+    SPY regime tag, and the pool's ranking and cap.
     """
     cfg = dict(DEFAULTS)
     for key, field in CFG_TO_PARAMS.items():

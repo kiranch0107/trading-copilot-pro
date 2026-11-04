@@ -389,6 +389,27 @@ def select_universe(as_of: date | None = None, top_n: int = TOP_N,
               "above for the cause.", file=sys.stderr)
         return []
 
+    rows, picked = rank_pool(bars, pool, top_n, require_uptrend, max_per_sector)
+    if verbose:
+        _print_table(rows, as_of, top_n, picked)
+    return [r["ticker"] for r in picked]
+
+
+def rank_pool(bars: dict, pool: list[str], top_n: int = TOP_N,
+              require_uptrend: bool = True,
+              max_per_sector: int = MAX_PER_SECTOR) -> tuple[list[dict], list[dict]]:
+    """
+    THE ranking, in one place: (every name that passed the gates, ranked by
+    EXACT relative strength with alphabetical ties; the ones picked under the
+    sector cap). select_universe() and churn_tracker both call it (review
+    2026-11-03 hygiene; owner: "go with the cleanup"): churn_tracker kept its
+    own copy, sorted on the ROUNDED RS, so a tie at 2dp fell to pool order
+    there and to the exact value here, and its weekly snapshot could record a
+    different eight from the scanner's. `bars` holds the benchmark too.
+    """
+    bench = bars.get(BENCHMARK)
+    if bench is None:
+        return [], []
     rows = []
     for t in pool:
         df = bars.get(t)
@@ -400,12 +421,8 @@ def select_universe(as_of: date | None = None, top_n: int = TOP_N,
         if require_uptrend and not sc["above_200sma"]:
             continue
         rows.append({"ticker": t, **sc})
-
     rows.sort(key=lambda r: (-r["rs_exact"], r["ticker"]))
-    picked = apply_sector_cap(rows, top_n, max_per_sector)
-    if verbose:
-        _print_table(rows, as_of, top_n, picked)
-    return [r["ticker"] for r in picked]
+    return rows, apply_sector_cap(rows, top_n, max_per_sector)
 
 
 def apply_sector_cap(rows: list[dict], top_n: int,
@@ -742,6 +759,13 @@ def selftest() -> int:
     assert [r["ticker"] for r in _exact_tie] == ["AAAA", "ZZZZ"], \
         "an exact tie must break alphabetically, not by input order"
     print("rank order     : exact RS decides; exact ties break alphabetically")
+    # ...and the ranking IS rank_pool(), the one churn_tracker reads too
+    _bars = {BENCHMARK: bench, "ZZZZ": make(0.0015), "AAAA": make(0.0015), "WEAK": weak}
+    _rows, _picked = rank_pool(_bars, ["ZZZZ", "WEAK", "AAAA"], top_n=2, max_per_sector=0)
+    assert [r["ticker"] for r in _picked] == ["AAAA", "ZZZZ"] and "WEAK" not in [r["ticker"] for r in _rows], \
+        ([r["ticker"] for r in _rows], "exact tie breaks alphabetically; a name under its 200-SMA is out")
+    assert rank_pool({"AAAA": make(0.001)}, ["AAAA"]) == ([], []), "no benchmark: nothing ranked"
+    print("rank_pool      : the one ranking (select_universe and churn_tracker)")
 
     print("\nAll self-tests passed.")
     return 0
