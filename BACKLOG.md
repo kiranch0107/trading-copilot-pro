@@ -101,7 +101,18 @@ landed in the repo and the removal says so in the commit.
   results/backtest_12t10y_engine_dates_codespace_run1.txt`. Same bars and
   trades as `backtest_12t10y_engine_all_codespace_run1.txt`; only the
   long/short CIs may widen. Then decide whether `date_clusters` joins the
-  default. Retire when the file is committed and decided.
+  default. Retire when the file is committed and decided. *(Run 2026-11-04 in
+  the Codespace, committed with `results/date_clusters_reading_2026-11-04.md`:
+  same bars and trades; the ranges widen 10–19 %, no conclusion moves. The
+  run is done; the decision is the note below.)*
+- **2026-11-04 (item 47, date clusters read): one decision open, yours.**
+  Make `date_clusters` part of the default engine, or leave it opt-in. With
+  it, the research CIs group trades by entry week and month too: on the
+  12-ticker 10-year cut the LONG range widens from [−0.083, +0.216] to
+  [−0.098, +0.231] and the SHORT from [−0.480, −0.151] to [−0.511, −0.120];
+  neither crosses zero differently. Recommended: make it the default (one
+  change, plus an ENGINE CHANGED banner on the 12-ticker file). Retire when
+  decided.
 - **2026-11-04 (item 46, the target exit built).** From your next signal
   trade, each of the app's three trade forms asks **"Sell when the stock
   CLOSES at (the alert's target)"**. It is filled from the setup, or from
@@ -2644,7 +2655,16 @@ is `backtest_12t10y_engine_all_codespace_run1.txt`'s two CI lines (LONG
 by how much, then whether it becomes the default (that file then carries a
 banner or is superseded by the re-run). `check_date_clusters_pending` (77);
 eleven guards broken on purpose, every one caught. The `--engine-fixes` help no
-longer says the default is "none".
+longer says the default is "none". **RUN 1 READ 2026-11-04** (owner's
+Codespace, frozen bars `v2-e09e31d6eaf30233`, 12 cached / 0 fetched;
+`results/date_clusters_reading_2026-11-04.md`): a diff of the two files
+differs only in the engine line and the two CI lines. LONG +0.066 R: [−0.083,
++0.216] by episode, [−0.098, +0.231] with date clusters; SHORT −0.315 R:
+[−0.480, −0.151] to [−0.511, −0.120]. Month is the widest grouping on both
+sides; the SE grows ×1.10 (long) and ×1.19 (short) over episodes, ×1.27–1.28
+over independence (design effect ~1.6). No conclusion moves: longs still
+straddle zero, shorts still sit wholly below it. Whether it joins the
+default is the owner's call (hand-off; recommended: yes).
 
 ---
 
