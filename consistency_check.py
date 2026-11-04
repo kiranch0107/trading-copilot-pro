@@ -4012,6 +4012,37 @@ def check_review_hygiene_cleaned() -> None:
           "what it is")
 
 
+
+def check_date_clusters_pending() -> None:
+    """
+    Item 47's "clustering by date as well ... recorded, not built" (owner
+    2026-11-04: "go with the same-date error bars"): built as the PENDING
+    engine fix date_clusters, off and outside 'all' until the owner's re-run
+    on the frozen bars and decision, so every committed `--engine-fixes all`
+    command still reproduces its file. Pinned: the pending list; 'all' and the
+    default exclude it; asked by name it joins; clustered_ci reads it and
+    takes the widest of independent / episode / week / month; run() names the
+    clusters it used; the hand-off names the command.
+    """
+    import inspect as _i
+    import os as _os
+    import backtest as bt
+    assert bt.PENDING_ENGINE_FIXES == ("date_clusters",) and "date_clusters" not in bt.ALL_ENGINE_FIXES
+    assert "date_clusters" not in bt.parse_engine_fixes("all"), "'all' stays the six"
+    assert bt.parse_engine_fixes("all,date_clusters") == frozenset(bt.ALL_ENGINE_FIXES) | {"date_clusters"}
+    if not _os.environ.get("ENGINE_FIXES"):
+        assert "date_clusters" not in bt.ENGINE_FIXES, "off by default until the owner decides"
+    src = _i.getsource(bt.clustered_ci)
+    assert 'if _fix("date_clusters"):' in src and "se = max(ses.values())" in src \
+        and '"no dates"' in src, "the widest of the four, and an undated list said so"
+    run_src = _i.getsource(bt.run)
+    assert "{_c['weeks']} weeks, {_c['months']} months" in run_src, "run() names the clusters it used"
+    bl = " ".join(Path("BACKLOG.md").read_text(encoding="utf-8").split())     # the note wraps the command
+    assert "--engine-fixes all,date_clusters | tee results/backtest_12t10y_engine_dates_codespace_run1.txt" in bl, \
+        "the owner's command is on file"
+    print("  date_clusters built, pending: off and outside 'all'; asked by name it widens the CI by week and month")
+
+
 def check_engine_fixes_default() -> None:
     """
     Expert review 2026-11-03, the research-engine items (owner: "fix the
@@ -4311,6 +4342,7 @@ CHECKS = [
     ("the target exit is part of the structure (owner 11-04)", check_target_exit_in_structure),
     ("review follow-ups: IV floor, push retry, theta clock (owner 11-04)", check_review_followups_1_to_4),
     ("review hygiene cleaned (owner 11-04)", check_review_hygiene_cleaned),
+    ("date-clustered research CIs built, pending (owner 11-04)", check_date_clusters_pending),
     ("Tiingo fallback split-adjusted, its fill checked (review 11-03)", check_tiingo_split_adjusted),
     ("research-engine fixes, all six the default (BACKLOG 47)", check_engine_fixes_default),
     ("rows on file re-graded under H+I (owner 11-04)", check_regrade_on_file),
