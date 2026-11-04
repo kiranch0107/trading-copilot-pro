@@ -3902,10 +3902,11 @@ def check_engine_fixes_off_by_default() -> None:
     fl_src = Path("forward_log.py").read_text(encoding="utf-8")
     rs_body = fl_src[fl_src.find("def resolve_signal("):fl_src.find("\ndef ", fl_src.find("def resolve_signal(") + 1)]
     i_div, i_h, i_stop = (rs_body.find("if long:\n                    stop -= _d"),
-                          rs_body.find("if (o >= target) if long else (o <= target):"),
+                          rs_body.find("if amended and ((o >= target) if long else (o <= target)):"),
                           rs_body.find("if l <= stop:"))
-    assert 0 < i_div < i_h < i_stop and "if j > 0:" in rs_body[:i_div] and "+ div_r" in rs_body \
-        and '"rules": GRADE_RULES' in rs_body, \
+    assert 0 < i_div < i_h < i_stop and "if j > 0 and amended:" in rs_body[:i_div] and "+ div_r" in rs_body \
+        and '"rules": GRADE_RULES if amended else "pre-2026-11-04"' in rs_body \
+        and "amended: bool = True" in rs_body, \
         "the grader: the ex-date's dividend after the entry bar, then an open past the target, then stop-first"
     import forward_log as _fl
     assert _fl.GRADE_RULES == "2026-11-04 H+I" and _fl.GRADE_DIV_WAIT_DAYS == 5
@@ -3920,6 +3921,44 @@ def check_engine_fixes_off_by_default() -> None:
     print("  six engine fixes off by default, each wired where it acts; look-back covers tail(20); run()'s "
           "data line names the engine; a clustered CI never narrows; dividends outside the bar fingerprint; "
           "the grader carries H and I, pinned to the engine on its rules")
+
+
+def check_regrade_on_file() -> None:
+    """
+    Owner 2026-11-04, "go with re-grading the rows on file as well": every
+    stop_distance outcome graded before amendments H and I gets ONE second
+    outcome on basis stop_distance_hi, written by the post-close pass only,
+    a capped number of names a pass; every reading of stop_distance reads
+    the re-grade where one exists, and the original beside it; the
+    pre-registration says so in a dated amendment.
+    """
+    import forward_log as fl
+    assert fl.REGRADE_BASIS == "stop_distance_hi" and fl.REGRADE_TICKERS_PER_PASS == 20, \
+        (fl.REGRADE_BASIS, fl.REGRADE_TICKERS_PER_PASS)
+    src = Path("forward_log.py").read_text(encoding="utf-8")
+    ro = src[src.find("def record_outcome("):src.find("\ndef ", src.find("def record_outcome(") + 1)]
+    assert 'BASES = ("premium", "stop_distance", REGRADE_BASIS)' in ro and \
+        'has no stop_distance outcome graded before amendments H and I' in ro, \
+        "record_outcome must take the re-grade basis, and only for a row graded before H+I"
+    sm = src[src.find("def summary("):src.find("\ndef ", src.find("def summary(") + 1)]
+    assert 'outs = [dict(_hi[o["ref_seq"]], basis="stop_distance", regraded=True)' in sm \
+        and 'by_basis["stop_distance_as_graded"]' in sm and '"regrade": regrade' in sm, \
+        "the reading must use the re-grade where one exists, with the original beside it"
+    assert "_regrade_line(s['regrade'])" in src, "report() must print the re-grade line"
+    others = [q.name for q in sorted(Path(".").glob("*.py"))
+              if q.name not in ("forward_log.py", "consistency_check.py")
+              and ("amended=False" in q.read_text(encoding="utf-8", errors="replace")
+                   or "REGRADE_BASIS" in q.read_text(encoding="utf-8", errors="replace"))]
+    assert others == [], f"only forward_log grades by the old rules or writes the re-grade basis; found {others}"
+    sc = Path("scanner.py").read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+    assert sc.count("forward_log.regrade_on_file(") == 1 and \
+        "if record_only:\n            _rg = forward_log.regrade_on_file(_bars_for, _divs_for)" in sc, \
+        "the re-grade runs in the post-close pass only, once, with the grading pass's bars and dividends"
+    gp = Path("results/forward_grading_preregistration.md").read_text(encoding="utf-8")
+    a = gp.find("## AMENDED 2026-11-04 (later) — the 405 rows on file are RE-GRADED under H and I")
+    assert 0 < a < gp.find("## AMENDED 2026-11-04 — (H)"), "the re-grade must be a dated amendment, newest first"
+    print("  one stop_distance_hi re-grade per row graded before H+I, post-close only and capped; the reading "
+          "uses it with the original beside it; a dated amendment says so")
 
 
 def check_tiingo_split_adjusted() -> None:
@@ -4052,6 +4091,7 @@ CHECKS = [
     ("option target-exit arm pre-registered (D3)", check_option_target_exit_preregistered),
     ("Tiingo fallback split-adjusted, its fill checked (review 11-03)", check_tiingo_split_adjusted),
     ("research-engine fixes built, off by default (BACKLOG 47)", check_engine_fixes_off_by_default),
+    ("rows on file re-graded under H+I (owner 11-04)", check_regrade_on_file),
 ]
 
 

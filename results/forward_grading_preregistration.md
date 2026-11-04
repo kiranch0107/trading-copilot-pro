@@ -8,6 +8,44 @@ is written; after that nothing here changes. Companion to
 `results/forward_record_preregistration.md`, which fixed what is RECORDED;
 this fixes how it is GRADED.
 
+## AMENDED 2026-11-04 (later) — the 405 rows on file are RE-GRADED under H and I, and the reading uses the re-grade (owner's decision). READING CHANGE and a second outcome basis; no rule, gate or threshold changes
+
+**Owner: "go with re-grading the rows on file as well".** The amendment
+below left the 405 outcomes graded before H and I standing as graded and
+stated their bias (about a third are on dividend payers, understated). This
+reads them on the amended rules instead, without editing any of them.
+
+**What is written.** Each `stop_distance` outcome graded before the
+amendments (its detail has no `rules` "2026-11-04 H+I") gets ONE second
+outcome on the basis **`stop_distance_hi`**: `resolve_signal()` under H and
+I on the bars the post-close pass fetches that day, with the ticker's
+dividend history. Its detail carries `as_graded_outcome` / `as_graded_r`
+(the original) and `old_rules_now_outcome` / `old_rules_now_r` (today's bars
+under the OLD rules), so the difference splits into the provider's
+revisions since the first grade and the amendments' own effect. The
+original row is never touched; `record_outcome()` refuses a re-grade of a
+row graded under H+I and a second re-grade of any row. The post-close pass
+does at most `REGRADE_TICKERS_PER_PASS` (20) names a run (55 names hold
+rows on file: about three runs), starting from a name that rotates with the
+date; a name without bars or a dividend history waits for the next run. A
+row today's bars can no longer grade (a split since, or the name gone) is
+written **kept as graded**, flagged, so it is counted and not retried.
+
+**What is read.** Everywhere the record reads `stop_distance` (by basis, by
+bucket, by episode, the gate's settled episodes, the tiers and the control
+arm), a re-graded row is read by its `stop_distance_hi` outcome; a row
+graded after the amendments is already on H+I; a row not yet re-graded is
+read as graded until its turn. `report()` prints the original reading
+beside it (`stop_distance_as_graded`) and one line: rows re-graded,
+pending, kept as graded, and on the rows settled every way the mean R as
+graded, on today's bars by the old rules, and under H+I, with how many
+changed outcome.
+
+**Why this is a reading change and not a rule change.** The rules are the
+ones amendments H and I already fixed; this applies them to the rows
+written before, on bars that may since have been revised by the provider,
+which the `old_rules_now` reading measures rather than hides.
+
 ## AMENDED 2026-11-04 — (H) an open past the target fills there; (I) dividends are credited and the stop reduced on the ex-date (expert review 2026-11-03, BACKLOG 46/47; owner's decision). RULE CHANGES, made with 405 outcome rows on file
 
 **Made after 405 `stop_distance` outcomes (218 losses, 172 wins, 15

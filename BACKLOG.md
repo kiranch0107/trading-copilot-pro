@@ -108,6 +108,13 @@ landed in the repo and the removal says so in the commit.
   second basis (a reading change; about a third are on dividend payers and
   are understated). The post-close logs say when a settled row is waiting
   for a dividend history.
+- **2026-11-04 (re-grade decided and built; item 47).** The rows on file are
+  being re-graded under H+I by the post-close pass, about 20 names a run
+  (three runs for the 55 names). Each post-close log says how many were
+  re-graded and how many moved; `python forward_log.py` prints the split
+  (mean R as graded, on today's bars by the old rules, under H+I). The
+  record's reading uses the re-grades from the first one written. Retire
+  when the report shows 0 pending.
 
 ---
 
@@ -2421,7 +2428,7 @@ heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
 
 ---
 
-## 47. The research engine's six defects (expert review 2026-11-03) — BUILT 2026-11-04 BEHIND A SWITCH, OFF BY DEFAULT; THE RE-RUNS AND THE DECISION TO TURN THEM ON ARE OWED (LAPTOP, FROZEN BARS); GRADING AMENDMENTS H AND I APPLIED TO THE FORWARD GRADER 2026-11-04
+## 47. The research engine's six defects (expert review 2026-11-03) — BUILT 2026-11-04 BEHIND A SWITCH, OFF BY DEFAULT; THE RE-RUNS AND THE DECISION TO TURN THEM ON ARE OWED (LAPTOP, FROZEN BARS); GRADING AMENDMENTS H AND I APPLIED TO THE FORWARD GRADER 2026-11-04; THE ROWS ON FILE RE-GRADED UNDER THEM (READING CHANGE) 2026-11-04
 
 **Owner: "fix the research engine items as well".** Item 46 recorded six
 defects of the share engine (`backtest.py`) that each move committed
@@ -2466,8 +2473,23 @@ dividend bias on them is stated there: about a third of the graded rows
 are on dividend payers, a 20-session hold spans an ex-date about one time
 in three, and on a high yielder the dividend is a large part of 1 R
 (the review's example: $0.43 on a $25 stock with a $0.50 ATR, ~0.69 R).
-**Open, the owner's:** re-grading the rows on file under H+I as a second
-basis (a reading change). The research engine's same two rules are
+~~**Open, the owner's:** re-grading the rows on file under H+I as a second
+basis (a reading change).~~ **Decided and built the same day (owner: "go
+with re-grading the rows on file as well"):** every outcome graded before
+the amendments gets ONE second outcome on basis `stop_distance_hi`, graded
+under H+I on the bars the post-close pass fetches (`forward_log.
+regrade_on_file`, at most 20 names a pass, starting from a name that
+rotates with the date; 405 rows on 55 names, about three passes). Its
+detail keeps the original grade and today's bars under the OLD rules, so
+the change splits into the provider's revisions and the amendments' own
+effect. A row today's bars cannot re-grade (a split since, the name gone)
+is written kept as graded, flagged. **Every reading of `stop_distance`
+(by basis, bucket, episode, the gate, the tiers, the control arm) now reads
+a re-graded row by its re-grade**; `report()` prints the original beside it
+(`stop_distance_as_graded`) and one line with the split. The originals are
+never edited; `record_outcome` refuses a re-grade of an H+I row and a
+second re-grade. Dated amendment "2026-11-04 (later)" in
+`forward_grading_preregistration.md`; `check_regrade_on_file` (71). The research engine's same two rules are
 `backtest.GRADER_FIXES`; `engine_differential` now compares the grader
 with the engine running exactly those (516 random setups and 268 with
 ex-dates, 0 mismatches), and the research default stays off until its
@@ -3077,8 +3099,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 70 cross-module
-  invariants (70 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 71 cross-module
+  invariants (71 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on

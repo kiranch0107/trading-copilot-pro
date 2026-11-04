@@ -2213,6 +2213,18 @@ def run(args) -> int:
             logger.info("forward log: %d settled signal(s) wait for a dividend history (graded "
                         "without one after %d days, flagged)", _grep["div_deferred"],
                         forward_log.GRADE_DIV_WAIT_DAYS)
+        # THE ROWS ON FILE, RE-GRADED UNDER H+I (owner 2026-11-04, "go with
+        # re-grading the rows on file as well"): the post-close pass only,
+        # at most REGRADE_TICKERS_PER_PASS names a pass, until none is left.
+        if record_only:
+            _rg = forward_log.regrade_on_file(_bars_for, _divs_for)
+            if _rg["pending"]:
+                logger.info("forward log: re-graded %d row(s) on file under H+I (%d kept as graded, %d moved, "
+                            "%d waiting, %d failed); %d still pending",
+                            _rg["regraded"], _rg["kept"], _rg["moved"], _rg["waiting"], _rg["failed"],
+                            _rg["pending_after"])
+            for _d in _rg["detail"][:10]:
+                logger.info("forward log: re-grade: %s", _d)
         _no_data = _grep["no_data"] - _deferred
         if _grep["failed"] or _no_data:
             logger.warning("forward log: grading skipped %d (no data) / %d (error)",
@@ -3795,10 +3807,47 @@ def _selftest_body() -> int:
             assert [m.splitlines()[1].split()[0] for m in _sent4] == ["P3"], (
                 _sent4, "forced pool scan: cooldown holds the five, the sixth goes out")
             # RECORD-ONLY NEVER SCANS THE POOL (its rows are graded there instead).
-            _state4.pop(POOL_STATE_KEY, None); _fetched.clear(); _sent4.clear()
-            _g["is_post_close_window"] = lambda now=None: True
-            run(_ns(force=False, record_only=True))
+            # The re-grade of the rows on file (owner 2026-11-04) runs here and
+            # fetches what it re-grades; it is stubbed so this asserts the SCAN,
+            # and asserted on its own: the post-close pass calls it, once.
+            _rg_calls: list = []
+            _real_rg = forward_log.regrade_on_file
+            forward_log.regrade_on_file = lambda f, d, **k: (_rg_calls.append((f, d)), {
+                "pending": 0, "regraded": 0, "kept": 0, "moved": 0, "waiting": 0, "failed": 0,
+                "pending_after": 0, "detail": []})[1]
+            try:
+                _state4.pop(POOL_STATE_KEY, None); _fetched.clear(); _sent4.clear()
+                _g["is_post_close_window"] = lambda now=None: True
+                run(_ns(force=False, record_only=True))
+                assert len(_rg_calls) == 1 and _rg_calls[0][1].__name__ == "_divs_for", _rg_calls
+            finally:
+                forward_log.regrade_on_file = _real_rg
             assert not any(t in _pool7 for t in _fetched) and not _sent4, _fetched
+            # ...and an IN-SESSION run, which grades, never re-grades the rows on file
+            _rg_calls.clear()
+            _saved_pool_state = _state4.get(POOL_STATE_KEY)
+            forward_log.regrade_on_file = lambda f, d, **k: (_rg_calls.append((f, d)), {
+                "pending": 0, "regraded": 0, "kept": 0, "moved": 0, "waiting": 0, "failed": 0,
+                "pending_after": 0, "detail": []})[1]
+            _caught_rg: list = []
+            class _CatchRG(_lg9.Handler):
+                def emit(self, rec):
+                    _caught_rg.append(rec.getMessage())
+            _hrg = _CatchRG(); logger.addHandler(_hrg)
+            try:
+                _g["is_post_close_window"] = lambda now=None: False
+                run(_ns())
+            finally:
+                forward_log.regrade_on_file = _real_rg
+                logger.removeHandler(_hrg)
+                _g["is_post_close_window"] = lambda now=None: True
+            assert any(m.startswith("Done.") for m in _caught_rg), "the in-session run must reach its end"
+            assert not _rg_calls, "an in-session run must not re-grade the rows on file"
+            if _saved_pool_state is None:
+                _state4.pop(POOL_STATE_KEY, None)
+            else:
+                _state4[POOL_STATE_KEY] = _saved_pool_state
+            _fetched.clear(); _sent4.clear()
             assert POOL_STATE_KEY not in _state4, "record-only must not stamp the pool"
             # A DRY RUN scans and prints but leaves no stamp and records no alert:
             # cooldowns cleared first so the five are actually "sent" (printed).

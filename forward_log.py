@@ -731,7 +731,7 @@ def record_outcome(ref_seq: int, outcome: str, r: float | None, basis: str,
     None, and `reason` says why (gapped_before_fill, split_in_window,
     no_bars). A void is closed, visibly, rather than left looking open.
     """
-    BASES = ("premium", "stop_distance")
+    BASES = ("premium", "stop_distance", REGRADE_BASIS)
     if basis not in BASES:
         raise ValueError(
             f"basis must be one of {BASES}, not {basis!r}. An R with no stated "
@@ -746,7 +746,7 @@ def record_outcome(ref_seq: int, outcome: str, r: float | None, basis: str,
             f"no signal at seq {ref_seq} to attach an outcome to. An outcome "
             f"pointing at nothing is how a result gets recorded for a trade "
             f"that was never logged")
-    if ref.get("kind") == "control" and basis != "stop_distance":
+    if ref.get("kind") == "control" and basis not in ("stop_distance", REGRADE_BASIS):
         raise ValueError(
             f"seq {ref_seq} is a control row; only the resolver's stop_distance "
             f"outcome can attach to it, never a journal trade (amendment 2026-10-28 A)")
@@ -755,6 +755,12 @@ def record_outcome(ref_seq: int, outcome: str, r: float | None, basis: str,
             f"seq {ref_seq} was {ref.get('decision')!r}, not taken. A skipped "
             f"signal has no outcome to record — inventing one would put "
             f"hypothetical results in the forward record")
+    if basis == REGRADE_BASIS and not any(
+            x.get("kind") == "outcome" and x.get("ref_seq") == ref_seq and x.get("basis") == "stop_distance"
+            and (x.get("detail") or {}).get("rules") != GRADE_RULES for x in rows):
+        raise ValueError(
+            f"seq {ref_seq} has no stop_distance outcome graded before amendments H and I; "
+            f"a {REGRADE_BASIS} row re-grades one, and nothing else")
     if any(x.get("kind") == "outcome" and x.get("ref_seq") == ref_seq
            and x.get("basis") == basis for x in rows):
         raise ValueError(
@@ -819,13 +825,21 @@ GRADE_RULES = "2026-11-04 H+I"
 # waits this many calendar days past its exit for one; after that it is
 # graded without it and says so (detail.dividend_basis "unavailable").
 GRADE_DIV_WAIT_DAYS = 5
+# THE ROWS ON FILE, RE-GRADED (owner 2026-11-04, "go with re-grading the
+# rows on file as well"). Every stop_distance outcome written before the
+# amendments gets ONE second outcome on this basis, graded under H+I on
+# today's bars; the reading uses it in place of the original, which stays
+# on the chain and is reported beside it. Written by the post-close pass,
+# at most REGRADE_TICKERS_PER_PASS names a pass.
+REGRADE_BASIS = "stop_distance_hi"
+REGRADE_TICKERS_PER_PASS = 20
 VOID_REASONS = ("gapped_before_fill", "split_in_window", "no_bars")
 
 
 def resolve_signal(row: dict, bars: list, today=None,
                    max_hold: int = GRADE_MAX_HOLD,
                    slippage_bps: float = GRADE_SLIPPAGE_BPS,
-                   dust: float = GRADE_DUST_R) -> dict | None:
+                   dust: float = GRADE_DUST_R, amended: bool = True) -> dict | None:
     """
     Grade one taken signal against the bars that followed it.
 
@@ -921,14 +935,17 @@ def resolve_signal(row: dict, bars: list, today=None,
     exit_bar = None
     gap_fill = False
     stop_touched = False
-    div_known = any("dividend" in b for b in after)
+    # amended=False grades by the rules BEFORE amendments H and I: only the
+    # re-grade asks for it, to split what the rules moved from what the
+    # provider revised in the bars since the row was first graded.
+    div_known = amended and any("dividend" in b for b in after)
     div_cash, div_n = 0.0, 0
     for j, b in enumerate(after[:max_hold]):
         o, h, l = float(b["open"]), float(b["high"]), float(b["low"])
         # AMENDMENT I: an ex-date after the entry bar. Bought at the entry
         # bar's open, the holder is entitled on a LATER ex-date (bought on
         # the ex-date itself, not) and stays entitled if it sells that day.
-        if j > 0:
+        if j > 0 and amended:
             try:
                 _d = float(b.get("dividend") or 0.0)
             except (TypeError, ValueError):
@@ -942,7 +959,7 @@ def resolve_signal(row: dict, bars: list, today=None,
                     target -= _d
         # AMENDMENT H: an open at or beyond the target is decisive; a resting
         # limit fills there, whatever the rest of the bar did.
-        if (o >= target) if long else (o <= target):
+        if amended and ((o >= target) if long else (o <= target)):
             exit_rule, level_px, exit_px = "target", target, o
             gap_fill = o != target
             stop_touched = (l <= stop) if long else (h >= stop)
@@ -1003,11 +1020,103 @@ def resolve_signal(row: dict, bars: list, today=None,
                    "exit_date": exit_bar[1]["date"], "bars_held": exit_bar[0] + 1,
                    "exit_rule": exit_rule, "gap_fill": gap_fill,
                    "cost_bps": slippage_bps, "r_at_level": round(r_level, 4),
-                   "rules": GRADE_RULES,
+                   "rules": GRADE_RULES if amended else "pre-2026-11-04",
                    "open_past_target_stop_touched": bool(stop_touched),
                    "dividend_basis": "history" if div_known else "unavailable",
                    "dividend_r": round(div_r, 4), "ex_dividends": div_n},
     }
+
+
+def regrade_pending(path: Path | None = None, rows: list | None = None) -> list:
+    """The stop_distance outcomes graded before amendments H and I that have
+    no REGRADE_BASIS outcome yet, oldest first."""
+    rows = read_all(path) if rows is None else rows
+    done = {o.get("ref_seq") for o in rows if o.get("kind") == "outcome" and o.get("basis") == REGRADE_BASIS}
+    return [o for o in rows if o.get("kind") == "outcome" and o.get("basis") == "stop_distance"
+            and (o.get("detail") or {}).get("rules") != GRADE_RULES and o.get("ref_seq") not in done]
+
+
+def regrade_on_file(fetch, dividends, path: Path | None = None, today=None,
+                    max_tickers: int = REGRADE_TICKERS_PER_PASS) -> dict:
+    """
+    Re-grade the rows on file under amendments H and I (owner 2026-11-04).
+    For up to `max_tickers` names with pending rows: one `fetch(ticker)` of
+    bar rows and one `dividends(ticker)` history; a name missing either waits
+    for the next pass. Each pending row gets ONE REGRADE_BASIS outcome:
+    resolve_signal() under H+I on today's bars, its detail carrying what the
+    row was graded as (`as_graded_*`) and what today's bars give under the
+    OLD rules (`old_rules_now_*`), so the reading can split the rules' effect
+    from the provider's revisions. A row today's bars can no longer grade
+    (a split since, or the name gone) is written KEPT AS GRADED, flagged,
+    so it is not retried for ever and the reading says how many.
+    """
+    rows = read_all(path)
+    pend = regrade_pending(rows=rows)
+    refs = {r.get("seq"): r for r in rows if r.get("kind") in ("signal", "control")}
+    by_tk: dict = {}
+    for o in pend:
+        ref = refs.get(o.get("ref_seq"))
+        if ref is not None:
+            by_tk.setdefault(ref.get("ticker"), []).append((o, ref))
+    rep = {"pending": len(pend), "tickers_pending": len(by_tk), "regraded": 0, "kept": 0,
+           "moved": 0, "waiting": 0, "failed": 0, "detail": []}
+    # The starting name rotates with the date, so a name whose history keeps
+    # failing cannot hold a slot at the front of every pass.
+    import datetime as _dt
+    _order = sorted(by_tk, key=lambda t: str(t))
+    if _order:
+        _k = (today or _dt.date.today()).toordinal() % len(_order)
+        _order = _order[_k:] + _order[:_k]
+    for tk in _order[:max_tickers]:
+        try:
+            bars = fetch(tk)
+            amounts = dividends(tk) if bars else None
+        except Exception as e:                           # noqa: BLE001
+            rep["failed"] += len(by_tk[tk])
+            rep["detail"].append(f"{tk}: fetch failed: {e}")
+            continue
+        if not bars or amounts is None:
+            rep["waiting"] += len(by_tk[tk])
+            rep["detail"].append(f"{tk}: {'no bars' if not bars else 'no dividend history'}; next pass")
+            continue
+        drows = attach_dividend_rows(bars, amounts)
+        for o, ref in by_tk[tk]:
+            try:
+                new = resolve_signal(ref, drows, today=today)
+                old_now = resolve_signal(ref, bars, today=today, amended=False)
+                lost = new is None or (new["outcome"] == "void" and o.get("outcome") != "void"
+                                       and new.get("reason") in ("split_in_window", "no_bars"))
+                if lost:
+                    # today's bars cannot re-grade it: kept as graded, flagged
+                    det = dict(o.get("detail") or {}, regrade="kept_as_graded",
+                               why=(new or {}).get("reason") or "unsettled on today's bars",
+                               regrade_of=o.get("seq"), as_graded_r=o.get("r"),
+                               as_graded_outcome=o.get("outcome"))
+                    record_outcome(ref["seq"], o["outcome"], o.get("r"), REGRADE_BASIS,
+                                   exit_price=o.get("exit_price"), detail=det, reason=o.get("reason"),
+                                   path=path)
+                    rep["kept"] += 1
+                    continue
+                det = dict(new.get("detail") or {}, regrade="H+I", regrade_of=o.get("seq"),
+                           as_graded_r=o.get("r"), as_graded_outcome=o.get("outcome"),
+                           old_rules_now_r=(old_now or {}).get("r"),
+                           old_rules_now_outcome=(old_now or {}).get("outcome"))
+                record_outcome(ref["seq"], new["outcome"], new.get("r"), REGRADE_BASIS,
+                               exit_price=new.get("exit_price"), detail=det, reason=new.get("reason"),
+                               path=path)
+                rep["regraded"] += 1
+                if new["outcome"] != o.get("outcome") or (new.get("r") is not None and o.get("r") is not None
+                                                          and abs(float(new["r"]) - float(o["r"])) > 5e-4):
+                    rep["moved"] += 1
+                    rep["detail"].append(
+                        f"seq {ref['seq']} {tk} {ref.get('bar_date')}: {o.get('outcome')} "
+                        f"{o.get('r') if o.get('r') is None else format(o.get('r'), '+.2f')} -> "
+                        f"{new['outcome']} {new.get('r') if new.get('r') is None else format(new.get('r'), '+.2f')}")
+            except Exception as e:                       # noqa: BLE001
+                rep["failed"] += 1
+                rep["detail"].append(f"seq {ref.get('seq')} {tk}: {e}")
+    rep["pending_after"] = len(regrade_pending(path))
+    return rep
 
 
 def attach_dividend_rows(bars: list, amounts: dict) -> list:
@@ -1560,7 +1669,17 @@ def _episode_stats(eps: list) -> dict:
 def summary(path: Path | None = None) -> dict:
     rows = read_all(path)
     sigs = [r for r in rows if r.get("kind") == "signal"]
-    outs = [r for r in rows if r.get("kind") == "outcome"]
+    outs_raw = [r for r in rows if r.get("kind") == "outcome"]
+    # THE READING USES THE RE-GRADE (owner 2026-11-04, "go with re-grading the
+    # rows on file as well"). A row graded before amendments H and I that has
+    # been re-graded is READ by its REGRADE_BASIS outcome, in place of the
+    # original; the original stays on the chain and is read beside it
+    # (by_basis "stop_distance_as_graded", and "regrade" below). Everything
+    # downstream that reads "stop_distance" reads this effective outcome.
+    _hi = {o.get("ref_seq"): o for o in outs_raw if o.get("basis") == REGRADE_BASIS}
+    outs = [dict(_hi[o["ref_seq"]], basis="stop_distance", regraded=True)
+            if o.get("basis") == "stop_distance" and o.get("ref_seq") in _hi else o
+            for o in outs_raw if o.get("basis") != REGRADE_BASIS]
     scans = [r for r in rows if r.get("kind") == "scan"]
     alerts = [r for r in rows if r.get("kind") == "alert"]
     revisions = [r for r in rows if r.get("kind") == "revision"]
@@ -1599,6 +1718,39 @@ def summary(path: Path | None = None) -> dict:
             "mean_r_hq": _mean_r(settled_b, head_taken, True),
             "mean_r_base": _mean_r(settled_b, head_taken, False),
         }
+    # The same reading of the ORIGINAL grades, beside the effective one, while
+    # any row on file is read by its re-grade.
+    if _hi:
+        _ag_all = [o for o in outs_raw if o.get("basis") == "stop_distance" and o.get("ref_seq") in head_seqs]
+        _ag = [o for o in _ag_all if o.get("r") is not None]
+        by_basis["stop_distance_as_graded"] = {
+            "settled": len(_ag),
+            "void": sum(1 for o in _ag_all if o.get("outcome") == "void"),
+            "open": len(head_taken) - len(_ag_all),
+            "mean_r": sum(o["r"] for o in _ag) / len(_ag) if _ag else float("nan"),
+            "mean_r_hq": _mean_r(_ag, head_taken, True),
+            "mean_r_base": _mean_r(_ag, head_taken, False),
+        }
+    # THE RE-GRADE, SPLIT (owner 2026-11-04): on the rows settled every way,
+    # the mean R as first graded, under the OLD rules on today's bars (the
+    # provider's revisions since), and under H+I (the amendments' own effect).
+    _rgs = [o for o in outs_raw if o.get("basis") == REGRADE_BASIS]
+    _trip = [o["detail"] for o in _rgs if (o.get("detail") or {}).get("regrade") == "H+I"
+             and o.get("r") is not None and o["detail"].get("as_graded_r") is not None
+             and o["detail"].get("old_rules_now_r") is not None]
+    _mean = (lambda xs: sum(xs) / len(xs) if xs else float("nan"))
+    regrade = {
+        "done": len(_rgs), "pending": len(regrade_pending(rows=rows)),
+        "kept": sum(1 for o in _rgs if (o.get("detail") or {}).get("regrade") == "kept_as_graded"),
+        "n_compared": len(_trip),
+        "as_graded_mean": _mean([float(d["as_graded_r"]) for d in _trip]),
+        "old_rules_now_mean": _mean([float(d["old_rules_now_r"]) for d in _trip]),
+        "hi_mean": _mean([float(o["r"]) for o in _rgs if (o.get("detail") or {}).get("regrade") == "H+I"
+                          and o.get("r") is not None and o["detail"].get("as_graded_r") is not None
+                          and o["detail"].get("old_rules_now_r") is not None]),
+        "changed_outcome": sum(1 for o in _rgs if (o.get("detail") or {}).get("regrade") == "H+I"
+                               and o.get("outcome") != (o.get("detail") or {}).get("as_graded_outcome")),
+    }
     # BY BUCKET (BACKLOG 30): the live watchlist and the wider pool are two
     # populations and the HQ-versus-base question is asked of each. Stop-
     # distance basis only, the grader's; never pooled with premium.
@@ -1690,8 +1842,8 @@ def summary(path: Path | None = None) -> dict:
         "taken_headline": len(head_taken),
         "taken_hq": len(taken_hq), "taken_base": len(head_taken) - len(taken_hq),
         "taken_live": len(live_taken),
-        "skipped": len(skipped), "outcomes": len(outs),
-        "by_basis": by_basis, "by_bucket": by_bucket,
+        "skipped": len(skipped), "outcomes": len(outs_raw),
+        "by_basis": by_basis, "by_bucket": by_bucket, "regrade": regrade,
         "alerts": len(alerts), "alerts_delivered": sum(1 for a in alerts if a.get("delivered")),
         # Review 2026-10-30 (late): a NOT SENT row is a withheld alert (the
         # fill gate, J1), not a delivery failure; the report says which.
@@ -1735,6 +1887,19 @@ def summary(path: Path | None = None) -> dict:
     }
 
 
+def _regrade_line(rg: dict) -> str:
+    """The re-grade's bracket in report(), only once there are rows to
+    re-grade (owner 2026-11-04); a mean with nothing under it reads n/a."""
+    if not (rg.get("done") or rg.get("pending")):
+        return ""
+    def _m(x):
+        return f"{x:+.3f}" if x == x else "n/a"
+    return (f"[rows on file re-graded under H+I: {rg['done']} done, {rg['pending']} pending, "
+            f"{rg['kept']} kept as graded; on {rg['n_compared']} settled every way, mean R "
+            f"{_m(rg['as_graded_mean'])} as graded, {_m(rg['old_rules_now_mean'])} on today's bars by the "
+            f"old rules, {_m(rg['hi_mean'])} under H+I; {rg['changed_outcome']} changed outcome] ")
+
+
 def report(path: Path | None = None) -> int:
     s = summary(path)
     p = path or LOG
@@ -1754,6 +1919,7 @@ def report(path: Path | None = None) -> int:
           f"[{s['graded_hi']} graded under amendments H+I: {s['graded_open_past_target']} opened past the target "
           f"with the stop touched, {s['graded_dividend']} credited a dividend ({s['graded_dividend_r']:+.2f} R), "
           f"{s['graded_no_dividend_history']} without a dividend history] "
+          f"{_regrade_line(s['regrade'])}"
           f"({s['alerts_delivered']} delivered, {s['alerts_withheld']} withheld before send: "
           f"fill {s['alerts_withheld_by']['fill']}, R:R at send {s['alerts_withheld_by']['rr_at_send']}, "
           f"earnings {s['alerts_withheld_by']['earnings']}, pool cap {s['alerts_withheld_by']['pool_cap']}, "
@@ -2575,6 +2741,81 @@ def selftest() -> int:
         "dividend (+0.00 R), 2 without a dividend history" in _bufh.getvalue(), _bufh.getvalue()
     print("amendments H, I   : an open past the target fills there; a dividend after the entry is paid and "
           "the stop drops with it; the pass asks once, waits, then grades flagged")
+
+    # ── THE ROWS ON FILE, RE-GRADED (owner 2026-11-04) ──
+    rg = Path(tempfile.mkdtemp()) / "rg.jsonl"
+    _setup = {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 110.0, "rr": 5.0}
+    _old_det = {"exit_rule": "stop", "fill": 100.02}                 # graded before H and I: no "rules"
+    _rs = {}
+    for tk in ("RG1", "RG2", "RG3", "RG4"):
+        _rs[tk] = record_signal(tk, "Bullish", _setup, "taken", "", cfg, bar_date="2026-03-02", path=rg,
+                                hq=True, bucket="pool")
+    record_outcome(_rs["RG1"]["seq"], "loss", -1.0097, "stop_distance", detail=_old_det, path=rg)
+    record_outcome(_rs["RG2"]["seq"], "loss", -1.0097, "stop_distance", detail=_old_det, path=rg)
+    record_outcome(_rs["RG3"]["seq"], "win", 4.9, "stop_distance", detail={"rules": GRADE_RULES}, path=rg)
+    record_outcome(_rs["RG4"]["seq"], "win", 4.9, "stop_distance", detail=_old_det, path=rg)
+    assert [o["ref_seq"] for o in regrade_pending(rg)] == [_rs[t]["seq"] for t in ("RG1", "RG2", "RG4")]
+    try:
+        record_outcome(_rs["RG3"]["seq"], "win", 4.9, REGRADE_BASIS, path=rg)
+        raise AssertionError("a row graded under H+I must not take a re-grade")
+    except ValueError:
+        pass
+    _split = [dict(b) for b in _bh]
+    for b in _split:
+        for k in ("open", "high", "low", "close"):
+            b[k] = b[k] / 2.0
+    _fetch_rg = {"RG1": _bh, "RG2": _bh, "RG4": _split}
+    _divs = {"RG1": {}, "RG2": None, "RG4": {}}
+    _asked_rg = []
+    def _f_rg(tk):
+        _asked_rg.append(tk)
+        return _fetch_rg[tk]
+    _p1 = regrade_on_file(_f_rg, lambda tk: _divs[tk], path=rg, today=_far, max_tickers=2)
+    assert len(_asked_rg) == 2 and _p1["regraded"] + _p1["kept"] + _p1["waiting"] == 2, (_p1, _asked_rg)
+    _p2 = regrade_on_file(_f_rg, lambda tk: _divs[tk], path=rg, today=_far + _dt.timedelta(days=1))
+    assert _p2["pending_after"] == 1 and _p2["waiting"] == 1, _p2
+    _start = [regrade_on_file(lambda tk: _fetch_rg[tk], lambda tk: None, path=rg,
+                              today=_far + _dt.timedelta(days=d), max_tickers=1)["detail"][0][:3] for d in (0, 1)]
+    assert _start[0] == _start[1] == "RG2", "one pending name left: every pass tries it"
+    rr2 = Path(tempfile.mkdtemp()) / "rr2.jsonl"
+    for tk in ("RA", "RB"):
+        _x = record_signal(tk, "Bullish", _setup, "taken", "", cfg, bar_date="2026-03-02", path=rr2, hq=True,
+                           bucket="pool")
+        record_outcome(_x["seq"], "loss", -1.0, "stop_distance", detail=_old_det, path=rr2)
+    _tried = [regrade_on_file(lambda tk: _bh, lambda tk: None, path=rr2, today=_far + _dt.timedelta(days=d),
+                              max_tickers=1)["detail"][0][:2] for d in (0, 1)]
+    assert sorted(_tried) == ["RA", "RB"], ("the starting name rotates with the date", _tried)
+    _rgo = {o["ref_seq"]: o for o in read_all(rg) if o.get("basis") == REGRADE_BASIS}
+    _g1 = _rgo[_rs["RG1"]["seq"]]
+    assert _g1["outcome"] == "win" and _g1["r"] > 5.8 and _g1["detail"]["as_graded_outcome"] == "loss" \
+        and _g1["detail"]["old_rules_now_outcome"] == "loss" and _g1["detail"]["rules"] == GRADE_RULES, _g1
+    _g4 = _rgo[_rs["RG4"]["seq"]]
+    assert _g4["detail"]["regrade"] == "kept_as_graded" and _g4["detail"]["why"] == "split_in_window" \
+        and _g4["r"] == 4.9, _g4
+    try:
+        record_outcome(_rs["RG1"]["seq"], "win", 1.0, REGRADE_BASIS, path=rg)
+        raise AssertionError("a second re-grade must be refused")
+    except ValueError:
+        pass
+    _sr = summary(rg)
+    _bb = _sr["by_basis"]
+    # read by the re-grade: RG1 win (+5.9), RG3 win 4.9, RG4 kept 4.9, RG2 still as graded -1.01
+    assert _bb["stop_distance"]["settled"] == 4 and _bb["stop_distance_as_graded"]["settled"] == 4 \
+        and _bb["stop_distance"]["mean_r"] > _bb["stop_distance_as_graded"]["mean_r"] + 1.5, _bb
+    _rgs = _sr["regrade"]
+    assert (_rgs["done"], _rgs["pending"], _rgs["kept"], _rgs["n_compared"], _rgs["changed_outcome"]) \
+        == (2, 1, 1, 1, 1) and abs(_rgs["as_graded_mean"] - _rgs["old_rules_now_mean"]) < 1e-9 \
+        and _rgs["hi_mean"] > 5.8, _rgs
+    assert _sr["outcomes"] == 6, "the row count counts every outcome row on the chain"
+    _bufg = _io.StringIO()
+    with _ctx.redirect_stdout(_bufg):
+        report(rg)
+    assert "rows on file re-graded under H+I: 2 done, 1 pending, 1 kept as graded; on 1 settled every way, " \
+        "mean R -1.010 as graded, -1.010 on today's bars by the old rules" in _bufg.getvalue() \
+        and "stop_distance_as_graded" in _bufg.getvalue(), _bufg.getvalue()
+    print("re-grade on file : one second outcome per row graded before H+I, capped per pass; a name with no "
+          "dividend history waits; a split since keeps the grade, flagged; the reading uses the re-grade, "
+          "the original beside it")
 
     al = Path(tempfile.mkdtemp()) / "al.jsonl"
     a1 = record_alert("NVDA", "Bullish", "2026-10-13", "pool", True, "POOL", path=al)
