@@ -1,0 +1,22 @@
+==============================================================================
+OPTION-LEG BACKTEST
+==============================================================================
+Tickers   : TSLA, NVDA, AAPL, MSFT, AMZN, META, ROKU
+History   : 5y   Entry DTE: 30   IV: 1.0x realised
+Costs     : 5.0% round-trip spread
+Option prices are MODELLED (Black-Scholes on the real underlying path),
+not historical quotes. IV is assumed, not observed — see the header.
+Config    : live
+==============================================================================
+
+D3 PAIRED: A = TP+200/SL-50/out at 7 DTE/thesis on;  B = A + sell at the underlying's target
+  pairs        : 149 (settled in both arms; 27 differ)
+  mean A       : +10.00% of premium
+  mean B       : +10.53% of premium
+  B - A        : +0.53%  sd 40.78  SE 3.34  95% CI [-6.01, +7.08]
+  B exits      : {'STOP': 72, 'TARGET_U': 31, 'TIME': 32, 'THESIS': 9, 'TARGET': 5}
+  IV multiplier: 1.0  (read with the other multiplier; see the pre-registration)
+  data: v2-78390259672cedbe  (7 series, 7 cached / 0 fetched, oldest 55d) · engine fixes: price_gaps, lookback, open_beyond_target, dividends, time_order, clustered_ci (the default)
+
+DATA COVERAGE: 7 of 7 ticker(s) supplied usable bars — compare this across runs BEFORE comparing any number above
+  used    : TSLA, NVDA, AAPL, MSFT, AMZN, META, ROKU
