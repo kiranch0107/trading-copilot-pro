@@ -130,6 +130,14 @@ landed in the repo and the removal says so in the commit.
   (mean R as graded, on today's bars by the old rules, under H+I). The
   record's reading uses the re-grades from the first one written. Retire
   when the report shows 0 pending.
+- **2026-11-04 (item 46, the larger D3 pre-registered).** **Owed in the
+  Codespace:** one command, `python option_backtest.py --d3-large | tee
+  results/option_target_exit_large_run1.txt`
+  (`results/option_target_exit_large_preregistration.md`). The first run
+  fetches 77 names × 10 years from Yahoo; if it prints `NOT RUN` (a name
+  failed to load; no number is computed) run it again, and once a file
+  prints a `VERDICT` line commit it as it stands. Retire this line when
+  the file is committed with its reading.
 
 ---
 
@@ -2643,7 +2651,7 @@ unchanged, the forward rows on file not re-graded.
 
 ---
 
-## 46. Expert review 2026-11-03 (evening): the alert, the contract, the exit and the record, read as a trader — NINE FIXES BUILT (N1–N9); ALL EIGHT DECISIONS TAKEN 2026-11-03 (D1, D2, D4–D8 BUILT; D3 PRE-REGISTERED, RUN OWED ON THE LAPTOP)
+## 46. Expert review 2026-11-03 (evening): the alert, the contract, the exit and the record, read as a trader — NINE FIXES BUILT (N1–N9); ALL EIGHT DECISIONS TAKEN 2026-11-03 (D1, D2, D4–D8 BUILT; D3 RUN 1 UNDERPOWERED 2026-11-04; A LARGER D3 PRE-REGISTERED 2026-11-04, RUN OWED IN THE CODESPACE)
 
 `results/expert_review_2026-11-03.md`. Owner: "be an expert in trading
 stocks/options … strict review … identify any gaps and improve … better
@@ -2792,6 +2800,32 @@ of 149 pairs. Not re-run to clear 150 (the look-back fix, default since
 seeing the result is not allowed); a larger D3 would be a new
 pre-registration. Arm A alone: +0.07 % of premium at IV x1.15, +10 % at
 x1.00, the IV assumption again deciding the structure's sign.
+**A LARGER D3 PRE-REGISTERED 2026-11-04 (owner: "write the pre-registration
+for a larger D3"); THE RUN IS OWED IN THE CODESPACE.**
+`results/option_target_exit_large_preregistration.md`. A new test, not a
+re-run: the 77 names of `universe.CANDIDATE_POOL` (2026-11-04) outside run
+1, 10 years, so none of run 1's 149 pairs is in it (they stay descriptive,
+never pooled). Same arms, entries rule, metric and both multipliers. New:
+`option_backtest.py --d3-large` fixes the population (`D3_LARGE_TICKERS`, a
+literal), the window and both multipliers on identical entries
+(`pairs_on_frame_multi`), and computes nothing on a partial universe; the
+SE is the widest of independent and CR1 by entry week, by month and by
+ticker episode (`d3_clustered`), because the names enter together and the
+3-session cooldown overlaps a ticker's holdings; a verdict is printed by
+rule (`d3_large_verdict`): ADOPT / REJECT on the 95 % CI at both
+multipliers as before, plus **EQUIVALENT** when the 90 % CI is inside ±5
+points of premium at both; UNDERPOWERED only when the SE cannot be measured
+(fewer than 30 clusters), not for width, since a CI clear of zero decides at
+any width. Power (`--d3-large-power`, synthetic names on a shared market
+path, read as the run is): about 3,700–4,200 pairs (the real run perhaps
+3,200: run 1 drew 4.3 a name-year), sd 41–46 % of premium, month clustering
+the widest (DEFF 1.3–7.3), a 95 % half-width of 1.6–3.6 and an MDE of
+2.2–5.1 points (2.5–5.7 at 3,200; run 1's 149 pairs: 8–9); every null world
+reads NOT ESTABLISHED, EQUIVALENT. Prediction: B − A
+between −3 and +2 at both multipliers, NOT ESTABLISHED and EQUIVALENT.
+Data stated plainly: no clean data remains (BACKLOG 15); the 77 are
+unexamined for B − A only. `check_option_target_exit_large_preregistered`
+(73). **Owed:** the one command, in the Codespace.
 
 **Tiingo fallback split-adjusted: FIXED 2026-11-03 (owner: "fix the Tiingo
 split adjustment as well").** `data_source.fetch_tiingo()` builds split-only
@@ -3204,8 +3238,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 72 cross-module
-  invariants (72 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 73 cross-module
+  invariants (73 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on

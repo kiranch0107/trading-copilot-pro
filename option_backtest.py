@@ -45,6 +45,7 @@ Run
     python option_backtest.py
     python option_backtest.py --tp 100 --sl 50 --dte-exit 7
     python option_backtest.py --sweep          # compare payoff structures
+    python option_backtest.py --d3-large       # the larger D3, as pre-registered
 """
 from __future__ import annotations
 
@@ -402,7 +403,22 @@ def run_ticker_pairs(tk: str, cfg_a: dict, cfg_b: dict, sig_cfg: dict,
 def pairs_on_frame(df: "pd.DataFrame", tk: str, cfg_a: dict, cfg_b: dict, params,
                    cooldown: int, hq_only: bool = True) -> list[tuple]:
     """The pair loop on a computed frame (split out so it runs offline)."""
-    out, i, n = [], 0, len(df)
+    return pairs_on_frame_multi(df, tk, [(cfg_a, cfg_b)], params, cooldown, hq_only)[0]
+
+
+def pairs_on_frame_multi(df: "pd.DataFrame", tk: str, arm_sets: list, params,
+                         cooldown: int, hq_only: bool = True) -> list[list[tuple]]:
+    """
+    The pair loop for several (cfg_a, cfg_b) arm sets in ONE pass over the
+    signals: an entry is kept only when every arm of every set prices it, so
+    every set reads IDENTICAL entries (the larger D3 reads IV 1.15 and 1.00 on
+    the same pairs). pairs_on_frame() is this with one set. Each trade also
+    carries its exit session's date (`exit_date`), which the clustered reading
+    needs to group a ticker's overlapping holdings.
+    """
+    out = [[] for _ in arm_sets]
+    i, n = 0, len(df)
+    has_date = "Date" in df.columns
     while i < n - 1:
         sig = bt.evaluate_signal(df, i, params)
         if sig and (not risk_params.LONGS_ONLY or sig["trend"] == "Bullish") \
@@ -412,12 +428,16 @@ def pairs_on_frame(df: "pd.DataFrame", tk: str, cfg_a: dict, cfg_b: dict, params
             gapped = ((o <= sig["stop"] or o >= sig["target"]) if long
                       else (o >= sig["stop"] or o <= sig["target"]))
             if not gapped:
-                a = simulate_option_trade(df, i, sig["trend"], cfg_a, target=sig["target"])
-                b = simulate_option_trade(df, i, sig["trend"], cfg_b, target=sig["target"])
-                if a and b:
-                    for x in (a, b):
-                        x["ticker"], x["trend"] = tk, sig["trend"]
-                    out.append((a, b))
+                got = [(simulate_option_trade(df, i, sig["trend"], ca, target=sig["target"]),
+                        simulate_option_trade(df, i, sig["trend"], cb, target=sig["target"]))
+                       for ca, cb in arm_sets]
+                if all(a and b for a, b in got):
+                    for k, (a, b) in enumerate(got):
+                        for x in (a, b):
+                            x["ticker"], x["trend"] = tk, sig["trend"]
+                            if has_date:
+                                x["exit_date"] = str(df["Date"].iloc[min(i + 1 + int(x["held"]), n - 1)])
+                        out[k].append((a, b))
                     i += cooldown + 1
                     continue
         i += 1
@@ -484,6 +504,353 @@ def d3_power(n_frames: int = 200, n_trend_frames: int = 60) -> int:
                   f"B-A {r['diff']:+6.2f}% sd {r['sd']:5.1f} | MDE n150 {mde[150]:.1f} n300 {mde[300]:.1f} "
                   f"n600 {mde[600]:.1f}")
     return 0
+
+
+
+# ══════════════════════════════════════════════════════════════════
+# THE LARGER D3 (owner 2026-11-04: "write the pre-registration for a larger D3")
+# ══════════════════════════════════════════════════════════════════
+# results/option_target_exit_large_preregistration.md fixes everything here
+# BEFORE the run. Run 1 (the seven names below, five years) settled 149 pairs,
+# one under its floor, and was UNDERPOWERED. This is a NEW test, not a re-run:
+# no name of run 1 is in its population, so none of run 1's 149 pairs is in
+# it. Same arms, same entries rule, same metric; a population fixed now, a
+# standard error that allows for the pairs moving together, and an
+# EQUIVALENT reading that a sample this size can make. The power check aims
+# the design at a smallest detectable difference of 5 points (a 95 % CI
+# half-width of 3.5); the verdict does not void a run that misses it: an
+# ADOPT or REJECT clearing zero is a 5 % test at any width and EQUIVALENT is
+# its own test, so a wide CI only weakens a NOT ESTABLISHED, and says so.
+D3_RUN1_TICKERS = ("TSLA", "NVDA", "AAPL", "MSFT", "AMZN", "META", "ROKU")
+# universe.CANDIDATE_POOL as of 2026-11-04 (83 names, the ones the live pool
+# scans), minus the six of run 1 that are in it. A literal, never recomputed:
+# the pool may change later and the pre-registered population must not.
+D3_LARGE_TICKERS = (
+    "GOOGL", "ORCL", "CRM", "ADBE", "NOW", "PANW", "ACN", "ANET", "CRWD", "FTNT",
+    "AVGO", "AMD", "QCOM", "MU", "LRCX", "ADI", "ON", "NFLX", "CMCSA", "T", "TMUS",
+    "VZ", "TGT", "ABNB", "CMG", "ROST", "TJX", "WMT", "PG", "KO", "PEP", "MDLZ", "MO",
+    "PM", "JPM", "BAC", "GS", "MS", "V", "MA", "AXP", "BLK", "C", "CME", "SCHW", "SPGI",
+    "WFC", "CAT", "DE", "HON", "GE", "BA", "UNP", "UPS", "CSX", "FDX", "LMT", "RTX",
+    "UNH", "JNJ", "LLY", "ABBV", "MRK", "PFE", "TMO", "ABT", "AMGN", "BMY", "CVS",
+    "SYK", "XOM", "CVX", "COP", "SLB", "MPC", "OXY", "PSX")
+D3_LARGE_YEARS = 10
+D3_LARGE_IV_MULTS = (1.15, 1.00)          # primary first; a verdict needs both to agree
+# The structure as measured (MEASURED_OPTION_STRUCTURE), arm A; arm B adds the target exit.
+D3_LARGE_STRUCTURE = {"dte": 30, "tp": 200, "sl": 50, "dte_exit": 7, "use_thesis": True,
+                      "spread_pct": 5.0}
+D3_EQUIV_MARGIN = 5.0         # points of premium: the EQUIVALENT reading's bound
+D3_TARGET_HALF_WIDTH = 3.5    # the power check's aim: a 95 % half-width of 3.5 = an MDE of 5 at 80 %
+D3_MIN_CLUSTERS = 30          # every clustering needs at least this many groups, or UNDERPOWERED
+D3_POWER_SETTINGS = (("market share low ", 0.006, 0.0160),
+                     ("market share mid ", 0.010, 0.0140),
+                     ("market share high", 0.013, 0.0110))
+
+
+def _week_of(d) -> str:
+    t = pd.Timestamp(d).normalize()
+    return str((t - pd.Timedelta(days=t.weekday())).date())
+
+
+def _month_of(d) -> str:
+    return pd.Timestamp(d).strftime("%Y-%m")
+
+
+def _cr1(d: "np.ndarray", groups: list) -> tuple[float, int]:
+    """The CR1 standard error of mean(d) clustered by `groups`, and the number of groups."""
+    n = len(d)
+    e = d - d.mean()
+    sums: dict = {}
+    for g, v in zip(groups, e):
+        sums[g] = sums.get(g, 0.0) + float(v)
+    G = len(sums)
+    if G < 2:
+        return float("nan"), G
+    return math.sqrt((G / (G - 1)) * sum(v * v for v in sums.values()) / (n * n)), G
+
+
+def d3_clustered(pairs: list[tuple]) -> dict:
+    """
+    B minus A per settled pair (OPEN pairs left out), with the standard error
+    the larger D3 reads: the WIDEST of four, never narrower than any.
+
+      independent  every pair on its own
+      week         pairs entered the same calendar week (a market move hits
+                   every name at once)
+      month        the same calendar month (an option lives about a month)
+      episode      a ticker's pairs whose holdings overlap (the live cooldown
+                   is 3 sessions, so one move can carry several entries)
+
+    Each clustered SE is CR1. A clustering with one group cannot be measured
+    and makes the reading unmeasurable (se NaN), never quietly independent.
+    """
+    rows = [(a, b) for a, b in pairs if a["reason"] != OPEN and b["reason"] != OPEN]
+    d = np.array([b["pnl_pct"] - a["pnl_pct"] for a, b in rows], dtype=float)
+    n = len(d)
+    if n < 2:
+        return {"n": n}
+    m = float(d.mean())
+    sd = float(d.std(ddof=1))
+    se_ind = sd / math.sqrt(n)
+    ent = [a["entry_date"] for a, _ in rows]
+
+    def _exit(a, b):
+        xs = [x.get("exit_date") for x in (a, b) if x.get("exit_date") is not None]
+        return str(max(pd.Timestamp(x) for x in xs)) if xs else None
+    eps = bt.episode_ids([{"ticker": a.get("ticker"), "entry_date": a["entry_date"],
+                           "exit_date": _exit(a, b)} for a, b in rows])
+    groups = {"week": [_week_of(x) for x in ent], "month": [_month_of(x) for x in ent],
+              "episode": eps}
+    ses, gs = {"independent": se_ind}, {"independent": n}
+    for k, g in groups.items():
+        ses[k], gs[k] = _cr1(d, g)
+    if any(not np.isfinite(v) for v in ses.values()):
+        se = float("nan")
+    else:
+        se = max(ses.values())
+    widest = max(ses, key=lambda k: ses[k] if np.isfinite(ses[k]) else float("inf"))
+    ra = [a["pnl_pct"] for a, _ in rows]
+    rb = [b["pnl_pct"] for _, b in rows]
+    reasons_b: dict = {}
+    for _a, b in rows:
+        reasons_b[b["reason"]] = reasons_b.get(b["reason"], 0) + 1
+    return {"n": n, "mean_a": float(np.mean(ra)), "mean_b": float(np.mean(rb)), "diff": m, "sd": sd,
+            "se": se, "se_by": ses, "groups": gs, "widest": widest,
+            "deff": {k: (v / se_ind) ** 2 if se_ind > 0 and np.isfinite(v) else float("nan")
+                     for k, v in ses.items()},
+            "lo": m - 1.96 * se, "hi": m + 1.96 * se, "lo90": m - 1.645 * se, "hi90": m + 1.645 * se,
+            "half_width": 1.96 * se, "mde": 2.8 * se,
+            "min_groups": min(gs[k] for k in groups),
+            "changed": int(sum(1 for x in d if abs(x) > 1e-9)), "reasons_b": reasons_b}
+
+
+def d3_large_verdict(reports: dict) -> dict:
+    """
+    The pre-registered reading, mechanically. `reports` maps each multiplier
+    of D3_LARGE_IV_MULTS to its d3_clustered() report.
+
+      UNDERPOWERED     at either multiplier: fewer than 2 pairs, an SE
+                       that cannot be measured, or a clustering with fewer
+                       than D3_MIN_CLUSTERS groups. No other reading is made.
+      ADOPT            the 95 % CI above zero at BOTH multipliers.
+      REJECT           the 95 % CI below zero at BOTH.
+      NOT ESTABLISHED  otherwise.
+      equivalent       (beside any verdict but UNDERPOWERED) the 90 % CI
+                       inside +/- D3_EQUIV_MARGIN at BOTH: the two exits differ
+                       by less than that many points of premium. A NOT
+                       ESTABLISHED that is not equivalent cannot rule out a
+                       difference of that size, whatever its width.
+    """
+    rs = [reports.get(m, {"n": 0}) for m in D3_LARGE_IV_MULTS]
+
+    def _weak(r):
+        return (r.get("n", 0) < 2 or not np.isfinite(r.get("se", float("nan")))
+                or r["min_groups"] < D3_MIN_CLUSTERS)
+    under = [mm for mm, r in zip(D3_LARGE_IV_MULTS, rs) if _weak(r)]
+    if under:
+        return {"verdict": "UNDERPOWERED", "equivalent": False, "under": under}
+    if all(r["lo"] > 0 for r in rs):
+        v = "ADOPT"
+    elif all(r["hi"] < 0 for r in rs):
+        v = "REJECT"
+    else:
+        v = "NOT ESTABLISHED"
+    eq = all(-D3_EQUIV_MARGIN < r["lo90"] and r["hi90"] < D3_EQUIV_MARGIN for r in rs)
+    return {"verdict": v, "equivalent": eq, "under": []}
+
+
+def d3_reading(v: dict) -> str:
+    """The pre-registered sentence for a d3_large_verdict() result."""
+    eq, m = v["equivalent"], f"{D3_EQUIV_MARGIN:g}"
+    return {
+        ("ADOPT", True): f"B beats A at both multipliers, by less than {m} points of premium: sell the "
+                         "option when the underlying closes at the signal's target. Built as one change to "
+                         "MEASURED_OPTION_STRUCTURE, the exit monitor and the journal.",
+        ("ADOPT", False): "B beats A at both multipliers: sell the option when the underlying closes at the "
+                          "signal's target. Built as one change to MEASURED_OPTION_STRUCTURE, the exit "
+                          "monitor and the journal.",
+        ("REJECT", True): f"A beats B at both multipliers, by less than {m} points of premium: selling at "
+                          "the target costs a little, of the size the engine's paths without persistence "
+                          "produce. Not read as moves running past the target. The structure stays as "
+                          "measured.",
+        ("REJECT", False): "A beats B at both multipliers: holding past the target pays; moves after this "
+                           "signal keep running past its target. The structure stays as measured.",
+        ("NOT ESTABLISHED", True): f"The two exits differ by less than {m} points of premium either way. "
+                                   "The structure stays as measured; tying the option's exit to the "
+                                   "alert's target on grounds of coherence is the owner's call, made with "
+                                   "that bound known.",
+        ("NOT ESTABLISHED", False): "The data do not separate the two exits and cannot rule out a "
+                                    f"difference of {m} points of premium: not evidence of no difference. "
+                                    "The structure stays as measured.",
+        ("UNDERPOWERED", False): "The standard error could not be measured (too few pairs or clusters). "
+                                 "No reading is made.",
+    }[(v["verdict"], eq)]
+
+
+def _print_d3_block(label: str, r: dict) -> None:
+    print(f"\n{label}")
+    if r.get("n", 0) < 2:
+        print(f"  pairs        : {r.get('n', 0)} — nothing to read")
+        return
+    print(f"  pairs        : {r['n']} (settled in both arms; {r['changed']} differ)")
+    print(f"  mean A       : {r['mean_a']:+.2f}% of premium")
+    print(f"  mean B       : {r['mean_b']:+.2f}% of premium")
+    print(f"  B - A        : {r['diff']:+.2f}%  sd {r['sd']:.2f}  SE {r['se']:.2f} (the widest: {r['widest']})")
+    print(f"  95% CI       : [{r['lo']:+.2f}, {r['hi']:+.2f}]   half-width {r['half_width']:.2f} "
+          f"(the design's aim {D3_TARGET_HALF_WIDTH:g})   MDE at 80% {r['mde']:.2f}")
+    print(f"  90% CI       : [{r['lo90']:+.2f}, {r['hi90']:+.2f}]   (EQUIVALENT if inside "
+          f"+/-{D3_EQUIV_MARGIN:g})")
+    print("  SE by        : " + "  ".join(
+        f"{k} {r['se_by'][k]:.2f} (G {r['groups'][k]}, DEFF {r['deff'][k]:.2f})"
+        for k in ("independent", "week", "month", "episode")))
+    print(f"  B exits      : {r['reasons_b']}")
+
+
+def run_d3_large(tickers=D3_LARGE_TICKERS, years: int = D3_LARGE_YEARS, load=None) -> int:
+    """
+    THE larger D3 run: the population, window, structure and both multipliers
+    are fixed here, so the command has no options to get wrong. Every ticker
+    is loaded first; on a partial universe NOTHING is computed (no number
+    exists to be seen) and the exit code is 1: re-run until coverage is
+    complete. The first complete run is the run.
+    """
+    load = load or bt.download
+    tickers = list(tickers)
+    if hasattr(bt, "_CACHE_LOG"):
+        bt._CACHE_LOG.clear()                     # this run's reads only
+    cfg = bt.live_cfg(tickers=tickers, years=years)
+    params = bt.build_signal_params(cfg)
+    print("=" * 78)
+    print("OPTION-LEG BACKTEST — THE LARGER D3 (results/option_target_exit_large_preregistration.md)")
+    print("=" * 78)
+    print(f"Tickers   : {len(tickers)} names (universe.CANDIDATE_POOL of 2026-11-04 minus run 1's); "
+          f"none of run 1's")
+    print(f"History   : {years}y   Entry DTE: {D3_LARGE_STRUCTURE['dte']}   "
+          f"IV: {D3_LARGE_IV_MULTS[0]}x realised (primary) and {D3_LARGE_IV_MULTS[1]}x realised, "
+          f"on the same entries")
+    print(f"Costs     : {D3_LARGE_STRUCTURE['spread_pct']}% round-trip spread")
+    print("Option prices are MODELLED (Black-Scholes on the real underlying path),")
+    print("not historical quotes. IV is assumed, not observed — see the header.")
+    print(f"Config    : {bt.describe_config(cfg)}")
+    print("=" * 78)
+    coverage = {"ok": [], "no_data": [], "too_short": []}
+    frames = []
+    for tk in tickers:
+        raw = load(tk, years)
+        if raw is None:
+            coverage["no_data"].append(tk)
+            continue
+        df = bt.compute(raw)
+        if len(df) < bt.MIN_BARS_AFTER:
+            coverage["too_short"].append((tk, len(df)))
+            continue
+        coverage["ok"].append(tk)
+        frames.append((tk, df))
+    if len(coverage["ok"]) < len(tickers):
+        print("\nNOT RUN: the universe is incomplete, so nothing was computed and no number was")
+        print("produced. Re-run until every ticker supplies bars (the cache keeps what loaded).")
+        return _report_coverage(coverage, tickers) or 1
+    if frames and "Date" in frames[0][1].columns:
+        first = min(pd.Timestamp(df["Date"].iloc[0]) for _, df in frames)
+        last = max(pd.Timestamp(df["Date"].iloc[-1]) for _, df in frames)
+        print(f"Window    : {first.date()} .. {last.date()} (signals after each name's warm-up)")
+    base = dict(D3_LARGE_STRUCTURE, years=years)
+    arms = [(dict(base, iv_mult=mm), dict(base, iv_mult=mm, tgt_exit=True)) for mm in D3_LARGE_IV_MULTS]
+    per: dict = {mm: [] for mm in D3_LARGE_IV_MULTS}
+    for tk, df in frames:
+        for mm, prs in zip(D3_LARGE_IV_MULTS, pairs_on_frame_multi(df, tk, arms, params, cfg["cooldown_bars"])):
+            per[mm] += prs
+    reports = {mm: d3_clustered(per[mm]) for mm in D3_LARGE_IV_MULTS}
+    print(f"\nD3 LARGE PAIRED: A = TP+{base['tp']:g}/SL-{base['sl']:g}/out at {base['dte_exit']} DTE/"
+          f"thesis on;  B = A + sell when the underlying closes at the signal's target")
+    for mm in D3_LARGE_IV_MULTS:
+        tag = " (primary)" if mm == D3_LARGE_IV_MULTS[0] else ""
+        _print_d3_block(f"IV x{mm:.2f}{tag}", reports[mm])
+    v = d3_large_verdict(reports)
+    print("\n" + "=" * 78)
+    eq = (f"; EQUIVALENT within +/-{D3_EQUIV_MARGIN:g} points of premium" if v["equivalent"] else "")
+    print(f"VERDICT   : {v['verdict']}{eq}")
+    if v["under"]:
+        print(f"            underpowered at IV x{', x'.join(f'{x:.2f}' for x in v['under'])}")
+    print(f"READING   : {d3_reading(v)}")
+    print("=" * 78)
+    return _report_coverage(coverage, tickers)
+
+
+def _panel_frame(m: "np.ndarray", high: "np.ndarray", rng, idio: float) -> "pd.DataFrame":
+    """One synthetic name on a shared market path: OHLCV the engine can read."""
+    n = len(m)
+    e = rng.normal(0.0, idio, n) * np.where(high, 1.5, 1.0)
+    r = 0.0003 + m + e
+    c = 100.0 * np.exp(np.cumsum(r))
+    prev = np.concatenate([[100.0], c[:-1]])
+    o = prev * np.exp(0.35 * r)
+    sig = float(np.std(r))
+    h = np.maximum(o, c) * np.exp(np.abs(rng.normal(0, sig * 0.5, n)))
+    lo = np.minimum(o, c) * np.exp(-np.abs(rng.normal(0, sig * 0.5, n)))
+    return pd.DataFrame({"Date": pd.bdate_range("2016-01-04", periods=n), "Open": o, "High": h,
+                         "Low": lo, "Close": c, "Volume": rng.lognormal(14, 0.3, n)})
+
+
+def d3_large_power(seeds=(5, 6), names: int = len(D3_LARGE_TICKERS),
+                   sessions: int = D3_LARGE_YEARS * TRADING_DAYS, settings=D3_POWER_SETTINGS) -> list[dict]:
+    """
+    BACKLOG 13 step 2 for the larger D3, through THIS engine: `names` synthetic
+    names over `sessions` sessions share a market factor with persistent
+    high-volatility spells (a market move hits every name at once, which is
+    what makes pairs entered together move together), plus each name's own
+    noise; three settings for how much of a name's move is the market's, two
+    market paths each. Every name goes through backtest.compute, the live
+    signal and both arms at both multipliers, and is read exactly as the run
+    is (d3_clustered, d3_large_verdict). No persistence beyond the market's
+    drift, so this is the world where the two exits should nearly tie.
+    Seeded; results/option_target_exit_large_preregistration.md quotes it.
+    """
+    cfg = bt.live_cfg()
+    params = bt.build_signal_params(cfg)
+    base = dict(D3_LARGE_STRUCTURE, years=D3_LARGE_YEARS)
+    arms = [(dict(base, iv_mult=mm), dict(base, iv_mult=mm, tgt_exit=True)) for mm in D3_LARGE_IV_MULTS]
+    out = []
+    for label, mv, idio in settings:
+        for seed in seeds:
+            rng = np.random.default_rng(seed)
+            high = np.zeros(sessions, dtype=bool)
+            s = False
+            for t in range(sessions):
+                s = (rng.random() < 0.03) if not s else (rng.random() > 0.15)
+                high[t] = s
+            mkt = rng.normal(0.0, mv, sessions) * np.where(high, 2.5, 1.0)
+            per: dict = {mm: [] for mm in D3_LARGE_IV_MULTS}
+            for k in range(names):
+                df = bt.compute(_panel_frame(mkt, high, np.random.default_rng([seed, k]), idio))
+                for mm, prs in zip(D3_LARGE_IV_MULTS,
+                                   pairs_on_frame_multi(df, f"S{k}", arms, params, cfg["cooldown_bars"])):
+                    per[mm] += prs
+            reps = {mm: d3_clustered(per[mm]) for mm in D3_LARGE_IV_MULTS}
+            out.append({"label": label, "seed": seed, "reports": reps, "names": names,
+                        "years": sessions / TRADING_DAYS,
+                        "verdict": d3_large_verdict(reps),
+                        "per_name_year": reps[D3_LARGE_IV_MULTS[0]].get("n", 0) / names / (sessions / TRADING_DAYS)})
+    return out
+
+
+def print_d3_large_power(rows: list[dict]) -> None:
+    nm, yr = (rows[0]["names"], rows[0]["years"]) if rows else (0, 0)
+    print(f"Larger D3 power (seeded; {nm} synthetic names x {yr:g} years on a shared market path; read as the "
+          f"run is: SE the widest of independent / week / month / episode)")
+    for row in rows:
+        print(f"  {row['label']} path {row['seed']}: {row['reports'][D3_LARGE_IV_MULTS[0]].get('n', 0)} pairs "
+              f"({row['per_name_year']:.1f} a name-year) | verdict {row['verdict']['verdict']}"
+              f"{', EQUIVALENT' if row['verdict']['equivalent'] else ''}")
+        for mm in D3_LARGE_IV_MULTS:
+            r = row["reports"][mm]
+            if r.get("n", 0) < 2:
+                print(f"     iv x{mm:.2f}: nothing to read")
+                continue
+            dd = r["deff"]
+            print(f"     iv x{mm:.2f}: B-A {r['diff']:+5.2f} sd {r['sd']:4.1f} | DEFF week {dd['week']:.2f} "
+                  f"month {dd['month']:.2f} episode {dd['episode']:.2f} | SE {r['se']:.2f} "
+                  f"half-width {r['half_width']:.2f} MDE {r['mde']:.2f} | 90% CI "
+                  f"[{r['lo90']:+.2f}, {r['hi90']:+.2f}]")
 
 
 def summarise(trades: list[dict]) -> dict:
@@ -741,6 +1108,121 @@ def selftest() -> int:
     print("D3 arm            : off by default; a close at the signal's target sells at its mark; "
           "an intraday touch does not; pairs read B - A")
 
+    # ── THE LARGER D3 (owner 2026-11-04): population, entries, reading, verdict, run ──
+    assert len(D3_LARGE_TICKERS) == 77 and len(set(D3_LARGE_TICKERS)) == 77, "77 distinct names"
+    assert not set(D3_LARGE_TICKERS) & set(D3_RUN1_TICKERS), "no name of run 1: none of its 149 pairs"
+    assert D3_LARGE_IV_MULTS == (1.15, 1.00) and D3_LARGE_YEARS == 10, (D3_LARGE_IV_MULTS, D3_LARGE_YEARS)
+    # one pass, identical entries at both multipliers; the one-set loop is unchanged
+    _pm = np.random.default_rng(3)
+    _hi = np.zeros(700, dtype=bool)
+    _mk = _pm.normal(0.0, 0.010, 700)
+    _df3 = bt.compute(_panel_frame(_mk, _hi, np.random.default_rng([3, 0]), 0.014))
+    _prm = bt.build_signal_params(bt.live_cfg())
+    _b3 = dict(D3_LARGE_STRUCTURE, years=10)
+    _arms = [(dict(_b3, iv_mult=mm), dict(_b3, iv_mult=mm, tgt_exit=True)) for mm in D3_LARGE_IV_MULTS]
+    _multi = pairs_on_frame_multi(_df3, "X", _arms, _prm, 3)
+    _one = pairs_on_frame(_df3, "X", *_arms[0], _prm, 3)
+    assert len(_multi[0]) >= 1, "the fixture must produce pairs, or this test is vacuous"
+    assert [p[0]["entry_date"] for p in _multi[0]] == [p[0]["entry_date"] for p in _multi[1]] \
+        == [p[0]["entry_date"] for p in _one], "both multipliers read the same entries"
+    assert [round(p[1]["pnl_pct"] - p[0]["pnl_pct"], 9) for p in _multi[0]] \
+        == [round(p[1]["pnl_pct"] - p[0]["pnl_pct"], 9) for p in _one], "the one-set loop is the multi loop"
+    assert any(abs(a0["entry_prem"] - a1["entry_prem"]) > 1e-9 for (a0, _), (a1, _) in zip(*_multi)), \
+        "the two multipliers price differently"
+    # an entry one multiplier cannot price is dropped from BOTH, so the two readings stay on the same entries
+    _real_sim, _first = simulate_option_trade, _multi[0][0][0]["entry_date"]
+
+    def _flaky(df, i, trend, cfg, target=None):
+        r = _real_sim(df, i, trend, cfg, target=target)
+        return None if (r and cfg["iv_mult"] == 1.00 and r["entry_date"] == _first) else r
+    globals()["simulate_option_trade"] = _flaky
+    try:
+        _m2 = pairs_on_frame_multi(_df3, "X", _arms, _prm, 3)
+    finally:
+        globals()["simulate_option_trade"] = _real_sim
+    assert [p[0]["entry_date"] for p in _m2[0]] == [p[0]["entry_date"] for p in _m2[1]] \
+        and _first not in [p[0]["entry_date"] for p in _m2[0]], "an unpriced entry leaves both readings"
+    _a0 = _multi[0][0][0]
+    _ei = int(np.flatnonzero(pd.to_datetime(_df3["Date"]).values == np.datetime64(pd.Timestamp(_a0["entry_date"])))[0])
+    assert _a0["exit_date"] == str(_df3["Date"].iloc[min(_ei + _a0["held"], len(_df3) - 1)]), _a0
+    # the reading: the WIDEST of independent / week / month / episode, never narrower
+    _dates = pd.date_range("2016-01-04", periods=40, freq="35D")          # every pair its own week and month
+
+    def _pr(tk, ent, diff, held=5, reason="STOP"):
+        e = pd.Timestamp(ent)
+        a = {"pnl_pct": 0.0, "reason": reason, "ticker": tk, "entry_date": str(e),
+             "exit_date": str(e + pd.Timedelta(days=held))}
+        return (a, dict(a, pnl_pct=float(diff), reason="TARGET_U"))
+    _vals = np.random.default_rng(9).normal(0, 30, 40)
+    _ind = d3_clustered([_pr(f"T{k}", _dates[k], _vals[k]) for k in range(40)])
+    assert abs(_ind["se"] - _ind["se_by"]["independent"]) < 1e-9 and _ind["groups"]["week"] == 40, \
+        (_ind["se_by"], "every pair alone: every clustering equals independence")
+    assert abs(_ind["hi90"] - (_ind["diff"] + 1.645 * _ind["se"])) < 1e-9 \
+        and abs(_ind["lo"] - (_ind["diff"] - 1.96 * _ind["se"])) < 1e-9, "90 % for EQUIVALENT, 95 % for the verdict"
+    _same_m = [_pr(f"T{k}", pd.Timestamp("2016-01-04") + pd.Timedelta(days=60 * (k // 10) + (k % 10) * 7),
+                   (k // 10) * 40.0 + _vals[k] * 0.1) for k in range(40)]      # 4 months, 10 pairs each, means apart
+    _cl = d3_clustered(_same_m)
+    assert _cl["se"] > 2 * _cl["se_by"]["independent"] and _cl["widest"] in ("month", "week"), \
+        (_cl["se_by"], "pairs that move together widen the SE")
+    _off = [_pr(f"T{k // 2}", _dates[k // 2], (30.0 if k % 2 else -30.0) + _vals[k] * 0.01) for k in range(40)]
+    _o3 = d3_clustered(_off)              # pairs sharing a week, a month AND an episode offset each other
+    assert max(_o3["se_by"][k] for k in ("week", "month", "episode")) < _o3["se_by"]["independent"] and \
+        abs(_o3["se"] - _o3["se_by"]["independent"]) < 1e-9, (_o3["se_by"], "never narrower than independent")
+    _ep = d3_clustered([_pr("Q", "2017-03-01", 10, held=20), _pr("Q", "2017-03-08", -10, held=20),
+                        _pr("Q", "2017-06-01", 5), _pr("R", "2017-03-01", 1)])
+    assert _ep["groups"]["episode"] == 3, (_ep["groups"], "a ticker's overlapping holdings are one episode")
+    _wo = d3_clustered([_pr("T", _dates[0], 5), (dict(_pr("T", _dates[1], 5)[0], reason=OPEN), _pr("T", _dates[1], 99)[1]),
+                        _pr("U", _dates[2], 7)])
+    assert _wo["n"] == 2 and abs(_wo["diff"] - 6.0) < 1e-9, (_wo, "OPEN pairs are left out")
+    _one_g = d3_clustered([_pr(f"T{k}", "2018-05-07", _vals[k]) for k in range(10)])
+    assert not np.isfinite(_one_g["se"]), "one week for every pair: unmeasurable, never independent"
+
+    # the verdict, mechanically
+    def _rep(diff, se, g=100):
+        return {"n": 500, "diff": diff, "se": se, "lo": diff - 1.96 * se, "hi": diff + 1.96 * se,
+                "lo90": diff - 1.645 * se, "hi90": diff + 1.645 * se, "half_width": 1.96 * se, "min_groups": g}
+    _V = lambda a, b: d3_large_verdict({1.15: a, 1.00: b})               # noqa: E731
+    assert _V(_rep(4.0, 1.5), _rep(3.5, 1.5)) == {"verdict": "ADOPT", "equivalent": False, "under": []}
+    assert _V(_rep(-4.0, 1.5), _rep(-3.5, 1.5))["verdict"] == "REJECT"
+    assert _V(_rep(4.0, 1.5), _rep(1.0, 1.5))["verdict"] == "NOT ESTABLISHED", "both multipliers must agree"
+    assert _V(_rep(0.5, 1.2), _rep(-0.5, 1.2)) == {"verdict": "NOT ESTABLISHED", "equivalent": True, "under": []}
+    assert _V(_rep(-2.5, 0.8), _rep(-2.0, 0.8)) == {"verdict": "REJECT", "equivalent": True, "under": []}, \
+        "a small, measured cost is REJECT and EQUIVALENT at once"
+    assert _V(_rep(3.0, 1.5), _rep(3.0, 1.5))["equivalent"] is False, "the 90 % CI past +5 (5.47) is not equivalent"
+    assert _V(_rep(9.0, 3.0), _rep(8.0, 3.0))["verdict"] == "ADOPT", \
+        "a CI clear of zero is a 5 % test at any width (half-width 5.9 here): a wide run is not voided"
+    _wide = _V(_rep(0.0, 3.5), _rep(0.0, 1.0))
+    assert _wide == {"verdict": "NOT ESTABLISHED", "equivalent": False, "under": []} \
+        and "cannot rule out" in d3_reading(_wide), (_wide, "a wide null says what it cannot rule out")
+    assert _V(_rep(9.0, 1.0), _rep(9.0, 1.0, g=12)) == {"verdict": "UNDERPOWERED", "equivalent": False,
+                                                       "under": [1.00]}, "too few clusters"
+    assert _V(_rep(9.0, 1.0), {"n": 1})["verdict"] == "UNDERPOWERED"
+    assert _V(_rep(9.0, float("nan")), _rep(9.0, 1.0))["verdict"] == "UNDERPOWERED", "an unmeasurable SE"
+    for _vv in ("ADOPT", "REJECT", "NOT ESTABLISHED"):
+        for _eq in (True, False):
+            assert d3_reading({"verdict": _vv, "equivalent": _eq, "under": []})
+    assert "No reading" in d3_reading({"verdict": "UNDERPOWERED", "equivalent": False, "under": [1.15]})
+    assert "Not read as moves running" in d3_reading({"verdict": "REJECT", "equivalent": True, "under": []}) \
+        and "keep running" in d3_reading({"verdict": "REJECT", "equivalent": False, "under": []}), \
+        "persistence is read only from a REJECT that is not EQUIVALENT"
+
+    # the run: a partial universe computes NOTHING; a complete one reads both multipliers and says the verdict
+    _raw = {f"Z{k}": _panel_frame(_mk, _hi, np.random.default_rng([4, k]), 0.014) for k in range(3)}
+    _buf = _io.StringIO()
+    with _ctx.redirect_stdout(_buf):
+        _rc = run_d3_large(tickers=list(_raw) + ["GONE"], years=3, load=lambda tk, y: _raw.get(tk))
+    _out = _buf.getvalue()
+    assert _rc == 1 and "NOT RUN" in _out and "B - A" not in _out and "VERDICT" not in _out \
+        and "GONE" in _out, (_rc, _out[-600:], "a partial universe must not produce a number")
+    _buf = _io.StringIO()
+    with _ctx.redirect_stdout(_buf):
+        _rc = run_d3_large(tickers=list(_raw), years=3, load=lambda tk, y: _raw.get(tk))
+    _out = _buf.getvalue()
+    assert _rc == 0 and "IV x1.15 (primary)" in _out and "IV x1.00" in _out and "VERDICT   : " in _out \
+        and "READING   : " in _out and "IV: 1.15x realised" in _out and "Window    : " in _out, _out[-900:]
+    print("larger D3         : 77 names outside run 1; both multipliers on identical entries; SE the widest "
+          "of four; verdict by rule; a partial universe computes nothing")
+
     print("\nAll self-tests passed.")
     return 0
 
@@ -772,6 +1254,13 @@ def main() -> int:
     ap.add_argument("--d3-power", action="store_true",
                     help="D3's power check: the paired difference's sd on synthetic paths through "
                          "this engine (no market data; a few minutes; not run in CI)")
+    ap.add_argument("--d3-large", action="store_true",
+                    help="THE larger D3: 77 pool names outside run 1, 10 years, IV 1.15 and 1.00 on the "
+                         "same entries, read by the rule fixed in "
+                         "results/option_target_exit_large_preregistration.md (takes no other option)")
+    ap.add_argument("--d3-large-power", action="store_true",
+                    help="the larger D3's power check: synthetic names on a shared market path, read as "
+                         "the run is (no market data; several minutes; not run in CI)")
     ap.add_argument("--sweep", action="store_true",
                     help="Compare take-profit levels instead of one config")
     a = ap.parse_args()
@@ -780,6 +1269,11 @@ def main() -> int:
         return selftest()
     if a.d3_power:
         return d3_power()
+    if a.d3_large_power:
+        print_d3_large_power(d3_large_power())
+        return 0
+    if a.d3_large:
+        return run_d3_large()
     if hasattr(bt, "_CACHE_LOG"):
         bt._CACHE_LOG.clear()                     # this run's reads only
     tickers = [t.strip().upper() for t in a.tickers.split(",") if t.strip()]
