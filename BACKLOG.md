@@ -100,7 +100,10 @@ landed in the repo and the removal says so in the commit.
   `backtest.py` cut), teed into `results/`. Then decide which fixes become
   the default (recommended: all six). Do the D3 run as pre-registered
   either way: it runs on the default engine. Retire when the files are
-  committed and the default is decided.
+  committed and the default is decided. *(Files committed 2026-11-04 from the
+  owner's Codespace, which holds the frozen bars; reading in
+  `results/engine_fixes_reading_2026-11-04.md`: no sign changes. The default
+  is still to decide.)*
 - **2026-11-04 (grading amendments H and I applied).** From the merge the
   forward grader fills an open past the target there and credits
   dividends (stop reduced on the ex-date); the 405 outcome rows on file
@@ -2541,7 +2544,19 @@ The first should reproduce `record_recheck_floor_run1.txt` digit for digit
 rest are not readable as the fixes' effect. The four single-fix runs are
 each fix's own share; `time_order` and `clustered_ci` move no number
 `record_recheck` prints, so the last command (the record's 12t/10y cut)
-carries the MaxDD and the clustered CIs. **Then the owner decides** which
+carries the MaxDD and the clustered CIs. **RE-RUNS DONE 2026-11-04** (the
+owner's Codespace, which holds the frozen bars: every fingerprint matches
+the record; the no-fix run reproduces `record_recheck_floor_run1.txt`
+digit for digit). Reading: `results/engine_fixes_reading_2026-11-04.md`.
+`price_gaps` moved nothing (no NaN price row in the 31 series);
+`lookback` dropped 8–21 early trades (all shorts in the 5-year cuts);
+`open_beyond_target` fired once in 1,376 trades; `dividends` was the
+largest share (41 ex-dates in 12t/10y, +3.46 R; long R +0.007 in every
+cut); the long CI widens to [−0.083, +0.216] over 606 episodes of 875
+trades. All six: 12t/10y avg R −0.075 → −0.071, long +0.059 → +0.066,
+short −0.315 → −0.315. **No sign changes, no conclusion moves.** The
+`time_order` line (−186.1 R in exit order) was not isolated against a
+ticker-order run on these bars. **Then the owner decides** which
 fixes become the default (recommended: all six). Turning them on is ONE
 change with these files: the default flips, and every committed result
 the flip moves gets an "ENGINE CHANGED" banner, as item 21's did. Not done:
