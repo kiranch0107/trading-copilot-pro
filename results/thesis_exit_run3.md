@@ -1,3 +1,5 @@
+> **ENGINE CHANGED 2026-11-04 (BACKLOG 47) — read with this caveat.** This file was produced on the research engine BEFORE its six review fixes became the default (owner, 2026-11-04). The option engine draws its entries through backtest.evaluate_signal(), so the look-back fix drops entries on the first 19 bars after each ticker's warm-up (on the record's cuts it removed 8-21 of 413-1,376 share trades); the option fills and exits are unchanged. `ENGINE_FIXES=none` reproduces this file's engine. Not re-run; re-run before relying on its exact numbers.
+
 # Thesis-exit test — run 3 (the calendar-clock engine)
 
 **Run by the owner 2026-10-28, `python thesis_test.py --years 10` on the

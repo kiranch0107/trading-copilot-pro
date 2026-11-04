@@ -214,18 +214,19 @@ MIN_BARS_AFTER    = 40        # matches app.py MIN_BARS_AFTER_WARMUP
 
 
 # ══════════════════════════════════════════════════════════════════════
-# ENGINE FIXES — BUILT, OFF BY DEFAULT (expert review 2026-11-03, BACKLOG 47)
+# ENGINE FIXES — ON BY DEFAULT SINCE 2026-11-04 (expert review 2026-11-03, BACKLOG 47)
 # ══════════════════════════════════════════════════════════════════════
-# Six defects of this engine, each fixed below behind its own name. Every
-# one moves committed numbers in results/, and the re-run needs the frozen
-# bars in .bar_cache/, which exist only where the record was built. So the
-# fixes ship OFF: with ENGINE_FIXES empty this engine is, line for line, the
-# one that produced every committed result (CLAUDE.md: a result that
-# disagrees with the code that produced it is worse than either alone). A
-# run turns them on with --engine-fixes (backtest.py, record_recheck.py) or
-# the ENGINE_FIXES environment variable (any module that imports this one);
-# run() prints which engine it ran. Flipping the default is ONE change with
-# the re-run that measures it.
+# Six defects of this engine, each fixed below behind its own name. They
+# shipped OFF (2026-11-04) until the re-runs on the frozen bars measured
+# them (results/engine_fixes_reading_2026-11-04.md: no sign changes, no
+# conclusion moved), and are the DEFAULT from the owner's decision the same
+# day ("go with all six as default"). `--engine-fixes none` (backtest.py,
+# record_recheck.py) or ENGINE_FIXES=none gives the engine every result
+# before 2026-11-04 was produced on, to reproduce one; any comma list gives
+# that subset. run() prints which engine it ran. A caller whose
+# pre-registration fixed its own engine pins it per call
+# (cfg["engine_fixes"], read by simulate_trade: intraday_rules, and the
+# day-trade paper record through it).
 #
 #   price_gaps          a bar with a NaN Open/High/Low/Close is dropped before
 #                       the indicators, as scanner.get_data() drops it live.
@@ -261,7 +262,7 @@ ALL_ENGINE_FIXES = ("price_gaps", "lookback", "open_beyond_target",
 # engines are pinned to each other on the rules they share.
 GRADER_FIXES = ("open_beyond_target", "dividends")
 # The widest window signal_core's levels read (tail(10) swing, tail(20)
-# resistance/support); check_engine_fixes_off_by_default pins it.
+# resistance/support); check_engine_fixes_default pins it.
 LEVEL_LOOKBACK = 20
 
 
@@ -282,7 +283,7 @@ def parse_engine_fixes(spec) -> frozenset:
     return frozenset(names)
 
 
-ENGINE_FIXES: frozenset = parse_engine_fixes(os.environ.get("ENGINE_FIXES", ""))
+ENGINE_FIXES: frozenset = parse_engine_fixes(os.environ.get("ENGINE_FIXES", "all"))
 
 
 def set_engine_fixes(spec) -> frozenset:
@@ -299,8 +300,9 @@ def _fix(name: str) -> bool:
 
 def describe_engine() -> str:
     if not ENGINE_FIXES:
-        return "none (the committed engine)"
-    return ", ".join(f for f in ALL_ENGINE_FIXES if f in ENGINE_FIXES)
+        return "none (the engine before 2026-11-04)"
+    _l = ", ".join(f for f in ALL_ENGINE_FIXES if f in ENGINE_FIXES)
+    return _l + (" (the default)" if ENGINE_FIXES == frozenset(ALL_ENGINE_FIXES) else "")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -551,6 +553,11 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
     entry_i = signal_i + 1
     if entry_i >= n:
         return {"filled": False}
+    # A CALLER'S PINNED ENGINE (BACKLOG 47): cfg["engine_fixes"], when given,
+    # replaces the process-wide set for this trade, so a harness whose
+    # pre-registration fixed its engine keeps it (intraday_rules passes ()).
+    _pinned = cfg.get("engine_fixes")
+    _on = (lambda name: name in _pinned) if _pinned is not None else _fix
 
     # Realistic entry: next bar open, adjusted for slippage
     raw_entry = float(df["Open"].iloc[entry_i]) if "Open" in df.columns \
@@ -649,7 +656,7 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
     pending_stop = None                    # takes effect NEXT bar, never this one
     # DIVIDENDS (engine fix dividends): the amount on each ex-date row, when
     # the frame carries it (download() attaches it under the fix).
-    divs = df["Dividend"] if (_fix("dividends") and "Dividend" in df.columns) else None
+    divs = df["Dividend"] if (_on("dividends") and "Dividend" in df.columns) else None
     div_r = 0.0                            # R credited (long) or paid (short)
     div_n = 0
     sum_div_long = 0.0                     # a long's dividends since entry, per share
@@ -712,7 +719,7 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
         # what the bar did afterwards is the next holder's. Without the fix
         # such a bar with a low through the stop booked -1 R (target 110, open
         # 112, low 94: -1.00 R for a trade that took about +2.4 R).
-        if _fix("open_beyond_target") and (op >= target if trend == "Bullish" else op <= target):
+        if _on("open_beyond_target") and (op >= target if trend == "Bullish" else op <= target):
             exit_px, outcome, exit_i = op, "win", j
             if tally is not None:
                 if op != target:
@@ -2201,14 +2208,16 @@ def selftest() -> int:
     # Drive the DRIVER, not simulate_trade directly.
     _pd_df = _synthetic_ohlc(up=True, adx=40.0)
     _pa = backtest_ticker(_pd_df, dict(DEFAULTS), params)
+    # A +0.9 R partial: most trades on this frame peak above it, on either
+    # engine (the look-back fix drops the two early trades that reached +1.5 R).
     _pb = backtest_ticker(_pd_df, dict(DEFAULTS), params,
-                          policy={"partial_at": 1.5, "partial_frac": 0.5})
+                          policy={"partial_at": 0.9, "partial_frac": 0.5})
     assert _pa and len(_pa) == len(_pb), (len(_pa), len(_pb))
     _moved = sum(1 for x, y in zip(_pa, _pb) if abs(x["r"] - y["r"]) > 1e-9)
     assert _moved > 0, (
         "backtest_ticker accepted a policy and changed nothing. Most trades on "
-        "this frame time out below the +1.5 R trigger so a small count is "
-        "expected — zero means the parameter is being dropped on the way down")
+        "this frame peak above the +0.9 R trigger — zero means the parameter "
+        "is being dropped on the way down")
     # entries must be IDENTICAL: only the exit differs, or the pairing any A/B
     # relies on is a lie.
     for x, y in zip(_pa, _pb):
@@ -2266,7 +2275,7 @@ def selftest() -> int:
         _buf = io.StringIO()
         with contextlib.redirect_stdout(_buf):
             _ra = run(_cfg_r)
-            _rb = run(_cfg_r, policy={"partial_at": 1.5, "partial_frac": 0.5})
+            _rb = run(_cfg_r, policy={"partial_at": 0.9, "partial_frac": 0.5})
         assert _ra and len(_ra) == len(_rb), (len(_ra or []), len(_rb or []))
         _rm = sum(1 for x, y in zip(_ra, _rb) if abs(x["r"] - y["r"]) > 1e-9)
         assert _rm > 0, (
@@ -2926,8 +2935,9 @@ def selftest() -> int:
 
     # ── THE ENGINE FIXES (BACKLOG 47): each OFF reproduces the committed
     # engine, each ON does what it says. The default must be OFF in CI.
-    assert ENGINE_FIXES == frozenset() and describe_engine().startswith("none"), \
-        "the engine fixes must be OFF by default: every committed result was made without them"
+    if not os.environ.get("ENGINE_FIXES"):
+        assert ENGINE_FIXES == frozenset(ALL_ENGINE_FIXES) and describe_engine().endswith("(the default)"), \
+            "all six engine fixes are the default since 2026-11-04 (owner's decision, BACKLOG 47)"
     assert parse_engine_fixes("all") == frozenset(ALL_ENGINE_FIXES) and parse_engine_fixes("none") == frozenset() \
         and parse_engine_fixes("dividends, lookback") == {"dividends", "lookback"}
     for _bad in ("dividend", "all,bogus"):
@@ -2962,6 +2972,12 @@ def selftest() -> int:
         assert _tob.get("open beyond the target, stop also touched (win at the open)") == 1, _tob
         _ws = simulate_trade(_fs, 0, _st, _cfg0)
         assert _ws["outcome"] == "win" and abs(_ws["r"] - 6.0) < 1e-9, _ws
+        # a caller that pins its engine keeps it, whatever the process default
+        assert simulate_trade(_f, 0, _lt, dict(_cfg0, engine_fixes=()))["outcome"] == "loss", \
+            "cfg['engine_fixes'] = () must give the engine before 2026-11-04 for that trade"
+        set_engine_fixes("")
+        assert simulate_trade(_f, 0, _lt, dict(_cfg0, engine_fixes=("open_beyond_target",)))["outcome"] == "win"
+        set_engine_fixes("open_beyond_target")
         # an open exactly AT the target fills there too
         _feq = _bars([[100, 100, 100, 100], [100, 101, 99, 100], [110, 111, 94, 95]])
         _weq = simulate_trade(_feq, 0, _lt, _cfg0)
@@ -3157,13 +3173,13 @@ def selftest() -> int:
             assert sum(t["ex_dividends"] for t in _rt) > 0 and \
                 "ex-dividend inside trades :      0" not in _txt, "the dividend path must run inside run()"
             assert "Engine fixes : price_gaps, lookback, open_beyond_target, dividends, time_order, clustered_ci" \
-                in _txt and "open beyond the target    :" in _txt and "ex-dividend inside trades :" in _txt \
+                " (the default)" in _txt and "open beyond the target    :" in _txt and "ex-dividend inside trades :" in _txt \
                 and "look-back incomplete      :" in _txt and "clustered over" in _txt, _txt[-3000:]
             set_engine_fixes("")
             _bf0 = io.StringIO()
             with contextlib.redirect_stdout(_bf0):
                 run(dict(DEFAULTS, tickers=["AAA"], years=1))
-            assert "Engine fixes : none (the committed engine)" in _bf0.getvalue() \
+            assert "Engine fixes : none (the engine before 2026-11-04)" in _bf0.getvalue() \
                 and "clustered over" not in _bf0.getvalue()
         finally:
             globals()["download"], globals()["compute"] = _rd2, _rc2

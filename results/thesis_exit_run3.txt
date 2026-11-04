@@ -1,3 +1,11 @@
+!! ENGINE CHANGED 2026-11-04 (BACKLOG 47) -- read with this caveat. This file was produced on
+!! the research engine BEFORE its six review fixes became the default (owner, 2026-11-04). The
+!! option engine draws its entries through backtest.evaluate_signal(), so the look-back fix
+!! drops entries on the first 19 bars after each ticker's warm-up (on the record's cuts it
+!! removed 8-21 of 413-1,376 share trades); the option fills and exits are unchanged.
+!! `ENGINE_FIXES=none` reproduces this file's engine. Not re-run; re-run before relying on its
+!! exact numbers.
+
 ==============================================================================
 THESIS EXIT — does the EMA20 break rule earn its place?
 ==============================================================================

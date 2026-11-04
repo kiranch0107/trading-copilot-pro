@@ -543,7 +543,7 @@ def _report_coverage(coverage: dict | None, requested: list[str]) -> int:
             if _k in _seen:
                 continue
             _seen.add(_k); _metas.append(_m); _stat.append(_st)
-        print(f"  {_bc.summarise(_metas, _stat)}")
+        print(f"  {_bc.summarise(_metas, _stat)} · engine fixes: {bt.describe_engine()}")
     ok, no_data, short = coverage["ok"], coverage["no_data"], coverage["too_short"]
     n_req = len(requested)
     print(f"\nDATA COVERAGE: {len(ok)} of {n_req} ticker(s) supplied usable bars"
@@ -691,8 +691,9 @@ def selftest() -> int:
         with _ctx.redirect_stdout(_buf):
             _report_coverage({"ok": ["AAA", "BBB"], "no_data": [], "too_short": []}, ["AAA", "BBB"])
         _out = _buf.getvalue()
-        assert "data: v2-" in _out and "2 series, 1 cached / 1 fetched" in _out, (
-            _out, "every option run must print the bar-cache fingerprint, one entry per series")
+        assert "data: v2-" in _out and "2 series, 1 cached / 1 fetched" in _out \
+            and "engine fixes: " in _out, (
+            _out, "every option run must print the bar-cache fingerprint, one entry per series, and its engine")
     finally:
         bt._CACHE_LOG[:] = _saved_log
     print("fingerprint       : printed once per run, deduped to one entry per series")

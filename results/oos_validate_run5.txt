@@ -1,3 +1,10 @@
+!! ENGINE CHANGED 2026-11-04 (BACKLOG 47) -- read with this caveat. This file was produced on
+!! the research engine BEFORE its six review fixes became the default (owner, 2026-11-04). On
+!! the record's frozen bars the fixes moved no sign and no conclusion
+!! (results/engine_fixes_reading_2026-11-04.md: 12t/10y avg R -0.075 -> -0.071, long +0.059 ->
+!! +0.066). `ENGINE_FIXES=none` reproduces this file's engine. Not re-run; re-run before
+!! relying on its exact R.
+
 Running: /workspaces/trading-copilot-pro/trading-copilot-pro/.venv/bin/python backtest.py --tickers GOOGL,AVGO,AMD,NFLX,CRM,ADBE,QCOM,MU,ORCL,NOW,PANW,LRCX --years 15 --adx-min 35.0 --atr-stop 1.25 --atr-tgt 4.0 --max-hold 30 --slippage-bps 2.0 --use-regime
 
 ==========================================================================

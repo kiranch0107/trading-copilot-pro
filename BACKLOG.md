@@ -103,7 +103,8 @@ landed in the repo and the removal says so in the commit.
   committed and the default is decided. *(Files committed 2026-11-04 from the
   owner's Codespace, which holds the frozen bars; reading in
   `results/engine_fixes_reading_2026-11-04.md`: no sign changes. The default
-  is still to decide.)*
+  is still to decide.)* *(Decided 2026-11-04: all six are the default; 12
+  results that were current carry an ENGINE CHANGED banner. Retired.)*
 - **2026-11-04 (grading amendments H and I applied).** From the merge the
   forward grader fills an open past the target there and credits
   dividends (stop reduced on the ex-date); the 405 outcome rows on file
@@ -2431,7 +2432,7 @@ heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
 
 ---
 
-## 47. The research engine's six defects (expert review 2026-11-03) — BUILT 2026-11-04 BEHIND A SWITCH, OFF BY DEFAULT; THE RE-RUNS AND THE DECISION TO TURN THEM ON ARE OWED (LAPTOP, FROZEN BARS); GRADING AMENDMENTS H AND I APPLIED TO THE FORWARD GRADER 2026-11-04; THE ROWS ON FILE RE-GRADED UNDER THEM (READING CHANGE) 2026-11-04
+## 47. The research engine's six defects (expert review 2026-11-03) — BUILT 2026-11-04 BEHIND A SWITCH; RE-RUN ON THE FROZEN BARS 2026-11-04 (NO SIGN CHANGES); ALL SIX THE DEFAULT 2026-11-04 (OWNER); GRADING AMENDMENTS H AND I APPLIED TO THE FORWARD GRADER 2026-11-04; THE ROWS ON FILE RE-GRADED UNDER THEM (READING CHANGE) 2026-11-04
 
 **Owner: "fix the research engine items as well".** Item 46 recorded six
 defects of the share engine (`backtest.py`) that each move committed
@@ -2496,7 +2497,7 @@ second re-grade. Dated amendment "2026-11-04 (later)" in
 `backtest.GRADER_FIXES`; `engine_differential` now compares the grader
 with the engine running exactly those (516 random setups and 268 with
 ex-dates, 0 mismatches), and the research default stays off until its
-re-runs. `check_engine_fixes_off_by_default` pins the grader's order
+re-runs. `check_engine_fixes_default` pins the grader's order
 (dividend, then the open past the target, then stop-first), the pass's
 dividend hand-off and the dated amendment.
 
@@ -2524,7 +2525,7 @@ engine, on does what it says, `run()` names the engine and prints each
 fix's tally, the printed CI is the clustered one), `adx_retest --selftest`
 (clustered bands), `engine_differential --selftest` (the grader against the engine on its rules, H on one bar, ex-dates on data),
 `record_recheck --selftest` (the fix tallies reach its report),
-`check_engine_fixes_off_by_default` (70); 25 mutations falsified.
+`check_engine_fixes_default` (70); 25 mutations falsified.
 
 **Owed on the laptop (frozen bars; the only fetch is the dividend
 histories, once):**
@@ -2557,7 +2558,31 @@ trades. All six: 12t/10y avg R −0.075 → −0.071, long +0.059 → +0.066,
 short −0.315 → −0.315. **No sign changes, no conclusion moves.** The
 `time_order` line (−186.1 R in exit order) was not isolated against a
 ticker-order run on these bars. **Then the owner decides** which
-fixes become the default (recommended: all six). Turning them on is ONE
+fixes become the default (recommended: all six). **DECIDED 2026-11-04
+(owner: "go with all six as default as well"): all six are the default.**
+`ENGINE_FIXES` defaults to `all`; `--engine-fixes none` / `ENGINE_FIXES=none`
+reproduces the engine every earlier result was produced on, and
+`describe_engine()` says "(the default)" or "none (the engine before
+2026-11-04)". **What does not change:** no live path calls the engine
+(`market_context` imports it in its selftest only; the scanner's spread
+pass uses `spread_backtest.build()`, pure pricing); `intraday_rules`, whose
+pre-registration fixed its engine, pins it per call (`cfg["engine_fixes"]
+= ()`, read by `simulate_trade`), and so the day-trade paper record that
+reads it keeps its engine; `engine_differential` still compares the grader
+with `GRADER_FIXES`. **The results the flip moves** were current until
+now and carry an "ENGINE CHANGED 2026-11-04" banner, not re-run:
+`oos_validate_run5` (.md, .txt), `portfolio_replay_run5`,
+`record_recheck_floor_run1` (its re-run is
+`record_recheck_engine_all_codespace_run1`), and the option engine's
+`option_backtest_default_run3`, `option_iv_sensitivity_run3` (.md and four
+.txt) and `thesis_exit_run3` (.md, .txt), whose entries come through
+`evaluate_signal()` and so lose the first 19 bars after each warm-up.
+Older results are readings of the engine of their day, as items 36 and 40
+left them. The D3 pre-registration carries an intake note: its run uses
+the new default (under 2 % of entries change; arms, metric, bar,
+commands unchanged), and `option_backtest` now prints its engine. Pinned
+in `check_engine_fixes_default` and the backtest selftest (the default is
+all six; a pinned caller keeps its engine). Turning them on is ONE
 change with these files: the default flips, and every committed result
 the flip moves gets an "ENGINE CHANGED" banner, as item 21's did. Not done:
 no research re-run, no research default flipped, `oos_validate`

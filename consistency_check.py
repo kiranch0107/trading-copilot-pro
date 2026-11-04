@@ -3830,14 +3830,16 @@ def check_option_target_exit_preregistered() -> None:
     print("  the D3 arm is off by default; its pre-registration fixes the arms, power, bar and commands")
 
 
-def check_engine_fixes_off_by_default() -> None:
+def check_engine_fixes_default() -> None:
     """
     Expert review 2026-11-03, the research-engine items (owner: "fix the
     research engine items as well"; BACKLOG 47). Six defects of the share
-    engine are fixed behind backtest.ENGINE_FIXES, OFF by default, because
-    every one moves committed numbers and the re-run needs the frozen bars:
-    with the switch off the engine is the one every result was produced on.
-    Pinned: the default is off; each fix is wired where it acts; the levels'
+    engine are fixed behind backtest.ENGINE_FIXES. They shipped off until the
+    re-runs on the frozen bars measured them (no sign changes) and are the
+    DEFAULT since the owner's decision ("go with all six as default",
+    2026-11-04); "none" reproduces the engine before. A harness whose
+    pre-registration fixed its engine pins it per call (intraday_rules).
+    Pinned: the default is all six; each fix is wired where it acts; the levels'
     look-back covers signal_core's widest window; run(), record_recheck and
     engine_differential say which engine ran; the dividend history stays out
     of the bar fingerprint; and the forward grader carries exactly two of
@@ -3849,17 +3851,24 @@ def check_engine_fixes_off_by_default() -> None:
     assert bt.ALL_ENGINE_FIXES == ("price_gaps", "lookback", "open_beyond_target",
                                    "dividends", "time_order", "clustered_ci"), bt.ALL_ENGINE_FIXES
     src = Path("backtest.py").read_text(encoding="utf-8")
-    assert 'ENGINE_FIXES: frozenset = parse_engine_fixes(os.environ.get("ENGINE_FIXES", ""))' in src, \
-        "the default must come from the environment, empty when unset"
+    assert 'ENGINE_FIXES: frozenset = parse_engine_fixes(os.environ.get("ENGINE_FIXES", "all"))' in src, \
+        "the default must come from the environment, all six when unset"
     if not _os.environ.get("ENGINE_FIXES"):
-        assert bt.ENGINE_FIXES == frozenset(), \
-            f"engine fixes {sorted(bt.ENGINE_FIXES)} on by default: every committed result was made without them"
+        assert bt.ENGINE_FIXES == frozenset(bt.ALL_ENGINE_FIXES), \
+            f"engine fixes {sorted(bt.ENGINE_FIXES)}: all six are the default since 2026-11-04"
+    # a pre-registered engine stays pinned (intraday_rules, and the paper record through it)
+    _st = src[src.find("def simulate_trade("):src.find("\ndef ", src.find("def simulate_trade(") + 1)]
+    assert '_pinned = cfg.get("engine_fixes")' in _st and '_on("open_beyond_target")' in _st \
+        and '_on("dividends")' in _st, "simulate_trade must honour a caller's pinned engine"
+    assert '"risk_floor": False, "engine_fixes": ()}' in Path("intraday_rules.py").read_text(encoding="utf-8"), \
+        "intraday_rules keeps the engine its pre-registration fixed"
     where = {"price_gaps": "def compute(", "lookback": "def evaluate_signal(",
              "open_beyond_target": "def simulate_trade(", "dividends": "def simulate_trade(",
              "time_order": "def stats(", "clustered_ci": "def run("}
     for name, fn in where.items():
         body = src[src.find(fn):src.find("\ndef ", src.find(fn) + 1)]
-        assert f'_fix("{name}")' in body, f"engine fix {name} is not wired in {fn.strip('(').replace('def ', '')}()"
+        assert f'_fix("{name}")' in body or f'_on("{name}")' in body, \
+            f"engine fix {name} is not wired in {fn.strip('(').replace('def ', '')}()"
     assert '_bt._fix("clustered_ci")' in Path("adx_retest.py").read_text(encoding="utf-8"), \
         "adx_retest's bands must cluster under the fix"
     _dl = src[src.find("def download("):src.find("def dividend_history(")]
@@ -3918,7 +3927,7 @@ def check_engine_fixes_off_by_default() -> None:
     assert "## AMENDED 2026-11-04 — (H) an open past the target fills there; (I) dividends are credited" in gp \
         and gp.find("## AMENDED 2026-11-04") < gp.find("## AMENDED 2026-10-29"), \
         "amendments H and I must be written, dated, above the earlier amendment"
-    print("  six engine fixes off by default, each wired where it acts; look-back covers tail(20); run()'s "
+    print("  six engine fixes on by default, a pre-registered engine pinned, each wired where it acts; look-back covers tail(20); run()'s "
           "data line names the engine; a clustered CI never narrows; dividends outside the bar fingerprint; "
           "the grader carries H and I, pinned to the engine on its rules")
 
@@ -4090,7 +4099,7 @@ CHECKS = [
     ("forward record's power stated at its own sd (D7)", check_forward_power_stated),
     ("option target-exit arm pre-registered (D3)", check_option_target_exit_preregistered),
     ("Tiingo fallback split-adjusted, its fill checked (review 11-03)", check_tiingo_split_adjusted),
-    ("research-engine fixes built, off by default (BACKLOG 47)", check_engine_fixes_off_by_default),
+    ("research-engine fixes, all six the default (BACKLOG 47)", check_engine_fixes_default),
     ("rows on file re-graded under H+I (owner 11-04)", check_regrade_on_file),
 ]
 

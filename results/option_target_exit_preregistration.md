@@ -6,6 +6,17 @@ measure an arm before choosing. Written and committed BEFORE the run.** The
 run needs the frozen bars on the laptop; nothing below may change after a
 number from it is seen. Config: **live** (`backtest.live_cfg()`, BACKLOG 23).
 
+> **Intake note 2026-11-04, before any run (BACKLOG 47).** The research
+> engine's six review fixes became the default the day after this was
+> written, before the run. Nothing above or below changes: the arms, the
+> metric, the bar, the prediction and the two commands stand. The run reads
+> its entries through `backtest.evaluate_signal()` on the new default, which
+> skips the first 19 bars after each ticker's warm-up (the look-back fix),
+> identically for both arms; the option fills and exits do not change. Each
+> file prints `engine fixes: … (the default)` on its data line. The power
+> check above ran on the engine before; the look-back fix removes under 2 %
+> of entries, so the stated MDEs stand.
+
 ## The question
 
 The alert names a target on the underlying; the traded structure sells the
