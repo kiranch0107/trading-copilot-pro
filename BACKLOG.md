@@ -98,10 +98,16 @@ landed in the repo and the removal says so in the commit.
   seven commands in item 47 (`record_recheck.py` with no fixes, with
   `--engine-fixes all`, with each of four fixes alone, and one
   `backtest.py` cut), teed into `results/`. Then decide which fixes become
-  the default (recommended: all six), and separately amendment H and
-  dividends in the forward grader. Do the D3 run as pre-registered either
-  way: it runs on the default engine. Retire when the files are committed
-  and the default is decided.
+  the default (recommended: all six). Do the D3 run as pre-registered
+  either way: it runs on the default engine. Retire when the files are
+  committed and the default is decided.
+- **2026-11-04 (grading amendments H and I applied).** From the merge the
+  forward grader fills an open past the target there and credits
+  dividends (stop reduced on the ex-date); the 405 outcome rows on file
+  stand as graded. Your call, whenever: re-grade those rows under H+I as a
+  second basis (a reading change; about a third are on dividend payers and
+  are understated). The post-close logs say when a settled row is waiting
+  for a dividend history.
 
 ---
 
@@ -2415,7 +2421,7 @@ heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
 
 ---
 
-## 47. The research engine's six defects (expert review 2026-11-03) — BUILT 2026-11-04 BEHIND A SWITCH, OFF BY DEFAULT; THE RE-RUNS AND THE DECISION TO TURN THEM ON ARE OWED (LAPTOP, FROZEN BARS)
+## 47. The research engine's six defects (expert review 2026-11-03) — BUILT 2026-11-04 BEHIND A SWITCH, OFF BY DEFAULT; THE RE-RUNS AND THE DECISION TO TURN THEM ON ARE OWED (LAPTOP, FROZEN BARS); GRADING AMENDMENTS H AND I APPLIED TO THE FORWARD GRADER 2026-11-04
 
 **Owner: "fix the research engine items as well".** Item 46 recorded six
 defects of the share engine (`backtest.py`) that each move committed
@@ -2436,32 +2442,62 @@ bars, and the decision to turn them on ships with those files.
 |---|---|---|---|
 | `price_gaps` | `ta`'s ADX carries one NaN High/Low/Close forward for ever: every later bar reads no signal and the ticker goes silent; the "indicator gap" tally was never printed | `compute()` drops a row with a NaN Open/High/Low/Close before the indicators, as `scanner.get_data()` does live; a NaN Volume alone keeps its row | — . **Every default run now prints `!! N price row(s) with a NaN` if the cache holds one**: no such line means the defect is absent from the data and the fix moves nothing. The indicator-gap tally is printed too |
 | `lookback` | bars 0–18 after the warm-up built the swing low (`tail(10)`) and the resistance (`tail(20)`) from fewer bars than live ever has (603 of 2,881 early signals differed on synthetic frames, ~0.8 % of bars) | `evaluate_signal()` reads no signal before `LEVEL_LOOKBACK` (20) bars of history, tallied | skip those bars: a 19-bar longer signal warm-up, no frame or row index changes for any module (keeping pre-warm-up rows for the look-back would change every module's frame length and the random-entry nulls' populations) |
-| `open_beyond_target` | a bar that opens beyond the target and trades through the stop booked −1 R (target 110, open 112, low 94: −1.00 R for ~+2.4 R) | a bar opening AT or beyond the target fills the target at that open, before stop-first; an open between the levels is still stop-first | **research engine only.** The forward grader's "stop and target both inside one bar: the stop" is pre-registered (`forward_grading_preregistration.md`); see amendment H below |
+| `open_beyond_target` | a bar that opens beyond the target and trades through the stop booked −1 R (target 110, open 112, low 94: −1.00 R for ~+2.4 R) | a bar opening AT or beyond the target fills the target at that open, before stop-first; an open between the levels is still stop-first | the forward grader has it too from 2026-11-04 (grading amendment H, below) |
 | `dividends` | raw prices drop by the dividend on the ex-date and nothing paid it back: longs understated, shorts flattered; the ex-date drop could stop a long out | a position bought before the ex-date and held at its open is credited the dividend (a short pays it), in R on the original risk; FINRA Rule 5330's reduction of resting orders is applied on the ex-date: a long's sell stop and a short's buy-limit target drop by the dividend | broker-held orders (a mental stop would not be reduced). Yahoo's dividend history (split-adjusted, the bars' basis) is frozen in `.bar_cache/dividends/<TICKER>.json`, **outside the bar fingerprint** (its own `dividends d-…` line), so `record_recheck` can still say CODE MOVED on the same bars; the first run with the fix fetches it; a ticker whose history cannot be had is named, never silently uncredited |
-| `time_order` | the aggregate MaxDD was an equity curve in ticker-listing order (toy: −3.0 R vs −2.0 R in time) | `stats()` orders trades by exit date, then entry date | exit date (when the R is realised; the review suggested entry date) |
-| `clustered_ci` | a trade lives up to 20 bars and the cooldown counts from the signal, so same-ticker trades overlap (40 % on trending fixtures) while every CI assumed independence | the long/short CIs in `run()` and `adx_retest`'s bands use an SE clustered by same-ticker episode (CR1); `adx_retest`'s p and MDE read the effective n that SE implies | by episode, as the forward record counts (clustering by date as well would also cover market-wide same-day moves: recorded, not built). **`oos_validate` is not changed**: its protocol is spent and locked, and it reads per-ticker printed rows, not trades (its pooled variance is item 27's) |
+| `time_order` | the aggregate MaxDD was an equity curve in ticker-listing order (the selftest's toy: −3.0 R in ticker order, −1.0 R in time) | `stats()` orders trades by exit date, then entry date | exit date (when the R is realised; the review suggested entry date) |
+| `clustered_ci` | a trade lives up to 20 bars and the cooldown counts from the signal, so same-ticker trades overlap (40 % on trending fixtures) while every CI assumed independence | the long/short CIs in `run()` and `adx_retest`'s bands use an SE clustered by same-ticker episode (CR1); `adx_retest`'s p and MDE read the effective n that SE implies | by same-ticker episode of overlapping holding periods; the SE is never taken below the independent one (offsetting trades in an episode would otherwise narrow it) and one episode is unmeasurable (clustering by date as well would also cover market-wide same-day moves: recorded, not built). **`oos_validate` is not changed**: its protocol is spent and locked, and it reads per-ticker printed rows, not trades (its pooled variance is item 27's) |
 
-**Amendment H, PROPOSED, NOT APPLIED (the owner's decision).** In
-`forward_grading_preregistration.md`'s table, before "stop and target both
-inside one bar → the stop": "a bar that OPENS at or beyond the target →
-the target, filled at that open". It is a RULE CHANGE with outcome rows on
-file; which past rows it would have re-graded cannot be checked here (no
-bars). `engine_differential` pins the gap: the committed engine and the
-grader agree (516 setups, 0 mismatches) and the fixed engine differs on
-exactly the open-beyond-target bar (+5.92 R against −1.01 R).
-`check_engine_fixes_off_by_default` fails if the grader changes without
-it. **Also the owner's, and larger for the forward record than for the
-research engine:** the grader does not credit dividends either. The pool
-holds high yielders (MO, T, VZ, PM, KO, PG); a 20-session hold spans an
-ex-date about one time in three, and on such a name the dividend is a
-large part of 1 R (the review's example: $0.43 on a $25 stock with a $0.50
-ATR, ~0.69 R). Crediting it in the grader is a RULE CHANGE and a new data
-dependency (the dividend history at grading time).
+**Grading amendments H and I, APPLIED 2026-11-04 (owner: "go with
+amendment H and grader dividends as well").** `forward_log.resolve_signal()`
+now (H) fills a bar that opens at or beyond the target at that open, before
+stop-first, and (I) credits a dividend on an ex-date after the entry bar
+(a short pays it) and reduces the long's stop / short's target by it on
+that bar (FINRA 5330). The grading pass asks `data_source.fetch_dividends`
+(Yahoo's bars with their actions, so a throttled empty answer reads as
+unavailable, never as "no dividend") once per ticker and only when a row
+settles; a settled row with no history waits 5 days past its exit, then
+grades without it, flagged `dividend_basis: unavailable`. Every outcome
+carries `rules: "2026-11-04 H+I"`; `summary()`/`report()` count the rows
+graded under it, H's re-bookings, dividends credited (and their R), rows
+graded without a history. Written as a dated amendment at the top of
+`forward_grading_preregistration.md`, made with 405 outcome rows on file;
+**those rows stand as graded** (the 2026-10-29 precedent). The record's
+dividend bias on them is stated there: about a third of the graded rows
+are on dividend payers, a 20-session hold spans an ex-date about one time
+in three, and on a high yielder the dividend is a large part of 1 R
+(the review's example: $0.43 on a $25 stock with a $0.50 ATR, ~0.69 R).
+**Open, the owner's:** re-grading the rows on file under H+I as a second
+basis (a reading change). The research engine's same two rules are
+`backtest.GRADER_FIXES`; `engine_differential` now compares the grader
+with the engine running exactly those (516 random setups and 268 with
+ex-dates, 0 mismatches), and the research default stays off until its
+re-runs. `check_engine_fixes_off_by_default` pins the grader's order
+(dividend, then the open past the target, then stop-first), the pass's
+dividend hand-off and the dated amendment.
+
+**Independent review before merge (2026-11-04), seven defects found and
+fixed in the same change:** a failed dividend fetch was frozen as "no
+dividends" (now `data_source.fetch_dividends`: the bars with their actions,
+an empty answer unavailable); dividends fetched after the bars were frozen
+could be on a different split basis (now compared on shared closes and
+rescaled, said in the run); the clustered SE could fall BELOW the
+independent one when trades in an episode offset (now never narrower; one
+episode unmeasurable, never silently independent); `adx_retest`'s headline
+p and MDE were not clustered (now they read the effective n; the trade
+floor still counts trades) and it never said which engine ran (now it
+does, and `run()`'s data line carries the engine); break-even and trailing
+stops undid the 5330 reduction a bar later (now a long's policy stop is
+set in the ex-dividend basis; excursions are in total return); a dropped
+NaN-price row lost its dividend (now carried to the next row);
+bar-index dates sorted as strings ("10" before "9") in the episode
+grouping (now ordered as numbers; a dateless trade is alone). With the
+switch off, the review compared the committed engine and this one on 185
+trades field by field: identical.
 
 Pinned: `backtest.py --selftest` (each fix off reproduces the committed
 engine, on does what it says, `run()` names the engine and prints each
 fix's tally, the printed CI is the clustered one), `adx_retest --selftest`
-(clustered bands), `engine_differential --selftest` (amendment H's gap),
+(clustered bands), `engine_differential --selftest` (the grader against the engine on its rules, H on one bar, ex-dates on data),
 `record_recheck --selftest` (the fix tallies reach its report),
 `check_engine_fixes_off_by_default` (70); 25 mutations falsified.
 
@@ -2484,11 +2520,11 @@ rest are not readable as the fixes' effect. The four single-fix runs are
 each fix's own share; `time_order` and `clustered_ci` move no number
 `record_recheck` prints, so the last command (the record's 12t/10y cut)
 carries the MaxDD and the clustered CIs. **Then the owner decides** which
-fixes become the default (recommended: all six; amendment H and the
-grader's dividends separately). Turning them on is ONE change with these
-files: the default flips, and every committed result the flip moves gets
-an "ENGINE CHANGED" banner, as item 21's did. Not done: no re-run, no
-default flipped, no grader change, `oos_validate` unchanged.
+fixes become the default (recommended: all six). Turning them on is ONE
+change with these files: the default flips, and every committed result
+the flip moves gets an "ENGINE CHANGED" banner, as item 21's did. Not done:
+no research re-run, no research default flipped, `oos_validate`
+unchanged, the forward rows on file not re-graded.
 
 ---
 
@@ -2666,8 +2702,9 @@ own rule: the owner's setting.
 default (owner: "fix the research engine items as well"; item 47):** NaN
 price rows, the early look-back, the open beyond the target, dividends,
 MaxDD order, clustered CIs. The re-runs on the frozen bars and the
-decision to turn them on are owed; the grader's side of the open beyond
-the target (amendment H) and of dividends are the owner's.
+decision to turn them on are owed. The grader's side of both the open
+beyond the target and dividends was applied 2026-11-04 (grading
+amendments H and I, owner's decision; item 47).
 
 **Recorded, not fixed:** ~~the revision counter behind item 39's slot
 decision cannot see a signal that appears or vanishes between reads~~

@@ -125,13 +125,20 @@ R_TOL = 0.0005
 # What each backtest engine fix touched on this data (BACKLOG 47), as run()
 # prints it, so a run with --engine-fixes says where its numbers moved and a
 # run without them says whether the data holds the defect at all.
-_FIX_LINE_PREFIXES = ("indicator gap, no signal", "price rows with a NaN", "!! ",
+_FIX_LINE_PREFIXES = ("indicator gap, no signal", "price rows with a NaN",
                       "look-back incomplete", "open beyond the target", "ex-dividend inside trades")
 
 
 def fix_lines(text: str) -> list[str]:
-    """The engine-fix tally lines (and run()'s !! warnings) in a run's output."""
-    return [ln.strip() for ln in text.splitlines() if ln.strip().startswith(_FIX_LINE_PREFIXES)]
+    """The engine-fix tally lines in a run's output, and its warnings about
+    price rows or dividends (never its other warnings)."""
+    out = []
+    for ln in text.splitlines():
+        t = ln.strip()
+        if t.startswith(_FIX_LINE_PREFIXES) or (
+                t.startswith(("!! ", "! ")) and ("price row" in t or "dividend" in t)):
+            out.append(t)
+    return out
 
 
 def measure(cut: dict) -> dict | None:
@@ -313,10 +320,13 @@ def selftest() -> int:
     _ft = ("  Total trades   : 9\n  look-back incomplete      :     19  (bars before 20 of history; no signal read)\n"
            "  open beyond the target    :      1  (the stop was also touched)\n"
            "  ex-dividend inside trades :      4  (+1.20 R credited net; dividends d-00)\n"
-           "  !! 2 price row(s) with a NaN: ADX is blank after each, so its ticker\n"
-           "     reads no signal for the rest of the series (engine fix price_gaps)\n")
+           "  !! 2 price row(s) with a NaN Open/High/Low/Close: a NaN High, Low or Close\n"
+           "     blanks ADX for the rest of its series (engine fix price_gaps)\n"
+           "  !! 3 bar(s) had no matching SPY date, so the regime gate was\n"
+           "  ! KO: the frozen bars and the dividend history are on different split bases (x2.000)\n")
     _fl = fix_lines(_ft)
-    assert len(_fl) == 4 and _fl[0].startswith("look-back incomplete") and _fl[3].startswith("!! 2 price"), _fl
+    assert len(_fl) == 5 and _fl[0].startswith("look-back incomplete") and _fl[3].startswith("!! 2 price") \
+        and _fl[4].startswith("! KO") and not any("SPY" in x for x in _fl), _fl
     print("engine fix lines : a run's fix tallies and warnings reach the report")
     print("=" * 70)
 

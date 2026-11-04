@@ -182,9 +182,15 @@ def bands(trades: list[dict], levels: list[float]) -> list[dict]:
         import backtest as _bt
         if _bt._fix("clustered_ci") and n > 1 and sd > 0:
             _c = _bt.clustered_ci(tb, z=CI_Z)
-            if _c["se"] == _c["se"] and _c["se"] > 0:
-                se, n_test, episodes = _c["se"], _c["n_eff"], _c["episodes"]
-        mde = pw.mde(sd, n_test, alpha=ALPHA, power=POWER) if n > 1 and sd > 0 else math.inf
+            episodes = _c["episodes"]
+            if _c.get("unmeasurable"):
+                # one episode: no SE can be estimated, so nothing is tested
+                # (p 1, MDE infinite), never the independent SE in its place
+                se, n_test = float("nan"), 1.0
+            else:
+                se, n_test = _c["se"], _c["n_eff"]
+        # an effective sample under 2 (one episode) detects nothing
+        mde = pw.mde(sd, n_test, alpha=ALPHA, power=POWER) if n > 1 and sd > 0 and n_test >= 2 else math.inf
         out.append({"lo": lo, "hi": hi, "n": n, "mean": mean, "sd": sd,
                     "p": t_pvalue(mean, sd, n_test), "ci_lo": mean - CI_Z * se,
                     "ci_hi": mean + CI_Z * se, "mde": mde,
@@ -305,18 +311,24 @@ def spearman(x: list[float], y: list[float]) -> float:
 
 
 def judge(levels: list[float], means: list[float], sds: list[float],
-          ns: list[int]) -> dict:
-    """Apply the pre-registered bar to a completed sweep."""
-    pvals = [t_pvalue(m, s, n) for m, s, n in zip(means, sds, ns)]
+          ns: list[int], n_test: list[float] | None = None) -> dict:
+    """Apply the pre-registered bar to a completed sweep.
+
+    `n_test` (backtest engine fix clustered_ci, BACKLOG 47): the effective
+    n of each level's episode-clustered SE, which p and the MDE then read;
+    the trade floor still counts trades. None: the trade counts, as
+    pre-registered."""
+    nt = list(n_test) if n_test is not None else list(ns)
+    pvals = [t_pvalue(m, s, n) for m, s, n in zip(means, sds, nt)]
     survives = holm(pvals)
-    mdes = [pw.mde(s, n, alpha=ALPHA, power=POWER) for s, n in zip(sds, ns)]
+    mdes = [pw.mde(s, n, alpha=ALPHA, power=POWER) if n >= 2 else math.inf for s, n in zip(sds, nt)]
     powered = [abs(m) >= d for m, d in zip(means, mdes)]
     rho = spearman(list(levels), list(means))
 
     rows = []
     for i, lv in enumerate(levels):
         rows.append({"level": lv, "n": ns[i], "mean": means[i], "sd": sds[i],
-                     "p": pvals[i], "mde": mdes[i],
+                     "p": pvals[i], "mde": mdes[i], "n_eff": nt[i],
                      "holm": survives[i], "powered": powered[i]})
 
     for r in rows:
@@ -606,6 +618,32 @@ def selftest() -> int:
         and _b1["mde"] > _b0["mde"] and _b1["n_eff"] < 30, (_b0, _b1)
     print(f"clustered bands  : off, the committed CI; on, 48 trades in 24 episodes read as n_eff "
           f"{_b1['n_eff']:.1f} (MDE {_b0['mde']:.2f} -> {_b1['mde']:.2f} R)")
+    # offsetting trades inside an episode never NARROW the CI; one episode is unmeasurable
+    _off = []
+    for k in range(40):
+        _e = _pd.Timestamp("2024-01-01") + _pd.Timedelta(days=10 * k)
+        _off.append({"ticker": "T", "r": 1.0 + 0.01 * k, "setup": {"adx": 37.0}, "entry_date": _e,
+                     "exit_date": _e + _pd.Timedelta(days=5)})
+        _off.append({"ticker": "T", "r": -1.0, "setup": {"adx": 37.0}, "entry_date": _e + _pd.Timedelta(days=1),
+                     "exit_date": _e + _pd.Timedelta(days=5)})
+    _one = [{"ticker": "T", "r": r, "setup": {"adx": 37.0}, "entry_date": _pd.Timestamp("2024-01-01"),
+             "exit_date": _pd.Timestamp("2024-03-01")} for r in (1.0, -1.0, 2.0, 0.5)]
+    try:
+        _bt.set_engine_fixes("")
+        _o0 = bands(_off, [35.0])[0]
+        _bt.set_engine_fixes("clustered_ci")
+        _o1 = bands(_off, [35.0])[0]
+        _u1 = bands(_one, [35.0])[0]
+    finally:
+        _bt.set_engine_fixes(_saved)
+    assert _o1["n_eff"] <= _o1["n"] + 1e-9 and _o1["p"] >= _o0["p"] - 1e-12 and _o1["mde"] >= _o0["mde"] - 1e-12, (_o0, _o1)
+    assert _u1["episodes"] == 1 and _u1["p"] == 1.0 and _u1["mde"] == math.inf and _u1["ci_lo"] != _u1["ci_lo"], _u1
+    _j = judge([30.0, 35.0], [0.2, 0.3], [1.0, 1.0], [400, 400], n_test=[400.0, 25.0])
+    _j0 = judge([30.0, 35.0], [0.2, 0.3], [1.0, 1.0], [400, 400])
+    assert _j["rows"][1]["p"] > _j0["rows"][1]["p"] and _j["rows"][1]["mde"] > _j0["rows"][1]["mde"] \
+        and _j["rows"][1]["big_enough"] and _j["rows"][0]["p"] == _j0["rows"][0]["p"], _j
+    print("clustered verdict: offsetting trades never narrow the CI; one episode tests nothing; the "
+          "headline p and MDE read the effective n")
 
     print("=" * 68)
     print("All self-tests passed.")
@@ -654,7 +692,7 @@ def main() -> int:
             return 2
 
     side = "longs only" if a.longs_only else "both sides"
-    means, sds, ns, kept = [], [], [], []
+    means, sds, ns, kept, n_test = [], [], [], [], []
     lowest_trades, lowest_level, data_line = None, None, None
     for lv in levels:
         if a.config == "live":
@@ -689,6 +727,11 @@ def main() -> int:
         means.append(float(arr.mean()))
         sds.append(float(arr.std(ddof=1)))
         ns.append(len(arr))
+        if bt._fix("clustered_ci"):
+            _c = bt.clustered_ci([t for t in trades if t.get("r") is not None], z=CI_Z)
+            n_test.append(1.0 if _c.get("unmeasurable") else _c["n_eff"])
+        else:
+            n_test.append(float(len(arr)))
 
     if not kept:
         print("NOTHING MEASURED — do not read anything into this run.",
@@ -698,7 +741,9 @@ def main() -> int:
           f"target {cfg['atr_tgt_mult']} ATR, volume {cfg['volume_mult']}x, regime "
           f"{'on' if cfg['use_regime'] else 'off'}, hold {cfg['max_hold']}, {side}")
     print(f"  {data_line or 'data: no fingerprint line found in backtest output'}")
-    rc = report(judge(kept, means, sds, ns))
+    print(f"  engine fixes: {bt.describe_engine()}"
+          f"{'  (p and MDE read the episode-clustered effective n)' if bt._fix('clustered_ci') else ''}")
+    rc = report(judge(kept, means, sds, ns, n_test=n_test))
     if lowest_trades is not None:
         report_bands(bands(lowest_trades, kept), question, side)
         if lowest_level and lowest_level > 0:

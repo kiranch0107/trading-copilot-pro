@@ -811,6 +811,14 @@ GRADE_DUST_R = 0.05          # timeout inside this is BREAKEVEN (journal_store.D
 GRADE_BASIS_TOL = 0.02       # signal-bar close vs recorded price: beyond this, the
                              # price basis changed (a split) and the row is void
 GRADE_NO_BARS_DAYS = 45      # calendar days after the signal with no bars -> void
+# THE RULES AN OUTCOME WAS GRADED UNDER (grading amendments H and I,
+# 2026-11-04): written on every outcome's detail, so a reading can tell the
+# rows graded before the amendments from the rows graded after.
+GRADE_RULES = "2026-11-04 H+I"
+# Amendment I: a settled row whose ticker's dividend history cannot be had
+# waits this many calendar days past its exit for one; after that it is
+# graded without it and says so (detail.dividend_basis "unavailable").
+GRADE_DIV_WAIT_DAYS = 5
 VOID_REASONS = ("gapped_before_fill", "split_in_window", "no_bars")
 
 
@@ -832,7 +840,16 @@ def resolve_signal(row: dict, bars: list, today=None,
       entry      open of the first bar after bar_date, +slippage in the trade's
                  direction; gapped past stop or target at that open -> void
       walk       up to max_hold bars starting WITH the entry bar; the stop is
-                 checked before the target on every bar
+                 checked before the target on every bar, EXCEPT a bar that
+                 opens at or beyond the target (amendment H, 2026-11-04)
+      open past  that bar fills the target at its open: the open is decisive
+      the target
+      dividend   an ex-date AFTER the entry bar (a bar row's "dividend") is
+                 credited to a long (a short pays it), in R on the fill risk,
+                 and the long's stop / the short's target is reduced by it
+                 on that bar, as FINRA Rule 5330 reduces resting sell stops
+                 and buy limits (amendment I, 2026-11-04). Bars without the
+                 key carry no dividend history: detail.dividend_basis says so
       stop hit   exit at the WORSE of the stop and that bar's open (real fill)
       target hit exit at the BETTER of the target and that bar's open
       timeout    the close of the max_hold-th bar
@@ -903,8 +920,34 @@ def resolve_signal(row: dict, bars: list, today=None,
     exit_rule = exit_px = level_px = None
     exit_bar = None
     gap_fill = False
+    stop_touched = False
+    div_known = any("dividend" in b for b in after)
+    div_cash, div_n = 0.0, 0
     for j, b in enumerate(after[:max_hold]):
         o, h, l = float(b["open"]), float(b["high"]), float(b["low"])
+        # AMENDMENT I: an ex-date after the entry bar. Bought at the entry
+        # bar's open, the holder is entitled on a LATER ex-date (bought on
+        # the ex-date itself, not) and stays entitled if it sells that day.
+        if j > 0:
+            try:
+                _d = float(b.get("dividend") or 0.0)
+            except (TypeError, ValueError):
+                _d = 0.0
+            if _d > 0:
+                div_cash += _d if long else -_d
+                div_n += 1
+                if long:
+                    stop -= _d
+                else:
+                    target -= _d
+        # AMENDMENT H: an open at or beyond the target is decisive; a resting
+        # limit fills there, whatever the rest of the bar did.
+        if (o >= target) if long else (o <= target):
+            exit_rule, level_px, exit_px = "target", target, o
+            gap_fill = o != target
+            stop_touched = (l <= stop) if long else (h >= stop)
+            exit_bar = (j, b)
+            break
         if long:
             if l <= stop:
                 exit_rule, level_px = "stop", stop
@@ -945,8 +988,9 @@ def resolve_signal(row: dict, bars: list, today=None,
         px_net = px - slip(px) if long else px + slip(px)
         return ((px_net - fill) if long else (fill - px_net)) / risk
 
-    r = _r(exit_px)
-    r_level = _r(level_px)
+    div_r = div_cash / risk
+    r = _r(exit_px) + div_r
+    r_level = _r(level_px) + div_r
     if exit_rule == "target":
         outcome = "win"
     elif exit_rule == "stop":
@@ -958,8 +1002,32 @@ def resolve_signal(row: dict, bars: list, today=None,
         "detail": {"fill": round(fill, 4), "fill_date": after[0]["date"],
                    "exit_date": exit_bar[1]["date"], "bars_held": exit_bar[0] + 1,
                    "exit_rule": exit_rule, "gap_fill": gap_fill,
-                   "cost_bps": slippage_bps, "r_at_level": round(r_level, 4)},
+                   "cost_bps": slippage_bps, "r_at_level": round(r_level, 4),
+                   "rules": GRADE_RULES,
+                   "open_past_target_stop_touched": bool(stop_touched),
+                   "dividend_basis": "history" if div_known else "unavailable",
+                   "dividend_r": round(div_r, 4), "ex_dividends": div_n},
     }
+
+
+def attach_dividend_rows(bars: list, amounts: dict) -> list:
+    """
+    The bar rows with a "dividend" on every row (amendment I): each ex-date's
+    amount on the first bar dated on or after it, 0.0 elsewhere; an ex-date
+    before the first row or after the last is dropped. The same mapping as
+    backtest.attach_dividends(). A row carrying the key is a row whose
+    dividend history is KNOWN, zeros included.
+    """
+    out = [dict(b) for b in sorted(bars or [], key=lambda b: b["date"])]
+    for b in out:
+        b["dividend"] = 0.0
+    dates = [b["date"] for b in out]
+    import bisect
+    for d, amt in (amounts or {}).items():
+        k = bisect.bisect_left(dates, str(d)[:10])
+        if k < len(out) and (k > 0 or dates[0] == str(d)[:10]):
+            out[k]["dividend"] += float(amt)
+    return out
 
 
 def open_signals(path: Path | None = None) -> list[dict]:
@@ -975,16 +1043,24 @@ def open_signals(path: Path | None = None) -> list[dict]:
             and (s.get("seq"), "stop_distance") not in have]
 
 
-def grade_open_signals(fetch, path: Path | None = None, today=None) -> dict:
+def grade_open_signals(fetch, path: Path | None = None, today=None, dividends=None) -> dict:
     """
     Write a stop_distance outcome for every taken signal whose window has
     closed. `fetch(ticker)` returns the plain bar rows resolve_signal() reads,
     or None. One fetch per ticker. Never raises on a row; the report says what
     happened to each.
+
+    `dividends(ticker)` (amendment I) returns {ex-date: amount} or None when
+    the history cannot be had. It is asked only for a ticker with a row that
+    settles on this pass, once; the row is then graded on bars carrying the
+    history. Without one, a settled row waits GRADE_DIV_WAIT_DAYS past its
+    exit (counted "div_deferred") and is then graded without it, flagged.
     """
+    import datetime as _dt
     open_sigs = open_signals(path)
     report = {"graded": 0, "void": 0, "unsettled": 0, "no_data": 0,
-              "failed": 0, "detail": []}
+              "failed": 0, "div_deferred": 0, "detail": []}
+    _today = today or _dt.date.today()
     by_ticker: dict = {}
     for s in open_sigs:
         by_ticker.setdefault(s.get("ticker"), []).append(s)
@@ -998,12 +1074,37 @@ def grade_open_signals(fetch, path: Path | None = None, today=None) -> dict:
         if not bars:
             report["no_data"] += len(sigs)
             continue
+        _div_asked, _div_bars = False, None
         for s in sigs:
             try:
                 res = resolve_signal(s, bars, today=today)
                 if res is None:
                     report["unsettled"] += 1
                     continue
+                if dividends is not None and res["outcome"] != "void" \
+                        and not any("dividend" in b for b in bars):
+                    if not _div_asked:
+                        _div_asked = True
+                        try:
+                            _amounts = dividends(tk)
+                        except Exception:                # noqa: BLE001
+                            _amounts = None
+                        if _amounts is not None:
+                            _div_bars = attach_dividend_rows(bars, _amounts)
+                    if _div_bars is not None:
+                        res = resolve_signal(s, _div_bars, today=today)
+                    else:
+                        _ex = (res.get("detail") or {}).get("exit_date")
+                        try:
+                            _wait = (_today - _dt.date.fromisoformat(str(_ex)[:10])).days
+                        except (TypeError, ValueError):
+                            _wait = GRADE_DIV_WAIT_DAYS + 1
+                        if _wait <= GRADE_DIV_WAIT_DAYS:
+                            report["div_deferred"] += 1
+                            report["detail"].append(
+                                f"seq {s['seq']} {tk} {s.get('bar_date')}: settled, waiting for a "
+                                f"dividend history ({_wait} of {GRADE_DIV_WAIT_DAYS} days)")
+                            continue
                 record_outcome(s["seq"], res["outcome"], res.get("r"),
                                "stop_distance", exit_price=res.get("exit_price"),
                                detail=res.get("detail"), reason=res.get("reason"),
@@ -1603,6 +1704,16 @@ def summary(path: Path | None = None) -> dict:
         # differed from the row, and by how much on price.
         "revisions": len(revisions),
         "void_risk_floor": len(void_floor),
+        # Grading amendments H and I (2026-11-04): the outcomes graded under
+        # them, the ones an open past the target re-booked (the stop was also
+        # touched), the dividends credited, and the ones graded without a
+        # dividend history after the wait.
+        "graded_hi": sum(1 for o in outs if (o.get("detail") or {}).get("rules") == GRADE_RULES),
+        "graded_open_past_target": sum(1 for o in outs if (o.get("detail") or {}).get("open_past_target_stop_touched")),
+        "graded_dividend": sum(1 for o in outs if ((o.get("detail") or {}).get("ex_dividends") or 0) > 0),
+        "graded_dividend_r": round(sum(float((o.get("detail") or {}).get("dividend_r") or 0.0) for o in outs), 4),
+        "graded_no_dividend_history": sum(1 for o in outs if (o.get("detail") or {}).get("rules") == GRADE_RULES
+                                          and (o.get("detail") or {}).get("dividend_basis") == "unavailable"),
         "revisions_price_max_pct": max((abs(float(r["fields"]["price"][1]) / float(r["fields"]["price"][0]) - 1.0) * 100.0
                                         for r in revisions if r.get("fields", {}).get("price")
                                         and r["fields"]["price"][0]), default=0.0),
@@ -1640,6 +1751,9 @@ def report(path: Path | None = None) -> int:
           f"{s['revisions_tag_moved']} moved a decision or the tag ({s['revisions_vanished']} vanished); "
           f"not counted: {s['revisions_inputs']} filter-input flips, {s['revisions_config']} config changes] "
           f"[{s['void_risk_floor']} voided at the risk floor] "
+          f"[{s['graded_hi']} graded under amendments H+I: {s['graded_open_past_target']} opened past the target "
+          f"with the stop touched, {s['graded_dividend']} credited a dividend ({s['graded_dividend_r']:+.2f} R), "
+          f"{s['graded_no_dividend_history']} without a dividend history] "
           f"({s['alerts_delivered']} delivered, {s['alerts_withheld']} withheld before send: "
           f"fill {s['alerts_withheld_by']['fill']}, R:R at send {s['alerts_withheld_by']['rr_at_send']}, "
           f"earnings {s['alerts_withheld_by']['earnings']}, pool cap {s['alerts_withheld_by']['pool_cap']}, "
@@ -2381,6 +2495,86 @@ def selftest() -> int:
         "not counted: 1 filter-input flips, 1 config changes" in _bufb.getvalue(), _bufb.getvalue()
     print("revision blind spots : a vanished signal and one the post-close pass missed count; a tag flipped "
           "by a filter's other input or by a config change does not move the slot")
+
+    # ── GRADING AMENDMENTS H AND I (owner 2026-11-04) ──
+    import datetime as _dt
+    def _brow(d, o, h, l, c, div=None):
+        b = {"date": d, "open": o, "high": h, "low": l, "close": c}
+        if div is not None:
+            b["dividend"] = div
+        return b
+    _row = {"trend": "Bullish", "bar_date": "2026-03-02", "setup": {"price": 100.0, "stop": 98.0, "target": 110.0}}
+    _far = _dt.date(2026, 6, 1)
+    _flat = [_brow(f"2026-03-{d:02d}", 100.0, 100.5, 99.5, 100.0) for d in range(5, 31)]
+    # H: the bar opens at 112, past the 110 target, and trades to 94
+    _bh = [_brow("2026-03-02", 100, 100, 100, 100), _brow("2026-03-03", 100, 101, 99, 100),
+           _brow("2026-03-04", 112, 113, 94, 95)] + _flat
+    _gh = resolve_signal(_row, _bh, today=_far)
+    assert _gh["outcome"] == "win" and _gh["detail"]["exit_rule"] == "target" and _gh["detail"]["gap_fill"] \
+        and _gh["detail"]["open_past_target_stop_touched"] and _gh["r"] > 5.8 \
+        and _gh["detail"]["rules"] == GRADE_RULES, _gh
+    _bh_eq = [dict(b) for b in _bh]
+    _bh_eq[2]["open"] = 110.0
+    assert resolve_signal(_row, _bh_eq, today=_far)["outcome"] == "win", "an open AT the target fills there"
+    _bh_in = [dict(b) for b in _bh]
+    _bh_in[2]["open"] = 105.0
+    assert resolve_signal(_row, _bh_in, today=_far)["outcome"] == "loss", "an open between the levels is stop-first"
+    # I: a $1.50 ex-date on the second bar after the fill; risk is fill - 98
+    _bd = [_brow("2026-03-02", 100, 100, 100, 100, 0.0), _brow("2026-03-03", 100, 101, 99, 100, 0.0),
+           _brow("2026-03-04", 98.6, 99.5, 97.2, 98.0, 1.5), _brow("2026-03-05", 98, 111, 97.5, 108, 0.0)] + \
+        [dict(b, dividend=0.0) for b in _flat[1:]]
+    _gd = resolve_signal(_row, _bd, today=_far)
+    _risk = 100.0 * (1 + GRADE_SLIPPAGE_BPS / 1e4) - 98.0
+    assert _gd["outcome"] == "win" and _gd["detail"]["ex_dividends"] == 1 \
+        and abs(_gd["detail"]["dividend_r"] - 1.5 / _risk) < 1e-3 and _gd["detail"]["dividend_basis"] == "history", _gd
+    _fill = 100.0 * (1 + GRADE_SLIPPAGE_BPS / 1e4)
+    assert abs(_gd["r"] - ((110.0 * (1 - GRADE_SLIPPAGE_BPS / 1e4) - _fill) + 1.5) / _risk) < 1e-3, \
+        "the dividend is IN the graded R"
+    _gn = resolve_signal(_row, [{k: v for k, v in b.items() if k != "dividend"} for b in _bd], today=_far)
+    assert _gn["outcome"] == "loss" and _gn["detail"]["dividend_basis"] == "unavailable", \
+        "without the history the ex-date drop stops it out, and the row says the history was missing"
+    _be = [dict(b) for b in _bd]
+    _be[2]["dividend"], _be[1]["dividend"] = 0.0, 1.5        # the ex-date IS the entry bar: not entitled
+    assert resolve_signal(_row, _be, today=_far)["detail"]["dividend_r"] == 0.0
+    # attach_dividend_rows: the first bar on or after the ex-date; outside the bars, dropped
+    _ar = attach_dividend_rows([_brow("2026-03-03", 1, 1, 1, 1), _brow("2026-03-06", 1, 1, 1, 1),
+                                _brow("2026-03-09", 1, 1, 1, 1)],
+                               {"2026-03-07": 0.4, "2026-03-03": 0.1, "2026-02-01": 9.0, "2026-04-01": 9.0})
+    assert [b["dividend"] for b in _ar] == [0.1, 0.0, 0.4], _ar
+    # the grading pass: asked once per ticker, only for a settled row; waits, then grades flagged
+    gp = Path(tempfile.mkdtemp()) / "gp.jsonl"
+    record_signal("DV", "Bullish", {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 110.0, "rr": 5.0},
+                  "taken", "", cfg, bar_date="2026-03-02", path=gp, hq=True, bucket="live")
+    record_signal("DV", "Bullish", {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 110.0, "rr": 5.0},
+                  "taken", "", cfg, bar_date="2026-03-03", path=gp, hq=True, bucket="live")
+    _bars_nodiv = [{k: v for k, v in b.items() if k != "dividend"} for b in _bd]
+    _asked = []
+    def _none(tk):
+        _asked.append(tk)
+        return None
+    _r1 = grade_open_signals(lambda tk: _bars_nodiv, path=gp, today=_dt.date(2026, 3, 8), dividends=_none)
+    assert _r1["div_deferred"] == 2 and _r1["graded"] == 0 and _asked == ["DV"] and len(open_signals(gp)) == 2, \
+        (_r1, _asked)
+    _r2 = grade_open_signals(lambda tk: _bars_nodiv, path=gp, today=_dt.date(2026, 4, 30), dividends=_none)
+    assert _r2["graded"] == 2, _r2
+    _o2 = [o for o in read_all(gp) if o.get("kind") == "outcome"][0]
+    assert _o2["detail"]["dividend_basis"] == "unavailable" and _o2["outcome"] == "loss", _o2
+    gp2 = Path(tempfile.mkdtemp()) / "gp2.jsonl"
+    record_signal("DV", "Bullish", {"price": 100.0, "entry": 100.0, "stop": 98.0, "target": 110.0, "rr": 5.0},
+                  "taken", "", cfg, bar_date="2026-03-02", path=gp2, hq=True, bucket="live")
+    _r3 = grade_open_signals(lambda tk: _bars_nodiv, path=gp2, today=_dt.date(2026, 3, 8),
+                             dividends=lambda tk: {"2026-03-04": 1.5})
+    _o3 = [o for o in read_all(gp2) if o.get("kind") == "outcome"][0]
+    assert _r3["graded"] == 1 and _o3["outcome"] == "win" and _o3["detail"]["ex_dividends"] == 1, (_r3, _o3)
+    _s3 = summary(gp2)
+    assert _s3["graded_hi"] == 1 and _s3["graded_dividend"] == 1 and _s3["graded_no_dividend_history"] == 0, _s3
+    _bufh = _io.StringIO()
+    with _ctx.redirect_stdout(_bufh):
+        report(gp)
+    assert "2 graded under amendments H+I: 0 opened past the target with the stop touched, 0 credited a " \
+        "dividend (+0.00 R), 2 without a dividend history" in _bufh.getvalue(), _bufh.getvalue()
+    print("amendments H, I   : an open past the target fills there; a dividend after the entry is paid and "
+          "the stop drops with it; the pass asks once, waits, then grades flagged")
 
     al = Path(tempfile.mkdtemp()) / "al.jsonl"
     a1 = record_alert("NVDA", "Bullish", "2026-10-13", "pool", True, "POOL", path=al)

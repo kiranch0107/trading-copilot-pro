@@ -2187,7 +2187,15 @@ def run(args) -> int:
                 time.sleep(FETCH_GAP_SEC)
                 _df = get_data(tk)
             return bars_for_grading(_df) if _df is not None else None
-        _grep = forward_log.grade_open_signals(_bars_for)
+
+        def _divs_for(tk: str):
+            # GRADING AMENDMENT I (owner 2026-11-04): the dividend history,
+            # asked by the grader only for a ticker with a row settling on
+            # this pass, once. The bars come with it, so a throttled (empty)
+            # answer reads as unavailable, never as "pays no dividend".
+            time.sleep(FETCH_GAP_SEC)
+            return data_source.fetch_dividends(tk, period="2y")
+        _grep = forward_log.grade_open_signals(_bars_for, dividends=_divs_for)
         if _grep["graded"] or _grep["void"]:
             logger.info("forward log: graded %d signal(s), %d void, %d still open",
                         _grep["graded"], _grep["void"], _grep["unsettled"])
@@ -2201,6 +2209,10 @@ def run(args) -> int:
             logger.info("forward log: grading deferred %d pool/pullback signal(s) in %d "
                         "name(s) to the pool run or the post-close pass",
                         _deferred, len(_deferred_tk))
+        if _grep.get("div_deferred"):
+            logger.info("forward log: %d settled signal(s) wait for a dividend history (graded "
+                        "without one after %d days, flagged)", _grep["div_deferred"],
+                        forward_log.GRADE_DIV_WAIT_DAYS)
         _no_data = _grep["no_data"] - _deferred
         if _grep["failed"] or _no_data:
             logger.warning("forward log: grading skipped %d (no data) / %d (error)",

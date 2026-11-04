@@ -238,8 +238,7 @@ MIN_BARS_AFTER    = 40        # matches app.py MIN_BARS_AFTER_WARMUP
 #   open_beyond_target  a bar that OPENS at or beyond the target fills the
 #                       target at that open, before the stop-first rule: the
 #                       open is decisive, not ambiguous. The forward grader
-#                       has the same rule; changing it is a pre-registered
-#                       RULE CHANGE (proposed amendment H, the owner's).
+#                       applies it from 2026-11-04 (grading amendment H).
 #   dividends           a position held over an ex-date is credited the
 #                       dividend (a short pays it), and the resting order
 #                       FINRA Rule 5330 reduces on the ex-date is reduced: a
@@ -255,6 +254,12 @@ MIN_BARS_AFTER    = 40        # matches app.py MIN_BARS_AFTER_WARMUP
 #                       independent.
 ALL_ENGINE_FIXES = ("price_gaps", "lookback", "open_beyond_target",
                     "dividends", "time_order", "clustered_ci")
+# The fixes the FORWARD GRADER carries (grading amendments H and I, owner
+# 2026-11-04): forward_log.resolve_signal() fills a bar that opens past the
+# target at its open and credits dividends with the 5330 reduction.
+# engine_differential compares the grader with THIS engine, so the two
+# engines are pinned to each other on the rules they share.
+GRADER_FIXES = ("open_beyond_target", "dividends")
 # The widest window signal_core's levels read (tail(10) swing, tail(20)
 # resistance/support); check_engine_fixes_off_by_default pins it.
 LEVEL_LOOKBACK = 20
@@ -269,11 +274,11 @@ def parse_engine_fixes(spec) -> frozenset:
     else:
         names = [x.strip() for x in str(spec).split(",")]
     names = [x for x in names if x and x != "none"]
-    if "all" in names:
-        return frozenset(ALL_ENGINE_FIXES)
-    bad = [x for x in names if x not in ALL_ENGINE_FIXES]
+    bad = [x for x in names if x not in ALL_ENGINE_FIXES and x != "all"]
     if bad:
         raise ValueError(f"unknown engine fix(es) {bad}; known: {', '.join(ALL_ENGINE_FIXES)}, all")
+    if "all" in names:
+        return frozenset(ALL_ENGINE_FIXES)
     return frozenset(names)
 
 
@@ -318,10 +323,21 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
         # or Close blanks ADX for the REST of the series: every later row is
         # SIGNAL_OK False and the ticker never signals again. A stop cannot
         # be checked against a NaN price either. Live drops these rows
-        # (scanner.get_data); so does this. A NaN Volume alone keeps its row.
+        # (scanner.get_data, which drops a NaN Volume too; here a NaN Volume
+        # alone keeps its row, as the group B timeline rule decided).
         _cols = [c for c in ("Open", "High", "Low", "Close") if c in df.columns]
         _bad = df[_cols].isna().any(axis=1)
         if _bad.any():
+            if "Dividend" in df.columns:
+                # an ex-date on a dropped row moves to the next row kept
+                # (review 2026-11-04): yfinance's NaN rows fall on event days
+                _dv = df["Dividend"].fillna(0.0).to_numpy(dtype=float).copy()
+                _b = _bad.to_numpy()
+                for k in range(len(_dv) - 1):
+                    if _b[k] and _dv[k] > 0:
+                        _dv[k + 1] += _dv[k]
+                        _dv[k] = 0.0
+                df["Dividend"] = _dv
             df = df.loc[~_bad].reset_index(drop=True)
     c, h, l = df["Close"], df["High"], df["Low"]
     df["EMA20"]     = ta.trend.ema_indicator(c, window=20)
@@ -636,6 +652,8 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
     divs = df["Dividend"] if (_fix("dividends") and "Dividend" in df.columns) else None
     div_r = 0.0                            # R credited (long) or paid (short)
     div_n = 0
+    sum_div_long = 0.0                     # a long's dividends since entry, per share
+    div_ps = 0.0                           # signed per share: + received (long), - paid (short)
 
     exit_i = None; exit_px = None; outcome = None
     for j in range(entry_i, min(entry_i + cfg["max_hold"], n)):
@@ -658,8 +676,10 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
             if _d > 0:
                 div_r += size * (_d if trend == "Bullish" else -_d) / risk
                 div_n += 1
+                div_ps += _d if trend == "Bullish" else -_d
                 if trend == "Bullish":
                     stop -= _d
+                    sum_div_long += _d
                 else:
                     target -= _d
                 if tally is not None:
@@ -667,9 +687,13 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
         hi = float(df["High"].iloc[j]); lo = float(df["Low"].iloc[j])
         fav = (hi - entry) if trend == "Bullish" else (entry - lo)
         adv = (lo - entry) if trend == "Bullish" else (entry - hi)
-        if fav / risk > mfe:
-            mfe, bars_to_mfe = fav / risk, j - entry_i
-        mae = min(mae, adv / risk)
+        # Excursions are in TOTAL return: a dividend credited is part of the
+        # path (review 2026-11-04: R could exceed mfe_r). The policy triggers
+        # read the price path, `peak` below, unchanged.
+        _tr = div_ps
+        if (fav + _tr) / risk > mfe:
+            mfe, bars_to_mfe = (fav + _tr) / risk, j - entry_i
+        mae = min(mae, (adv + _tr) / risk)
         # A GAPPED LEVEL FILLS AT THE OPEN (BACKLOG 21, fixed 2026-10-08). A
         # stop is a market order once touched: if the bar OPENS beyond it, the
         # fill is the open, not the level. Before this every loss was floored
@@ -738,15 +762,21 @@ def simulate_trade(df: pd.DataFrame, signal_i: int, trade: dict,
             gain = (fill_p - entry) if trend == "Bullish" else (entry - fill_p)
             booked += part_frac * gain / risk
             size -= part_frac
+        # A LONG'S POLICY STOP IS IN THE EX-DIVIDEND BASIS (engine fix
+        # dividends, review 2026-11-04): FINRA 5330 lowered the resting stop
+        # by every dividend since entry, so a stop recomputed from the entry
+        # or a high-water mark of pre-dividend prices is lowered by the same
+        # amount, or the policy would undo the reduction a bar later.
+        _div_px = (sum_div_long if trend == "Bullish" else 0.0)
         if be_at is not None and peak >= be_at:
-            new_stop = entry
+            new_stop = entry - _div_px
             if (trend == "Bullish" and new_stop > stop) or \
                (trend == "Bearish" and new_stop < stop):
                 pending_stop = new_stop
         if trail_atr is not None and atr_v > 0 and peak >= arm_at:
             hw = entry + peak * risk if trend == "Bullish" \
                 else entry - peak * risk
-            new_stop = hw - trail_atr * atr_v if trend == "Bullish" \
+            new_stop = hw - trail_atr * atr_v - _div_px if trend == "Bullish" \
                 else hw + trail_atr * atr_v
             # A trailing stop never moves against us.
             if (trend == "Bullish" and new_stop > stop) or \
@@ -1018,42 +1048,70 @@ def print_hold_profile(trades: list, cfg: dict) -> None:
     print(f"    on data already spent — the ADX-35 mistake in a different hat.")
 
 
+def _when(x):
+    """A sortable instant for a trade date: a Timestamp (tz dropped to UTC
+    wall time), an integer bar index as itself; NaT/None -> None."""
+    if x is None:
+        return None
+    try:
+        t = pd.Timestamp(x)
+    except Exception:                                  # noqa: BLE001
+        return None
+    if pd.isna(t):
+        return None
+    if t.tzinfo is not None:
+        t = t.tz_convert("UTC").tz_localize(None)
+    return t
+
+
 def time_ordered(trades: list[dict]) -> list[dict]:
     """
     Trades in the order their R was realised: exit date, then entry date
     (engine fix time_order). run() concatenates trades ticker by ticker, so an
-    equity curve over that list is a drawdown in LISTING order: a toy pair of
-    tickers reads -3.0 R in ticker order and -2.0 R in time. Unchanged when
-    the dates cannot be ordered (a frame with no Date column).
+    equity curve over that list is a drawdown in LISTING order: the
+    selftest's toy pair of tickers reads -3.0 R in ticker order and -1.0 R
+    in time. Unchanged (listing order) when a date is missing or the dates
+    are of mixed kinds; bar-index dates order as numbers.
     """
-    try:
-        return sorted(trades, key=lambda t: (pd.Timestamp(t["exit_date"]),
-                                             pd.Timestamp(t["entry_date"])))
-    except Exception:                                  # noqa: BLE001
+    keys = [(_when(t.get("exit_date")), _when(t.get("entry_date"))) for t in trades]
+    if any(a is None or b is None for a, b in keys):
         return list(trades)
+    try:
+        order = sorted(range(len(trades)), key=lambda k: keys[k])
+    except TypeError:                                  # mixed date kinds
+        return list(trades)
+    return [trades[k] for k in order]
 
 
 def episode_ids(trades: list[dict]) -> list[int]:
     """
     One id per trade: same-ticker trades whose holding periods overlap share
     an EPISODE (a trade entered on or before the latest exit of the
-    episode's trades joins it). The forward record counts episodes the same
-    way. A trade with no ticker or dates is its own episode.
+    episode's trades joins it): one move, counted once. (The forward
+    record's episodes group consecutive signal BARS; this groups holding
+    periods, which is what makes trades dependent.) A trade with no ticker
+    or no readable dates is its own episode.
     """
     ids = [0] * len(trades)
-    order = sorted(range(len(trades)), key=lambda k: (
-        str(trades[k].get("ticker")), str(trades[k].get("entry_date"))))
+    _w = [(_when(t.get("entry_date")), _when(t.get("exit_date"))) for t in trades]
+
+    def _key(k):
+        e = _w[k][0]
+        return (str(trades[k].get("ticker")), e is None, e if e is not None else pd.Timestamp(0))
+    try:
+        order = sorted(range(len(trades)), key=_key)
+    except TypeError:
+        order = list(range(len(trades)))
     nxt, last_tk, last_exit, cur = 0, object(), None, -1
     for k in order:
         t = trades[k]
         tk = t.get("ticker")
-        try:
-            ent, ex = pd.Timestamp(t["entry_date"]), pd.Timestamp(t["exit_date"])
-        except Exception:                              # noqa: BLE001
-            ent = ex = None
+        ent, ex = _w[k]
+        if ex is None:
+            ent = None
         if tk is None or ent is None or tk != last_tk or last_exit is None or ent > last_exit:
             cur, nxt = nxt, nxt + 1
-            last_exit = ex
+            last_exit = ex if ent is not None else None
         else:
             last_exit = max(last_exit, ex)
         last_tk = tk
@@ -1082,11 +1140,23 @@ def clustered_ci(trades: list[dict], z: float = 1.96) -> dict:
         sums[g] = sums.get(g, 0.0) + float(v)
     G = len(sums)
     se_ind = float(r.std(ddof=1)) / math.sqrt(n)
-    var_cl = (G / (G - 1)) * sum(v * v for v in sums.values()) / (n * n) if G > 1 else float("nan")
-    se_cl = math.sqrt(var_cl) if var_cl == var_cl and var_cl > 0 else float("nan")
-    n_eff = (n * se_ind ** 2 / se_cl ** 2) if se_cl == se_cl and se_cl > 0 else float(n)
-    return {"n": n, "episodes": G, "mean": m, "se": se_cl, "se_indep": se_ind,
-            "lo": m - z * se_cl, "hi": m + z * se_cl, "n_eff": n_eff}
+    if G < 2:
+        # ONE EPISODE: the dependence is total and no SE can be estimated
+        # from one cluster. Unmeasurable, said so, never the independent SE.
+        return {"n": n, "episodes": G, "mean": m, "se": float("nan"), "se_indep": se_ind,
+                "lo": float("nan"), "hi": float("nan"), "n_eff": 1.0, "unmeasurable": True}
+    var_cl = (G / (G - 1)) * sum(v * v for v in sums.values()) / (n * n)
+    se_cl = math.sqrt(var_cl) if var_cl > 0 else 0.0
+    # NEVER NARROWER THAN INDEPENDENCE (review 2026-11-04). CR1 can come out
+    # below s/sqrt(n) when trades inside an episode offset each other (a long
+    # and a short on the same ticker, overlapping), which would read as MORE
+    # information than independent trades carry; n_eff would exceed n and a
+    # band could look powered on that alone. The fix exists to widen a CI
+    # that overlap makes too narrow, never to narrow one.
+    se = max(se_cl, se_ind)
+    n_eff = (n * se_ind ** 2 / se ** 2) if se > 0 else float(n)
+    return {"n": n, "episodes": G, "mean": m, "se": se, "se_indep": se_ind,
+            "lo": m - z * se, "hi": m + z * se, "n_eff": n_eff, "unmeasurable": False}
 
 
 def stats(trades: list[dict]) -> dict:
@@ -1332,7 +1402,10 @@ def download(ticker: str, years: int,
     dataset — the line that tells you whether two runs are comparable at all.
     """
     if bar_cache is None:
-        return _download_uncached(ticker, years, interval)
+        df = _download_uncached(ticker, years, interval)
+        if df is not None and interval == "1d" and _fix("dividends") and not AUTO_ADJUST:
+            df = attach_dividends(df, ticker)
+        return df
     df, meta, status = bar_cache.get_or_fetch(
         ticker, interval, years,
         lambda: _download_uncached(ticker, years, interval),
@@ -1349,6 +1422,10 @@ def download(ticker: str, years: int,
 # fingerprint of the bars, so record_recheck can still say CODE MOVED on
 # the same frozen cache. The dividend history gets its own line in run().
 _DIV_LOG: list[tuple] = []
+# The closes fetched WITH each dividend history: Yahoo states dividends on
+# the split basis of the day they are fetched, the frozen bars on the basis
+# of the day they were frozen. attach_dividends() compares the two.
+_DIV_REF: dict = {}
 
 
 def _dividend_path(ticker: str):
@@ -1368,26 +1445,38 @@ def dividend_history(ticker: str, fetch=None) -> "dict | None":
     path = _dividend_path(ticker)
     if path is not None and path.exists() and CACHE_ENABLED and not CACHE_REFRESH:
         try:
-            amounts = json.loads(path.read_text())["amounts"]
+            _j = json.loads(path.read_text())
+            amounts = _j["amounts"]
+            _DIV_REF[ticker.strip().upper()] = _j.get("closes") or {}
             _DIV_LOG.append((ticker, "hit", amounts))
             return amounts
         except Exception:                              # noqa: BLE001
             pass
+    # The bars WITH their actions (data_source.fetch_dividends): an empty
+    # answer is a throttled one, never "pays no dividend", so it is not frozen.
     try:
         if fetch is not None:
             ser = fetch(ticker)
+            amounts = None if ser is None else {
+                str(pd.Timestamp(d).date()): float(v) for d, v in ser.items() if v == v and float(v) > 0}
+        elif data_source is not None:
+            _closes: dict = {}
+            amounts = data_source.fetch_dividends(ticker, period="max", closes=_closes)
+            _DIV_REF[ticker.strip().upper()] = _closes
         else:
-            ser = yf.Ticker(ticker).dividends
-        amounts = {str(pd.Timestamp(d).date()): float(v)
-                   for d, v in (ser.items() if ser is not None else [])
-                   if v == v and float(v) > 0}
+            amounts = None
     except Exception as e:                             # noqa: BLE001
         print(f"  ! {ticker}: dividend history unavailable ({e}); its trades are NOT credited")
+        _DIV_LOG.append((ticker, "miss", None))
+        return None
+    if amounts is None:
+        print(f"  ! {ticker}: dividend history unavailable (empty answer); its trades are NOT credited")
         _DIV_LOG.append((ticker, "miss", None))
         return None
     if path is not None and CACHE_ENABLED:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"ticker": ticker.strip().upper(), "amounts": amounts,
+                                    "closes": _DIV_REF.get(ticker.strip().upper(), {}),
                                     "fetched_at": datetime.now().isoformat(timespec="seconds")},
                                    indent=1, sort_keys=True) + "\n")
     _DIV_LOG.append((ticker, "stored" if path is not None else "fetch", amounts))
@@ -1405,6 +1494,24 @@ def attach_dividends(df: pd.DataFrame, ticker: str, amounts: "dict | None" = Non
         amounts = dividend_history(ticker)
     if amounts is None or df is None or "Date" not in df.columns or df.empty:
         return df
+    # ONE SPLIT BASIS (review 2026-11-04). A split between the day the bars
+    # were frozen and the day the dividends were fetched puts the dividends
+    # on the new basis and the bars on the old: every credit and every stop
+    # reduction off by the split ratio. The closes fetched with the history
+    # are compared with the frozen closes on the dates they share; a ratio
+    # away from 1 rescales the dividends to the bars, and the run says so.
+    _ref = _DIV_REF.get(ticker.strip().upper()) or {}
+    if _ref and amounts:
+        _fc = {str(pd.Timestamp(d).date()): float(c) for d, c in zip(df["Date"], df["Close"])
+               if c == c and float(c) > 0}
+        _rat = [(_fc[d] / float(c)) for d, c in _ref.items() if d in _fc and float(c) > 0]
+        if _rat:
+            _ratio = float(np.median(_rat))
+            if abs(_ratio - 1.0) > 0.02:
+                print(f"  ! {ticker}: the frozen bars and the dividend history are on different split "
+                      f"bases (x{_ratio:.3f}); dividends rescaled to the bars")
+                amounts = {d: float(a) * _ratio for d, a in amounts.items()}
+                _DIV_LOG.append((ticker, f"rescaled x{_ratio:.4f}", amounts))
     out = df.copy()
     dates = pd.to_datetime(out["Date"])
     if dates.dt.tz is not None:
@@ -1616,7 +1723,8 @@ def run(cfg: dict, policy: dict | None = None) -> list[dict]:
             # printed is the episode-clustered one, the independent one beside it.
             _c = clustered_ci(sub)
             _cl_note = (f"  clustered over {_c['episodes']} episodes "
-                        f"(independent [{lo:+.3f}, {hi:+.3f}])")
+                        f"(independent [{lo:+.3f}, {hi:+.3f}])"
+                        f"{'  <- one episode: no CI can be estimated' if _c.get('unmeasurable') else ''}")
             lo, hi = _c["lo"], _c["hi"]
         print(f"  {label}          : {ss['trades']:>4} trades  "
               f"{ss['win_rate']:>5.1f}% win  {ss['avg_r']:+.3f} R  "
@@ -1628,7 +1736,7 @@ def run(cfg: dict, policy: dict | None = None) -> list[dict]:
     if bar_cache is not None and _CACHE_LOG:
         metas = [m for m, _ in _CACHE_LOG]
         statuses = [st for _, st in _CACHE_LOG]
-        print(f"  {bar_cache.summarise(metas, statuses)}")
+        print(f"  {bar_cache.summarise(metas, statuses)} · engine fixes: {describe_engine()}")
         # On a refresh, say WHAT moved. One altered row dated near today is a
         # bar that was still forming; many rows spread through history is the
         # provider re-adjusting the series. Those need different fixes, and
@@ -1721,8 +1829,8 @@ def run(cfg: dict, policy: dict | None = None) -> list[dict]:
                   f"walked, never read for a signal)")
         _pg = tally.get("price rows with a NaN (ADX blank after them)", 0)
         if _pg:
-            print(f"  !! {_pg} price row(s) with a NaN: ADX is blank after each, so its ticker")
-            print("     reads no signal for the rest of the series (engine fix price_gaps)")
+            print(f"  !! {_pg} price row(s) with a NaN Open/High/Low/Close: a NaN High, Low or Close")
+            print("     blanks ADX for the rest of its series, and its ticker reads no signal (engine fix price_gaps)")
         _pgd = tally.get("price rows with a NaN, dropped", 0)
         if _pgd:
             print(f"  price rows with a NaN     : {_pgd:>6}  (dropped before the indicators, as live does)")
@@ -2822,11 +2930,12 @@ def selftest() -> int:
         "the engine fixes must be OFF by default: every committed result was made without them"
     assert parse_engine_fixes("all") == frozenset(ALL_ENGINE_FIXES) and parse_engine_fixes("none") == frozenset() \
         and parse_engine_fixes("dividends, lookback") == {"dividends", "lookback"}
-    try:
-        parse_engine_fixes("dividend")
-        raise AssertionError("an unknown fix name must be refused, not ignored")
-    except ValueError:
-        pass
+    for _bad in ("dividend", "all,bogus"):
+        try:
+            parse_engine_fixes(_bad)
+            raise AssertionError(f"{_bad!r}: an unknown fix name must be refused, not ignored")
+        except ValueError:
+            pass
     _saved_fixes = ENGINE_FIXES
     try:
         def _bars(rows, start="2024-01-02", div=None):
@@ -2873,6 +2982,7 @@ def selftest() -> int:
         _wd = simulate_trade(_fd, 0, _lt, _cfg0)
         assert _wd["outcome"] == "win" and abs(_wd["dividend_r"] - 0.75) < 1e-9 and _wd["ex_dividends"] == 1 \
             and abs(_wd["r"] - 5.75) < 1e-9 and abs(_wd["stop_at_exit"] - 96.5) < 1e-9, _wd
+        assert _wd["mfe_r"] >= _wd["r"] - 1e-9, "the excursion is in total return: it includes the dividend"
         # bought ON the ex-date (the entry bar): not entitled, nothing credited
         _fe = _bars([[100, 100, 100, 100], [100, 101, 99, 100], [100, 111, 99, 108]], div=[0.0, 1.5, 0.0])
         assert simulate_trade(_fe, 0, _lt, _cfg0)["dividend_r"] == 0.0, "an entry on the ex-date is not paid"
@@ -2890,6 +3000,36 @@ def selftest() -> int:
                                           "2024-01-02": 0.1})
         assert list(_ad["Dividend"]) == [0.1, 0.0, 0.0, 0.0, 0.4], list(_ad["Dividend"])
         assert attach_dividends(_fa, "X", {}).Dividend.sum() == 0.0, "no ex-dates: a column of zeros"
+        # exit ON the ex-date is paid; exit the bar before is not (timeouts at max_hold 2 and 1)
+        _fx = _bars([[100, 100, 100, 100], [100, 101, 99, 100], [100, 101, 99.5, 100], [99, 100, 98.6, 99.5]],
+                    div=[0.0, 0.0, 0.0, 1.0])
+        assert abs(simulate_trade(_fx, 0, _lt, dict(_cfg0, max_hold=3))["dividend_r"] - 0.5) < 1e-9
+        assert simulate_trade(_fx, 0, _lt, dict(_cfg0, max_hold=2))["dividend_r"] == 0.0
+        # a break-even stop set after the ex-date stays in the ex-dividend basis (99, not 100)
+        _fbe = _bars([[100, 100, 100, 100], [100, 103, 99.5, 102.5], [101.5, 103, 101, 102], [101, 101.5, 100.2, 101],
+                      [100.5, 100.6, 98.5, 99]], div=[0.0, 0.0, 1.0, 0.0, 0.0])
+        _tbe = simulate_trade(_fbe, 0, _lt, _cfg0, policy={"breakeven_at": 1.0})
+        assert abs(_tbe["stop_at_exit"] - 99.0) < 1e-9 and _tbe["outcome"] == "loss", _tbe
+        assert _tbe["mfe_r"] >= _tbe["r"] - 1e-9 or _tbe["r"] < 0
+        # a NaN-price row on an ex-date: its dividend moves to the next row kept
+        set_engine_fixes("dividends,price_gaps")
+        _rng2 = np.random.default_rng(3)
+        _px2 = 100 * np.exp(np.cumsum(_rng2.normal(0.0005, 0.01, 260)))
+        _raw2 = pd.DataFrame({"Date": pd.bdate_range("2022-01-03", periods=260), "Open": _px2, "High": _px2 * 1.01,
+                              "Low": _px2 * 0.99, "Close": _px2, "Volume": 1e6, "Dividend": 0.0})
+        _raw2.loc[200, "Dividend"] = 1.0
+        _raw2.loc[200, "Close"] = np.nan
+        _c2 = compute(_raw2)
+        assert abs(_c2["Dividend"].sum() - 1.0) < 1e-12, "a dropped row's dividend must not be lost"
+        set_engine_fixes("dividends")
+        # a split between the frozen bars and the dividend fetch: the dividends are rescaled to the bars
+        _DIV_REF["SPL"] = {"2024-01-03": 0.5, "2024-01-04": 0.5}             # fetched after a 2:1 split
+        _fs2 = _bars([[1, 1, 1, 1.0]] * 5, start="2024-01-02")                  # frozen closes of 1.0
+        try:
+            _sp = attach_dividends(_fs2, "SPL", {"2024-01-05": 0.1})
+        finally:
+            _DIV_REF.pop("SPL", None)
+        assert abs(_sp["Dividend"].sum() - 0.2) < 1e-12, "dividends on the new split basis must be rescaled"
         # the history is frozen beside the bars and read back without a fetch; a failed fetch says so
         if bar_cache is not None:
             import tempfile as _tf
@@ -2944,7 +3084,25 @@ def selftest() -> int:
             t["entry_date"] = pd.Timestamp("2024-01-01") + pd.Timedelta(days=10 * (k // 2))
             t["exit_date"] = t["entry_date"] + pd.Timedelta(days=5)
         _c2 = clustered_ci(_dup)
-        assert _c2["episodes"] == 5 and _c2["se"] > _c2["se_indep"] * 1.3 and _c2["n_eff"] < 6, _c2
+        assert _c2["episodes"] == 5 and abs(_c2["se"] / _c2["se_indep"] - 1.5) < 1e-9 and _c2["n_eff"] < 6, \
+            "each trade counted twice: CR1 is exactly 1.5x the independent SE here (G/(G-1) included)"
+        # offsetting trades in one episode never narrow the CI; one episode is unmeasurable
+        _offs = []
+        for k in range(30):
+            _e = pd.Timestamp("2024-01-01") + pd.Timedelta(days=10 * k)
+            _offs += [_ep("T", _e, _e + pd.Timedelta(days=5), 1.0 + 0.01 * k),
+                      _ep("T", _e + pd.Timedelta(days=1), _e + pd.Timedelta(days=5), -1.0)]
+        _c3 = clustered_ci(_offs)
+        assert _c3["se"] >= _c3["se_indep"] - 1e-15 and _c3["n_eff"] <= _c3["n"] + 1e-9, _c3
+        _c4 = clustered_ci([_ep("T", "2024-01-01", "2024-03-01", v) for v in (1.0, -1.0, 2.0)])
+        assert _c4["unmeasurable"] and _c4["lo"] != _c4["lo"], _c4
+        # bar-index dates order numerically (9 before 10), and a trade with no dates is alone
+        _ii = [{"ticker": "X", "r": 1.0, "entry_date": 9, "exit_date": 12},
+               {"ticker": "X", "r": 1.0, "entry_date": 10, "exit_date": 13},
+               {"ticker": "X", "r": 1.0, "entry_date": 15, "exit_date": 20},
+               {"ticker": "X", "r": 1.0, "entry_date": None, "exit_date": None}]
+        _iid = episode_ids(_ii)
+        assert _iid[0] == _iid[1] and len(set(_iid)) == 3, _iid
         print(f"fix clustered_ci        : overlapping trades share an episode; duplicated trades widen the SE "
               f"x{_c2['se'] / _c2['se_indep']:.2f} (n_eff {_c2['n_eff']:.1f} of {_c2['n']})")
 
@@ -2984,7 +3142,9 @@ def selftest() -> int:
         _rd2, _rc2 = download, compute
         try:
             set_engine_fixes("all")
-            globals()["download"] = lambda tk, yrs, *a, **k: _synthetic_ohlc(up=True, adx=40.0)
+            # the stub frame carries ex-dates, so the dividend path runs inside run()
+            globals()["download"] = lambda tk, yrs, *a, **k: _synthetic_ohlc(up=True, adx=40.0).assign(
+                Dividend=[0.5 if k % 9 == 4 else 0.0 for k in range(140)])
             globals()["compute"] = lambda df: df
             _bf = io.StringIO()
             with contextlib.redirect_stdout(_bf):
@@ -2994,6 +3154,8 @@ def selftest() -> int:
             _cl_long = clustered_ci(split_by_side(_rt, "Bullish"))
             assert _cl_long["episodes"] < _cl_long["n"], "the synthetic run must overlap, or this proves nothing"
             assert f"95% CI [{_cl_long['lo']:+.3f}, {_cl_long['hi']:+.3f}]" in _txt, _txt[-2500:]
+            assert sum(t["ex_dividends"] for t in _rt) > 0 and \
+                "ex-dividend inside trades :      0" not in _txt, "the dividend path must run inside run()"
             assert "Engine fixes : price_gaps, lookback, open_beyond_target, dividends, time_order, clustered_ci" \
                 in _txt and "open beyond the target    :" in _txt and "ex-dividend inside trades :" in _txt \
                 and "look-back incomplete      :" in _txt and "clustered over" in _txt, _txt[-3000:]

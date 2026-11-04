@@ -201,7 +201,8 @@ Every decision of this review is now taken.
   as well"; BACKLOG 47):** all six behind `backtest.ENGINE_FIXES`
   (`--engine-fixes`), so no committed number moves until the re-runs on the
   frozen bars land with the decision to turn them on. The grader's side of
-  the open beyond the target is proposed amendment H, the owner's.
+  the open beyond the target and of dividends were applied 2026-11-04 as
+  grading amendments H and I (owner's decision).
   As found: **Research engine (each needs a re-run on the laptop's frozen bars, so fix
   and re-run ship together):** one NaN High/Low/Close blanks ADX for the rest
   of the series and the ticker signals no more (the tally is never printed);

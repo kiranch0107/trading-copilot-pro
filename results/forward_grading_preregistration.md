@@ -8,6 +8,68 @@ is written; after that nothing here changes. Companion to
 `results/forward_record_preregistration.md`, which fixed what is RECORDED;
 this fixes how it is GRADED.
 
+## AMENDED 2026-11-04 — (H) an open past the target fills there; (I) dividends are credited and the stop reduced on the ex-date (expert review 2026-11-03, BACKLOG 46/47; owner's decision). RULE CHANGES, made with 405 outcome rows on file
+
+**Made after 405 `stop_distance` outcomes (218 losses, 172 wins, 15
+voids), by the owner's decision ("go with amendment H and grader dividends
+as well"), and said here, as the 2026-10-29 amendment did.** Both correct
+the grade toward what this document already claims to measure, "the rules
+a trader following the alert would have faced"; neither touches the
+signal, the fill, the risk unit, the hold or the costs.
+
+**(H) The rule.** In the table below, before "stop and target both inside
+one bar → the stop": **a bar that OPENS at or beyond the target (at or
+below it for a short) → the target, filled at that open**. Stop-first is
+the conservative reading of a bar whose range holds both levels when the
+order inside the bar is unknown; an open past the target is not unknown: a
+resting limit fills at that open, whatever the bar does after. Before
+this, target 110, open 112, low 94 graded −1.01 R (the stop) for a trade
+that took about +5.9 R on its fill. Rare: the bar's range must exceed the
+whole stop-to-target distance.
+
+**(I) The rule.** On every bar of the walk AFTER the entry bar that is an
+ex-dividend date, the dividend is credited to a long (a short pays it), in
+R on the fill risk, and the long's stop (a short's target) is reduced by
+the dividend on that bar, as FINRA Rule 5330 reduces a resting sell stop
+(buy limit) on the ex-date; the long's target and a short's stop are not.
+Bought at the entry bar's open, the position is entitled on a later
+ex-date and not on the entry bar's own. The grade's bars are raw
+(`auto_adjust=False`), so on the ex-date the price opens lower by about the
+dividend and, before this, nothing paid it back: a long was understated by
+the dividend and could be stopped by the drop alone. The history comes
+from Yahoo's bars fetched with their actions (`data_source.fetch_dividends`),
+asked once per ticker and only when a row settles; an empty answer is
+unavailable, never "pays no dividend". A settled row with no history waits
+`GRADE_DIV_WAIT_DAYS` (5) calendar days past its exit and is then graded
+without it, with `detail.dividend_basis` "unavailable".
+
+**What is recorded.** Every outcome's detail carries `rules` ("2026-11-04
+H+I"), `open_past_target_stop_touched`, `dividend_basis`, `dividend_r` and
+`ex_dividends`; `r` and `r_at_level` include the dividend. `summary()`
+counts the rows graded under the amendments, those H re-booked, those
+credited a dividend (and its total R) and those graded without a history;
+`report()` prints them.
+
+**What it does to the record.** Nothing already graded changes: one
+outcome per row, ever, and the 405 rows stand as graded. The rules apply
+to every row graded from this merge. **Stated, not hidden:** the rows on
+file are biased by (I) in one direction. About a third of the graded rows
+are on dividend payers (KO, OXY, MO, PFE, PM, CVX, MDLZ, COP, PG, JNJ,
+ABBV, XOM among them), a 20-session hold spans an ex-date about one time
+in three, and on a high yielder the dividend is a large part of 1 R; those
+rows are understated, and any stopped by the ex-date drop alone are
+mislabelled losses. Which rows, and by how much, cannot be listed without
+the dividend histories; re-grading the rows on file under H+I as a second
+basis is possible and would be a READING change, the owner's to make.
+(H) cannot be audited here either (it needs the bars); it is rare.
+
+**The research engine has both rules** as `backtest` engine fixes
+`open_beyond_target` and `dividends` (BACKLOG 47), off by default there
+until the research re-runs land; `backtest.GRADER_FIXES` names them, and
+`engine_differential` compares the grader with the engine running exactly
+those two, on the frozen bars and on synthetic frames with ex-dates (0
+mismatches). Pinned in `check_engine_fixes_off_by_default`.
+
 ## AMENDED 2026-10-29 — a fill inside the risk floor is VOID (logic review L2, owner's option (a)). RULE CHANGE, made with 182 outcome rows on file
 
 **This document said it changes nothing after the first outcome row. This
