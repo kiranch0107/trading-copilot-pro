@@ -1,3 +1,5 @@
+> **ENGINE CHANGED 2026-11-04 (BACKLOG 47) — read with this caveat.** This file was produced on the research engine BEFORE its six review fixes became the default (owner, 2026-11-04). On the record's frozen bars the fixes moved no sign and no conclusion (results/engine_fixes_reading_2026-11-04.md: 12t/10y avg R -0.075 -> -0.071, long +0.059 -> +0.066). `ENGINE_FIXES=none` reproduces this file's engine. Not re-run; re-run before relying on its exact R.
+
 # Out-of-sample validation — run 5 (2026-10-29), the reproduction owed by the research engine floor
 
 **Run by the owner 2026-10-29 on the laptop, `python oos_validate.py`,

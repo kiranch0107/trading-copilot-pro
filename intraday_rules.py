@@ -443,8 +443,12 @@ def simulate(d: pd.DataFrame, setup: dict, tally: dict | None = None) -> dict | 
     # declared (results/intraday_rules_preregistration.md); the daily swing
     # engine's floor at the fill (2026-10-29) is a swing-trade rule and is
     # not applied here. Its results stand as readings of this engine.
+    # THE ENGINE ITS PRE-REGISTRATION FIXED (BACKLOG 47): the research
+    # engine's six fixes became the default on 2026-11-04; this measurement
+    # and the day-trade paper record that reads it keep the engine they were
+    # registered on, pinned per call.
     cfg = {"slippage_bps": SLIPPAGE_BPS, "commission": 0.0, "max_hold": max_hold,
-           "risk_floor": False}
+           "risk_floor": False, "engine_fixes": ()}
     r = bt.simulate_trade(d, i, {"trend": setup["trend"], "entry": setup["entry"],
                                  "stop": setup["stop"], "target": setup["target"],
                                  "rr": setup["rr"]}, cfg, tally=tally)
