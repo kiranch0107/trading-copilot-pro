@@ -1,0 +1,28 @@
+!! UNDERPOWERED -- 149 settled pairs, under the pre-registered floor of 150
+!! (results/option_target_exit_preregistration.md: "If n < 150 pairs the run is labelled
+!! UNDERPOWERED in its file whatever the CI says, and the reading above is not made from it").
+!! No ADOPT / REJECT / NOT ESTABLISHED reading is made from this file. Read with
+!! results/option_target_exit_run1.md.
+
+==============================================================================
+OPTION-LEG BACKTEST
+==============================================================================
+Tickers   : TSLA, NVDA, AAPL, MSFT, AMZN, META, ROKU
+History   : 5y   Entry DTE: 30   IV: 1.15x realised
+Costs     : 5.0% round-trip spread
+Option prices are MODELLED (Black-Scholes on the real underlying path),
+not historical quotes. IV is assumed, not observed — see the header.
+Config    : live
+==============================================================================
+
+D3 PAIRED: A = TP+200/SL-50/out at 7 DTE/thesis on;  B = A + sell at the underlying's target
+  pairs        : 149 (settled in both arms; 28 differ)
+  mean A       : +0.07% of premium
+  mean B       : +1.84% of premium
+  B - A        : +1.77%  sd 36.37  SE 2.98  95% CI [-4.07, +7.61]
+  B exits      : {'STOP': 65, 'TARGET_U': 31, 'TIME': 39, 'THESIS': 12, 'TARGET': 2}
+  IV multiplier: 1.15  (read with the other multiplier; see the pre-registration)
+  data: v2-78390259672cedbe  (7 series, 7 cached / 0 fetched, oldest 55d) · engine fixes: price_gaps, lookback, open_beyond_target, dividends, time_order, clustered_ci (the default)
+
+DATA COVERAGE: 7 of 7 ticker(s) supplied usable bars — compare this across runs BEFORE comparing any number above
+  used    : TSLA, NVDA, AAPL, MSFT, AMZN, META, ROKU
