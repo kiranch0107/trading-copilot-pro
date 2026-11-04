@@ -158,13 +158,14 @@ def bands(trades: list[dict], levels: list[float]) -> list[dict]:
     missing = 0
     for i, lo in enumerate(edges):
         hi = edges[i + 1] if i + 1 < len(edges) else math.inf
-        rs = []
+        rs, tb = [], []
         for t in trades:
             a = signal_adx(t)
             if a is None:
                 continue
             if lo <= a < hi and t.get("r") is not None:
                 rs.append(float(t["r"]))
+                tb.append(t)
         n = len(rs)
         if n >= 2:
             arr = np.array(rs, dtype=float)
@@ -172,11 +173,23 @@ def bands(trades: list[dict], levels: list[float]) -> list[dict]:
         else:
             mean, sd = (float(rs[0]) if rs else 0.0), 0.0
         se = sd / math.sqrt(n) if n > 1 and sd > 0 else 0.0
-        mde = pw.mde(sd, n, alpha=ALPHA, power=POWER) if n > 1 and sd > 0 else math.inf
+        # OVERLAPPING TRADES ARE NOT INDEPENDENT (backtest engine fix
+        # clustered_ci, BACKLOG 47; off by default). With it on, the band's
+        # SE is clustered by same-ticker episode, and p and the MDE read the
+        # effective n that SE implies, so a band cannot look powered on
+        # trades that are the same move counted twice.
+        n_test, episodes = float(n), None
+        import backtest as _bt
+        if _bt._fix("clustered_ci") and n > 1 and sd > 0:
+            _c = _bt.clustered_ci(tb, z=CI_Z)
+            if _c["se"] == _c["se"] and _c["se"] > 0:
+                se, n_test, episodes = _c["se"], _c["n_eff"], _c["episodes"]
+        mde = pw.mde(sd, n_test, alpha=ALPHA, power=POWER) if n > 1 and sd > 0 else math.inf
         out.append({"lo": lo, "hi": hi, "n": n, "mean": mean, "sd": sd,
-                    "p": t_pvalue(mean, sd, n), "ci_lo": mean - CI_Z * se,
+                    "p": t_pvalue(mean, sd, n_test), "ci_lo": mean - CI_Z * se,
                     "ci_hi": mean + CI_Z * se, "mde": mde,
-                    "powered": abs(mean) >= mde, "big_enough": n >= MIN_TRADES})
+                    "powered": abs(mean) >= mde, "big_enough": n >= MIN_TRADES,
+                    "n_eff": n_test, "episodes": episodes})
     missing = sum(1 for t in trades if signal_adx(t) is None)
     for b in out:
         b["missing"] = missing
@@ -569,6 +582,30 @@ def selftest() -> int:
         _bt.run, _sys.argv = real_run, real_argv
     assert rc3 == 2, "a --band edge missing from --levels must refuse to run"
     print("band guard       : --band 30,35 without 30 in --levels is refused")
+
+    # ── CLUSTERED BANDS (backtest engine fix clustered_ci, BACKLOG 47) ──
+    # Off: the committed independent CI. On: each trade counted twice as an
+    # overlapping same-ticker pair widens the CI and shrinks the n p reads.
+    import pandas as _pd
+    _tw = []
+    for k, r in enumerate([0.8, -1.0, 2.1, -1.0, 0.3, -1.0, 1.5, -0.4] * 3):
+        _e = _pd.Timestamp("2024-01-01") + _pd.Timedelta(days=20 * k)
+        for _rep in (0, 1):
+            _tw.append({"ticker": "T", "r": r, "setup": {"adx": 37.0},
+                        "entry_date": _e + _pd.Timedelta(days=_rep), "exit_date": _e + _pd.Timedelta(days=8)})
+    _saved = _bt.ENGINE_FIXES
+    try:
+        _bt.set_engine_fixes("")
+        _b0 = bands(_tw, [35.0])[0]
+        _bt.set_engine_fixes("clustered_ci")
+        _b1 = bands(_tw, [35.0])[0]
+    finally:
+        _bt.set_engine_fixes(_saved)
+    assert _b0["n"] == _b1["n"] == 48 and _b0["episodes"] is None and _b1["episodes"] == 24, (_b0, _b1)
+    assert (_b1["ci_hi"] - _b1["ci_lo"]) > 1.3 * (_b0["ci_hi"] - _b0["ci_lo"]) and _b1["p"] > _b0["p"] \
+        and _b1["mde"] > _b0["mde"] and _b1["n_eff"] < 30, (_b0, _b1)
+    print(f"clustered bands  : off, the committed CI; on, 48 trades in 24 episodes read as n_eff "
+          f"{_b1['n_eff']:.1f} (MDE {_b0['mde']:.2f} -> {_b1['mde']:.2f} R)")
 
     print("=" * 68)
     print("All self-tests passed.")

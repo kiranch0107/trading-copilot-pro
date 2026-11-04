@@ -130,6 +130,8 @@ def run(per_frame: int = PER_FRAME, seed: int = SEED) -> int:
     frames = cached_daily_frames()
     print("=" * 78)
     print("ENGINE DIFFERENTIAL — backtest.simulate_trade vs forward_log.resolve_signal, real bars")
+    print(f"Engine fixes : {bt.describe_engine()}"
+          f"{'' if not bt.ENGINE_FIXES else '  <- the grader has none of them; open_beyond_target differs by design until amendment H'}")
     print("=" * 78)
     if not frames:
         print("  no daily frames in .bar_cache; run a backtest first (they freeze the bars)")
@@ -168,6 +170,15 @@ def _synthetic(seed: int, n: int = 90) -> pd.DataFrame:
 def selftest() -> int:
     print("engine_differential.py selftest")
     print("=" * 72)
+    _saved_fixes = bt.ENGINE_FIXES
+    bt.set_engine_fixes("")            # the committed engine is the one pinned to the grader
+    try:
+        return _selftest_body()
+    finally:
+        bt.set_engine_fixes(_saved_fixes)
+
+
+def _selftest_body() -> int:
     rng = random.Random(1)
     tot = {"compared": 0, "void_both": 0, "unsettled_both": 0, "void_floor": 0}
     mism = []
@@ -209,6 +220,30 @@ def selftest() -> int:
     r2 = compare_frame(_synthetic(4), 30, random.Random(2), resolve=_mislabel)
     assert r2["mismatches"], "a relabelled outcome must be reported"
     print("comparator       : an R off by 0.01 and a relabelled outcome are both reported")
+    # THE ENGINE FIX THE GRADER DOES NOT HAVE (BACKLOG 47, amendment H proposed,
+    # not applied): a bar that opens beyond the target and trades through the
+    # stop. The committed engine and the grader both book -1 R; the research
+    # engine with open_beyond_target books the win at the open, so the two
+    # disagree on exactly this bar until the owner decides amendment H.
+    _f = pd.DataFrame({"Date": pd.bdate_range("2026-03-02", periods=24),
+                       "Open": [100.0] * 24, "High": [100.5] * 24, "Low": [99.5] * 24, "Close": [100.0] * 24,
+                       "Volume": 1e6})
+    _f.loc[2, ["Open", "High", "Low", "Close"]] = [112.0, 113.0, 94.0, 95.0]
+    _d = _f.set_index(pd.DatetimeIndex(_f["Date"])).drop(columns=["Date"])
+    _setup = {"trend": "Bullish", "entry": 100.0, "stop": 98.0, "target": 110.0, "rr": 5.0}
+    _cfg = {"slippage_bps": fl.GRADE_SLIPPAGE_BPS, "commission": 0.0, "max_hold": fl.GRADE_MAX_HOLD}
+    _row = {"trend": "Bullish", "bar_date": "2026-03-02", "setup": {"price": 100.0, "stop": 98.0, "target": 110.0}}
+    _g = fl.resolve_signal(_row, bars_rows(_d), today=dt.date(2026, 6, 1))
+    _e0 = bt.simulate_trade(_d, 0, _setup, _cfg)
+    assert _g["outcome"] == "loss" and _e0["outcome"] == "loss" and abs(_g["r"] - _e0["r"]) <= TOL_R, (_g, _e0)
+    bt.set_engine_fixes("open_beyond_target")
+    try:
+        _e1 = bt.simulate_trade(_d, 0, _setup, _cfg)
+    finally:
+        bt.set_engine_fixes("")
+    assert _e1["outcome"] == "win" and _e1["r"] > 5.0 and _g["outcome"] == "loss", (_e1, _g)
+    print(f"amendment H      : open 112 past target 110, low 94: the grader and the committed engine "
+          f"book {_g['r']:+.2f} R; the fix books {_e1['r']:+.2f} R (pending the owner)")
     assert TOL_R == 5e-5, "tolerance is the grader's four-decimal rounding, nothing looser"
     print("=" * 72)
     print("All self-tests passed.")

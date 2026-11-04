@@ -3830,6 +3830,66 @@ def check_option_target_exit_preregistered() -> None:
     print("  the D3 arm is off by default; its pre-registration fixes the arms, power, bar and commands")
 
 
+def check_engine_fixes_off_by_default() -> None:
+    """
+    Expert review 2026-11-03, the research-engine items (owner: "fix the
+    research engine items as well"; BACKLOG 47). Six defects of the share
+    engine are fixed behind backtest.ENGINE_FIXES, OFF by default, because
+    every one moves committed numbers and the re-run needs the frozen bars:
+    with the switch off the engine is the one every result was produced on.
+    Pinned: the default is off; each fix is wired where it acts; the levels'
+    look-back covers signal_core's widest window; run(), record_recheck and
+    engine_differential say which engine ran; the dividend history stays out
+    of the bar fingerprint; and the forward grader is NOT changed (its side of
+    open_beyond_target is amendment H, the owner's decision).
+    """
+    import os as _os
+    import backtest as bt
+    assert bt.ALL_ENGINE_FIXES == ("price_gaps", "lookback", "open_beyond_target",
+                                   "dividends", "time_order", "clustered_ci"), bt.ALL_ENGINE_FIXES
+    src = Path("backtest.py").read_text(encoding="utf-8")
+    assert 'ENGINE_FIXES: frozenset = parse_engine_fixes(os.environ.get("ENGINE_FIXES", ""))' in src, \
+        "the default must come from the environment, empty when unset"
+    if not _os.environ.get("ENGINE_FIXES"):
+        assert bt.ENGINE_FIXES == frozenset(), \
+            f"engine fixes {sorted(bt.ENGINE_FIXES)} on by default: every committed result was made without them"
+    where = {"price_gaps": "def compute(", "lookback": "def evaluate_signal(",
+             "open_beyond_target": "def simulate_trade(", "dividends": "def simulate_trade(",
+             "time_order": "def stats(", "clustered_ci": "def run("}
+    for name, fn in where.items():
+        body = src[src.find(fn):src.find("\ndef ", src.find(fn) + 1)]
+        assert f'_fix("{name}")' in body, f"engine fix {name} is not wired in {fn.strip('(').replace('def ', '')}()"
+    assert '_bt._fix("clustered_ci")' in Path("adx_retest.py").read_text(encoding="utf-8"), \
+        "adx_retest's bands must cluster under the fix"
+    assert 'df = attach_dividends(df, ticker)' in src[src.find("def download("):src.find("def dividend_history(")] \
+        and '_fix("dividends")' in src[src.find("def download("):src.find("def dividend_history(")], \
+        "download() must attach the dividend history under the fix"
+    _dh = src[src.find("def dividend_history("):src.find("def attach_dividends(")]
+    assert "_CACHE_LOG" not in _dh and src.count("_CACHE_LOG.append(") == 1, \
+        "the dividend history must stay out of the bar fingerprint, or record_recheck cannot say CODE MOVED"
+    tails = [int(x) for x in re.findall(r"\.tail\((\d+)\)", Path("signal_core.py").read_text(encoding="utf-8"))]
+    assert tails and max(tails) <= bt.LEVEL_LOOKBACK, \
+        f"signal_core reads tail({max(tails)}); LEVEL_LOOKBACK {bt.LEVEL_LOOKBACK} must cover it"
+    assert 'print(f"Engine fixes : {describe_engine()}")' in src[src.find("def run("):], "run() must name its engine"
+    rr = Path("record_recheck.py").read_text(encoding="utf-8")
+    assert '"--engine-fixes"' in rr and "bt.set_engine_fixes(a.engine_fixes)" in rr and \
+        'print(f"Engine fixes : {bt.describe_engine()}")' in rr, "record_recheck must take and print the switch"
+    assert '"--engine-fixes"' in src[src.find("def parse_args("):] and \
+        "set_engine_fixes(a.engine_fixes)" in src[src.find("def parse_args("):], "backtest.py must take the switch"
+    ed = Path("engine_differential.py").read_text(encoding="utf-8")
+    _st = ed[ed.find("def selftest("):ed.find("def _selftest_body(")]
+    assert "Engine fixes : {bt.describe_engine()}" in ed and 'bt.set_engine_fixes("")' in _st \
+        and _st.find('bt.set_engine_fixes("")') < _st.find("return _selftest_body()"), \
+        "engine_differential must compare the committed engine and say which it ran"
+    fl_src = Path("forward_log.py").read_text(encoding="utf-8")
+    rs_body = fl_src[fl_src.find("def resolve_signal("):fl_src.find("\ndef ", fl_src.find("def resolve_signal(") + 1)]
+    i_stop, i_tgt = rs_body.find("if l <= stop:"), rs_body.find("elif h >= target:")
+    assert 0 < i_stop < i_tgt and "open_beyond_target" not in rs_body, \
+        "the grader's stop-first rule is pre-registered; amendment H is the owner's to make"
+    print("  six engine fixes off by default, each wired where it acts; look-back covers tail(20); every "
+          "harness names its engine; dividends outside the bar fingerprint; the grader unchanged")
+
+
 def check_tiingo_split_adjusted() -> None:
     """
     The Tiingo fallback is SPLIT-adjusted like Yahoo's auto_adjust=False bars
@@ -3959,6 +4019,7 @@ CHECKS = [
     ("forward record's power stated at its own sd (D7)", check_forward_power_stated),
     ("option target-exit arm pre-registered (D3)", check_option_target_exit_preregistered),
     ("Tiingo fallback split-adjusted, its fill checked (review 11-03)", check_tiingo_split_adjusted),
+    ("research-engine fixes built, off by default (BACKLOG 47)", check_engine_fixes_off_by_default),
 ]
 
 

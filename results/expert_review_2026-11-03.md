@@ -197,7 +197,12 @@ Every decision of this review is now taken.
   16:20 and not on the settled morning read (or the reverse) writes nothing
   (PFE 10-29/10-30); and the earnings window, anchored on the scan day, can
   flip the HQ tag with no data change. Instrumentation, not the slot.
-- **Research engine (each needs a re-run on the laptop's frozen bars, so fix
+- **BUILT 2026-11-04, OFF BY DEFAULT (owner: "fix the research engine items
+  as well"; BACKLOG 47):** all six behind `backtest.ENGINE_FIXES`
+  (`--engine-fixes`), so no committed number moves until the re-runs on the
+  frozen bars land with the decision to turn them on. The grader's side of
+  the open beyond the target is proposed amendment H, the owner's.
+  As found: **Research engine (each needs a re-run on the laptop's frozen bars, so fix
   and re-run ship together):** one NaN High/Low/Close blanks ADX for the rest
   of the series and the ticker signals no more (the tally is never printed);
   the first 19 tradeable bars of each ticker read a truncated 10/20-bar

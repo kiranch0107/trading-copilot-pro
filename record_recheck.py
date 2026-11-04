@@ -122,6 +122,18 @@ def pin_for(cut: dict, got: dict) -> tuple[dict, str]:
 R_TOL = 0.0005
 
 
+# What each backtest engine fix touched on this data (BACKLOG 47), as run()
+# prints it, so a run with --engine-fixes says where its numbers moved and a
+# run without them says whether the data holds the defect at all.
+_FIX_LINE_PREFIXES = ("indicator gap, no signal", "price rows with a NaN", "!! ",
+                      "look-back incomplete", "open beyond the target", "ex-dividend inside trades")
+
+
+def fix_lines(text: str) -> list[str]:
+    """The engine-fix tally lines (and run()'s !! warnings) in a run's output."""
+    return [ln.strip() for ln in text.splitlines() if ln.strip().startswith(_FIX_LINE_PREFIXES)]
+
+
 def measure(cut: dict) -> dict | None:
     """Run one cut on today's code and return what the record would compare."""
     import backtest as bt
@@ -174,6 +186,7 @@ def measure(cut: dict) -> dict | None:
             "long_r": float(longs.mean()) if len(longs) else float("nan"),
             "short_n": len(shorts),
             "short_r": float(shorts.mean()) if len(shorts) else float("nan"),
+            "fix_lines": fix_lines(text),
             "stdout": buf.getvalue()}
 
 
@@ -267,6 +280,8 @@ def report(results: list[tuple[dict, dict | None]]) -> int:
         print(f"    {'gapped through':<14} {'':>12} {gth:>12}"
               + ("   <-- the 10-08 gapped-stop rule FIRED here" if gth else
                  "   (no level was gapped through on this data)"))
+        for _ln in got.get("fix_lines") or []:
+            print(f"    engine fix    {_ln}")
         verdict, notes = compare(cut, got)
         print(f"\n    VERDICT: {verdict}")
         for n in notes:
@@ -295,6 +310,14 @@ def report(results: list[tuple[dict, dict | None]]) -> int:
 
 def selftest() -> int:
     print("record_recheck.py selftest")
+    _ft = ("  Total trades   : 9\n  look-back incomplete      :     19  (bars before 20 of history; no signal read)\n"
+           "  open beyond the target    :      1  (the stop was also touched)\n"
+           "  ex-dividend inside trades :      4  (+1.20 R credited net; dividends d-00)\n"
+           "  !! 2 price row(s) with a NaN: ADX is blank after each, so its ticker\n"
+           "     reads no signal for the rest of the series (engine fix price_gaps)\n")
+    _fl = fix_lines(_ft)
+    assert len(_fl) == 4 and _fl[0].startswith("look-back incomplete") and _fl[3].startswith("!! 2 price"), _fl
+    print("engine fix lines : a run's fix tallies and warnings reach the report")
     print("=" * 70)
 
     base = RECORD[2]
@@ -454,10 +477,18 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--engine-fixes", type=str, default=None,
+                    help="run the cuts with backtest's engine fixes on (BACKLOG 47): "
+                         "'all' or a comma list. The bars are the same frozen cache, so a "
+                         "matching fingerprint makes the verdict the fixes' own effect.")
     a = ap.parse_args()
     if a.selftest:
         return selftest()
 
+    import backtest as bt
+    if a.engine_fixes is not None:
+        bt.set_engine_fixes(a.engine_fixes)
+    print(f"Engine fixes : {bt.describe_engine()}")
     out = []
     for cut in RECORD:
         print(f"  running {cut['name']} ...", file=sys.stderr)
