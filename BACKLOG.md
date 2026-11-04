@@ -82,7 +82,11 @@ landed in the repo and the removal says so in the commit.
   (`option_backtest.py --config live --tp 200 --sl 50 --dte-exit 7
   --target-exit-ab`, at IV 1.15 and 1.00), teed to
   `results/option_target_exit_run1_iv1.15.txt` / `_iv1.00.txt`. Retire this
-  line when both files are committed with their reading.
+  line when both files are committed with their reading. *(Run 2026-11-04 in
+  the Codespace on the frozen bars; committed with
+  `results/option_target_exit_run1.md`: 149 pairs, UNDERPOWERED under the
+  pre-registered 150 floor, so no reading is made and the structure stays
+  as measured. Retired.)*
 - **2026-11-03 (revision counter fixed; item 39).** The post-close slot
   question is open again, by the rule decided this morning ("the slot
   moves if that is ever > 0"): the corrected counter reads **3**, three
@@ -2776,6 +2780,18 @@ IV 1.15 AND 1.00; REJECT if < 0 at both; otherwise NOT ESTABLISHED; under
 150 pairs UNDERPOWERED. Prediction: −10 % to +2 %, NOT ESTABLISHED.
 `check_option_target_exit_preregistered` (68). **Owed:** the two commands
 in the pre-registration, on the frozen bars.
+**RUN 1 DONE 2026-11-04 (owner's Codespace, frozen bars
+`v2-78390259672cedbe`, 7 cached / 0 fetched): UNDERPOWERED.**
+`results/option_target_exit_run1.md`. Each run settled 149 pairs, one under
+the pre-registered floor of 150, so by the pre-registration's own rule no
+ADOPT / REJECT / NOT ESTABLISHED is read and the live structure stays as
+measured. Descriptive only: B − A +1.77 % of premium (CI [−4.07, +7.61]) at
+IV 1.15 and +0.53 % ([−6.01, +7.08]) at 1.00; the target exit changes 27–28
+of 149 pairs. Not re-run to clear 150 (the look-back fix, default since
+11-04, plausibly cost the pair; choosing the engine or the sample after
+seeing the result is not allowed); a larger D3 would be a new
+pre-registration. Arm A alone: +0.07 % of premium at IV x1.15, +10 % at
+x1.00, the IV assumption again deciding the structure's sign.
 
 **Tiingo fallback split-adjusted: FIXED 2026-11-03 (owner: "fix the Tiingo
 split adjustment as well").** `data_source.fetch_tiingo()` builds split-only

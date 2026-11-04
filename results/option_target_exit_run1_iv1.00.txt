@@ -1,3 +1,9 @@
+!! UNDERPOWERED -- 149 settled pairs, under the pre-registered floor of 150
+!! (results/option_target_exit_preregistration.md: "If n < 150 pairs the run is labelled
+!! UNDERPOWERED in its file whatever the CI says, and the reading above is not made from it").
+!! No ADOPT / REJECT / NOT ESTABLISHED reading is made from this file. Read with
+!! results/option_target_exit_run1.md.
+
 ==============================================================================
 OPTION-LEG BACKTEST
 ==============================================================================
