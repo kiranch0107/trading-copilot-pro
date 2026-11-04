@@ -10,6 +10,16 @@ six fixes, the default) and the window **2017-04-17 .. 2026-11-03** (signals
 after each name's warm-up). Priced under IV: 1.15x realised (the primary)
 and IV: 1.0x realised, on the same 2,817 entries.
 
+> **DECIDED 2026-11-04 (owner: "go with the target exit").** On this
+> reading the target exit joins the live structure on grounds of
+> coherence: `MEASURED_OPTION_STRUCTURE["target_exit"]`, the journal
+> refuses a signal trade without the alert's target, the exit monitor
+> sells on a close at or beyond it (`TARGET_U`, after STOP and before the
+> premium take-profit), the app's three trade forms ask for it, and the
+> alert's rules line names it. The bound this run set stands: at most 0.9
+> points of premium worse, most likely about 1 better. Nothing measured
+> here changes.
+
 ## Verdict, by the pre-registered rule: NOT ESTABLISHED; EQUIVALENT
 
 | | IV x1.15 (primary) | IV x1.00 |
@@ -113,6 +123,6 @@ loses about 3 % of premium a trade.
 - **Whether to tie the option's exit to the alert's target** is the owner's
   call (see above). If taken, it is built as one change to
   `MEASURED_OPTION_STRUCTURE`, the exit monitor and the journal, as the
-  thesis exit was.
+  thesis exit was. *(Taken the same day; see the note at the top.)*
 - **No re-run.** This file is the run; run 1's 149 pairs stay descriptive
   and are not pooled with it.

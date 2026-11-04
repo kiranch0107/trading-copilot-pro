@@ -192,6 +192,38 @@ def signal_bar_input(key: str, ticker: str, right: str) -> str | None:
     return _key
 
 
+def target_exit_input(key: str, signal_key: str | None, default=None) -> float:
+    """
+    THE ALERT'S TARGET, for the target exit (review 2026-11-03 D3; owner
+    2026-11-04: "go with the target exit"). The measured structure sells the
+    option when the stock CLOSES at or beyond the alert's own target, and the
+    exit monitor needs the level (rules `underlying_target`). Defaults to
+    `default` (the quick-buy form has the setup in hand), else to the target
+    this deployment's forward log recorded for `signal_key`, else 0. A signal
+    trade without it is refused by journal_store: it is part of the structure.
+    """
+    _d = default
+    if not _d and signal_key:
+        try:
+            _row = next((r for r in forward_log.read_all()
+                         if r.get("kind") == "signal" and r.get("key") == signal_key), None)
+            _d = ((_row or {}).get("setup") or {}).get("target")
+        except Exception:  # noqa: BLE001 — an unreadable log is not this form's problem
+            _d = None
+    try:
+        _d = float(_d or 0)
+    except (TypeError, ValueError):
+        _d = 0.0
+    return float(st.number_input(
+        "Sell when the stock CLOSES at (the alert's target)", min_value=0.0,
+        value=round(_d, 2), step=0.01, key=f"tgt_exit_{key}",
+        help="The 'target' on the alert's Underlying line. The measured structure "
+             "sells the option at the close that reaches it (D3: about 1 point of "
+             "premium better than holding for +200 %, at most 0.9 worse). A signal "
+             "trade without it is refused. 0 turns it off (paper or discretionary "
+             "trades only)."))
+
+
 def trade_time_input(key: str, label: str) -> str:
     """
     WHEN the trade happened, as the owner enters it: a date and a time in
@@ -2147,6 +2179,8 @@ with TAB_STOCK:
                                                  "ran with it (thesis_exit run 3: KEEP, "
                                                  "undetectable either way); a signal trade "
                                                  "must carry it.")
+                                        q_tgt = target_exit_input(f"qbuy_{_qkey}", None,
+                                                                  default=r.get("target"))
                                     q_notes = st.text_input(
                                         "Notes", key=f"qbuy_notes_{_qkey}")
 
@@ -2161,7 +2195,7 @@ with TAB_STOCK:
                                         _q_mode = mode_selector(f"qbuy_{_qkey}")
                                         _q_src = source_selector(f"qbuy_{_qkey}")
                                         _q_ok = size_gate(q_prem, q_qty, f"qbuy_{_qkey}")
-                                        if not (q_tp or q_sl or q_dte or q_hold or q_thesis):
+                                        if not (q_tp or q_sl or q_dte or q_hold or q_thesis or q_tgt):
                                             st.error("All exit rules are off — the "
                                                      "monitor would never alert on "
                                                      "this position.")
@@ -2189,7 +2223,8 @@ with TAB_STOCK:
                                                     rules={"tp_pct": q_tp, "sl_pct": q_sl,
                                                            "dte_exit": q_dte,
                                                            "max_hold_bars": q_hold,
-                                                           "invalidate_ema": q_thesis},
+                                                           "invalidate_ema": q_thesis,
+                                                           "underlying_target": q_tgt},
                                                     notes=q_notes,
                                                     entry_features=capture_entry_features(ticker),
                                                     underlying_px=underlying_price_now(ticker))
@@ -2422,6 +2457,9 @@ with TAB_POSITIONS:
                 if r.get("dte_exit"):      bits.append(f"TIME ≤{r['dte_exit']:g} DTE")
                 if r.get("max_hold_bars"): bits.append(f"HOLD ≤{r['max_hold_bars']:g} sessions")
                 if r.get("invalidate_ema"):bits.append("THESIS EMA20")
+                if r.get("underlying_target"):
+                    bits.append(f"TARGET close {'≤' if str(p.get('right')).upper() == 'PUT' else '≥'} "
+                                f"{float(r['underlying_target']):g}")
                 st.caption(f"{p.get('contracts')} contract(s) · cost "
                            f"\\${p['entry_premium']*100*float(p.get('contracts') or 0):,.0f} · "
                            f"opened {p['opened']}")
@@ -2646,7 +2684,10 @@ with TAB_POSITIONS:
             f"Note: every take-profit level in the sweep is negative, best case "
             f"{max(e['expectancy_pct'] for e in (risk_params.measured_option_edge(k) for k in risk_params.OPT_SWEEP_BY_TP)):+.2f}% "
             f"of premium at TP+300. No setting here makes this signal profitable "
-            f"— the rules limit damage and enforce consistency."
+            f"— the rules limit damage and enforce consistency. The structure also "
+            f"sells at the alert's target (D3, owner 2026-11-04); the sweep ran "
+            f"without that exit, and the larger D3 measured it at +1.0 to +1.2 "
+            f"points of premium against holding (equivalent within ±5)."
         )
 
     if not (rule_tp or rule_sl or rule_dte or rule_hold or rule_thesis):
@@ -2663,6 +2704,10 @@ with TAB_POSITIONS:
         _o_mode = mode_selector("op")
         _o_src = source_selector("op")
         _o_key = signal_bar_input("op", o_tkr, o_right) if _o_src == "signal" else None
+        rule_tgt = target_exit_input("op", _o_key)
+        if rule_tgt:
+            st.caption(f"…and when {o_tkr} closes at or "
+                       f"{'below' if o_right == 'PUT' else 'above'} {rule_tgt:g} (the alert's target).")
         _o_traded = trade_time_input("op", "Traded at")
         _o_ok = size_gate(o_prem, o_qty, "op")
         if _o_ok and st.button("📍 Start monitoring this contract",
@@ -2675,7 +2720,8 @@ with TAB_POSITIONS:
                     entry_premium=o_prem,
                     rules={"tp_pct": rule_tp, "sl_pct": rule_sl,
                            "dte_exit": rule_dte, "max_hold_bars": rule_hold,
-                           "invalidate_ema": rule_thesis},
+                           "invalidate_ema": rule_thesis,
+                           "underlying_target": rule_tgt},
                     notes=o_notes,
                     entry_features=capture_entry_features(o_tkr),
                     underlying_px=underlying_price_now(o_tkr))
@@ -3257,6 +3303,7 @@ with TAB_CHECK:
                 _chk_src = source_selector("chk")
                 _chk_key = (signal_bar_input("chk", res["ticker"], res["right"])
                             if _chk_src == "signal" else None)
+                chk_tgt = target_exit_input("chk", _chk_key)
                 _chk_ok = size_gate(_chk_prem, chk_contracts, "chk")
                 if st.button("Log position", key="chk_log"):
                     if _chk_prem <= 0:
@@ -3264,7 +3311,7 @@ with TAB_CHECK:
                                  "again: the journal records your fill, not the chain's mid.")
                     elif not _chk_ok:
                         st.error("Position size not accepted — see above.")
-                    elif not (chk_tp or chk_sl or chk_dte_exit or chk_hold or chk_thesis):
+                    elif not (chk_tp or chk_sl or chk_dte_exit or chk_hold or chk_thesis or chk_tgt):
                         st.warning("At least one exit rule is required — a "
                                    "position with no exit rule is never "
                                    "monitored.")
@@ -3280,7 +3327,8 @@ with TAB_CHECK:
                                 rules={"tp_pct": chk_tp, "sl_pct": chk_sl,
                                        "dte_exit": chk_dte_exit,
                                        "max_hold_bars": chk_hold,
-                                       "invalidate_ema": bool(chk_thesis)},
+                                       "invalidate_ema": bool(chk_thesis),
+                                       "underlying_target": chk_tgt},
                                 notes=chk_notes,
                                 entry_features=capture_entry_features(res["ticker"]),
                                 underlying_px=underlying_price_now(res["ticker"]))
