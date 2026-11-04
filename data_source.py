@@ -274,6 +274,60 @@ def split_adjust(df: pd.DataFrame, split_factor: pd.Series) -> pd.DataFrame:
     return out
 
 
+def fetch_dividends(ticker: str, period: str = "2y", download=None,
+                    closes: dict | None = None) -> dict | None:
+    """
+    {ex-date 'YYYY-MM-DD': amount per share}, from Yahoo's daily bars fetched
+    WITH their actions (backtest engine fix `dividends`; grading amendment I,
+    2026-11-04). Split-adjusted, the basis of the raw auto_adjust=False bars.
+
+    THE BARS COME WITH THE DIVIDENDS ON PURPOSE. yfinance 1.x answers a
+    throttled request with an EMPTY frame, and an empty dividend series
+    cannot be told from a stock that pays none. A non-empty frame of bars
+    with its Dividends column can: zeros there mean no dividend. So None
+    (unavailable) when the frame is empty, fails, or carries no Dividends
+    column; {} only when the bars came back and no ex-date is among them.
+    `download(ticker, period)` is injected for tests.
+    """
+    try:
+        if download is None:
+            import yfinance as yf
+
+            def download(t, p):
+                return yf.download(t, period=p, interval="1d", actions=True,
+                                   auto_adjust=False, progress=False)
+        df = download(ticker, period)
+    except Exception as e:                                   # noqa: BLE001
+        logger.warning("dividend history for %s failed: %s", ticker, e)
+        return None
+    if df is None or getattr(df, "empty", True):
+        return None
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df.copy()
+        df.columns = df.columns.get_level_values(0)
+    if "Dividends" not in df.columns:
+        return None
+    if closes is not None and "Close" in df.columns:
+        # the bars' closes, so a caller holding OLDER bars can check that the
+        # dividends are on its split basis (backtest.attach_dividends)
+        for d, c in df["Close"].items():
+            try:
+                c = float(c)
+            except (TypeError, ValueError):
+                continue
+            if c == c and c > 0:
+                closes[str(pd.Timestamp(d).date())] = c
+    out = {}
+    for d, v in df["Dividends"].items():
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            continue
+        if v == v and v > 0:
+            out[str(pd.Timestamp(d).date())] = v
+    return out
+
+
 def fetch_daily(ticker: str, period: str = "1y", interval: str = "1d",
                 yahoo_fetch=None, tiingo_fetch=None) -> tuple[pd.DataFrame | None, str]:
     """
@@ -456,6 +510,26 @@ def selftest() -> int:
     print(f"  no tiingo_fetch injected, no key set -> source={src} "
          f"(fetch_tiingo itself returns None with no key)")
     assert src == "none" and df is None
+
+    # ── dividends (engine fix `dividends`, grading amendment I) ──
+    _ix = pd.DatetimeIndex(["2026-03-02", "2026-03-03", "2026-03-04"])
+    _with = pd.DataFrame({"Close": [10.0, 10.1, 9.9], "Dividends": [0.0, 0.25, 0.0]}, index=_ix)
+    assert fetch_dividends("X", download=lambda t, p: _with) == {"2026-03-03": 0.25}
+    _cl: dict = {}
+    fetch_dividends("X", download=lambda t, p: _with, closes=_cl)
+    assert _cl == {"2026-03-02": 10.0, "2026-03-03": 10.1, "2026-03-04": 9.9}, _cl
+    assert fetch_dividends("X", download=lambda t, p: _with.assign(Dividends=0.0)) == {}, \
+        "bars with a zero Dividends column: a stock that paid none, known"
+    assert fetch_dividends("X", download=lambda t, p: pd.DataFrame()) is None, \
+        "an empty frame (a throttled answer) is UNAVAILABLE, never 'no dividends'"
+    assert fetch_dividends("X", download=lambda t, p: _with.drop(columns=["Dividends"])) is None
+    def _raise(t, p):
+        raise RuntimeError("no network")
+    assert fetch_dividends("X", download=_raise) is None
+    _mi = _with.copy()
+    _mi.columns = pd.MultiIndex.from_tuples([("Close", "X"), ("Dividends", "X")])
+    assert fetch_dividends("X", download=lambda t, p: _mi) == {"2026-03-03": 0.25}
+    print("dividends: bars with their actions; an empty answer is unavailable, a zero column is none")
 
     print("\nAll self-tests passed.")
     return 0

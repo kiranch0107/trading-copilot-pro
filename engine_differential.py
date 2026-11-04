@@ -37,14 +37,20 @@ SEED = 7
 
 def bars_rows(df: pd.DataFrame) -> list:
     """scanner.bars_for_grading() on a frame carrying Date as a column or
-    an index; imported lazily so the laptop run uses the production path."""
+    an index; imported lazily so the laptop run uses the production path.
+    A frame with a Dividend column hands the grader the same ex-dates the
+    engine reads (forward_log.attach_dividend_rows, amendment I)."""
     from scanner import bars_for_grading
     d = df
     if "Date" in d.columns:
         d = d.copy()
         d.index = pd.DatetimeIndex(pd.to_datetime(d["Date"]))
         d = d.drop(columns=["Date"])
-    return bars_for_grading(d)
+    rows = bars_for_grading(d)
+    if "Dividend" in d.columns:
+        amounts = {str(ix.date()): float(v) for ix, v in d["Dividend"].items() if v == v and float(v) > 0}
+        rows = fl.attach_dividend_rows(rows, amounts)
+    return rows
 
 
 def compare_frame(df: pd.DataFrame, n_setups: int, rng: random.Random,
@@ -126,11 +132,21 @@ def cached_daily_frames() -> list[tuple[str, pd.DataFrame, dict]]:
 
 
 def run(per_frame: int = PER_FRAME, seed: int = SEED) -> int:
-    import bar_cache
     frames = cached_daily_frames()
     print("=" * 78)
     print("ENGINE DIFFERENTIAL — backtest.simulate_trade vs forward_log.resolve_signal, real bars")
+    _saved = bt.ENGINE_FIXES
+    bt.set_engine_fixes(bt.GRADER_FIXES)   # the rules the grader shares (amendments H and I)
+    print(f"Engine fixes : {bt.describe_engine()}  (the grader's: amendments H and I)")
     print("=" * 78)
+    try:
+        return _run_frames(frames, per_frame, seed)
+    finally:
+        bt.set_engine_fixes(_saved)
+
+
+def _run_frames(frames, per_frame: int, seed: int) -> int:
+    import bar_cache
     if not frames:
         print("  no daily frames in .bar_cache; run a backtest first (they freeze the bars)")
         return 2
@@ -168,6 +184,15 @@ def _synthetic(seed: int, n: int = 90) -> pd.DataFrame:
 def selftest() -> int:
     print("engine_differential.py selftest")
     print("=" * 72)
+    _saved_fixes = bt.ENGINE_FIXES
+    bt.set_engine_fixes(bt.GRADER_FIXES)   # the grader's rules: amendments H and I
+    try:
+        return _selftest_body()
+    finally:
+        bt.set_engine_fixes(_saved_fixes)
+
+
+def _selftest_body() -> int:
     rng = random.Random(1)
     tot = {"compared": 0, "void_both": 0, "unsettled_both": 0, "void_floor": 0}
     mism = []
@@ -177,6 +202,21 @@ def selftest() -> int:
             tot[k] += r[k]
         mism += r["mismatches"]
     assert tot["compared"] >= 400 and tot["void_both"] >= 1, tot
+    # AMENDMENT I on data: the same frames with an ex-date every ~13 bars of
+    # 1 % of price, through both engines; they must still agree, and the
+    # dividends must have reached both.
+    _dtot, _dm = 0, []
+    for s in range(6):
+        _fd = _synthetic(s)
+        _fd["Dividend"] = [float(_fd["Close"].iloc[k]) * 0.01 if k % 13 == 7 else 0.0 for k in range(len(_fd))]
+        r = compare_frame(_fd, 50, random.Random(10 + s))
+        _dtot += r["compared"]
+        _dm += r["mismatches"]
+    assert _dtot >= 200 and not _dm, _dm[:3]
+    _fd0 = _synthetic(0)
+    _fd0["Dividend"] = [5.0 if k == 30 else 0.0 for k in range(len(_fd0))]
+    _rows = bars_rows(_fd0)
+    assert sum(b["dividend"] for b in _rows) == 5.0, "the grader must see the frame's ex-dates"
     assert not mism, mism[:3]
     # THE RISK FLOOR (2026-10-29): the seeded geometries land at least one
     # fill inside it; both engines refuse it and the comparator counts it as
@@ -209,6 +249,31 @@ def selftest() -> int:
     r2 = compare_frame(_synthetic(4), 30, random.Random(2), resolve=_mislabel)
     assert r2["mismatches"], "a relabelled outcome must be reported"
     print("comparator       : an R off by 0.01 and a relabelled outcome are both reported")
+    # AMENDMENT H ON ONE BAR (owner 2026-11-04): a bar that opens beyond the
+    # target and trades through the stop. The grader and the engine with the
+    # grader's rules book the win at the open; the committed research engine
+    # (no fixes, every committed result) still books -1 R, until the research
+    # default is flipped with its re-run (BACKLOG 47).
+    _f = pd.DataFrame({"Date": pd.bdate_range("2026-03-02", periods=24),
+                       "Open": [100.0] * 24, "High": [100.5] * 24, "Low": [99.5] * 24, "Close": [100.0] * 24,
+                       "Volume": 1e6})
+    _f.loc[2, ["Open", "High", "Low", "Close"]] = [112.0, 113.0, 94.0, 95.0]
+    _d = _f.set_index(pd.DatetimeIndex(_f["Date"])).drop(columns=["Date"])
+    _setup = {"trend": "Bullish", "entry": 100.0, "stop": 98.0, "target": 110.0, "rr": 5.0}
+    _cfg = {"slippage_bps": fl.GRADE_SLIPPAGE_BPS, "commission": 0.0, "max_hold": fl.GRADE_MAX_HOLD}
+    _row = {"trend": "Bullish", "bar_date": "2026-03-02", "setup": {"price": 100.0, "stop": 98.0, "target": 110.0}}
+    _g = fl.resolve_signal(_row, bars_rows(_d), today=dt.date(2026, 6, 1))
+    _e1 = bt.simulate_trade(_d, 0, _setup, _cfg)
+    assert _g["outcome"] == "win" and _e1["outcome"] == "win" and abs(_g["r"] - _e1["r"]) <= TOL_R, (_g, _e1)
+    bt.set_engine_fixes("")
+    try:
+        _e0 = bt.simulate_trade(_d, 0, _setup, _cfg)
+    finally:
+        bt.set_engine_fixes(bt.GRADER_FIXES)
+    assert _e0["outcome"] == "loss" and _e0["r"] < -0.9, _e0
+    print(f"amendment H      : open 112 past target 110, low 94: the grader and the engine with its rules "
+          f"book {_g['r']:+.2f} R; the committed research engine {_e0['r']:+.2f} R; dividends agree on "
+          f"{_dtot} setups")
     assert TOL_R == 5e-5, "tolerance is the grader's four-decimal rounding, nothing looser"
     print("=" * 72)
     print("All self-tests passed.")
