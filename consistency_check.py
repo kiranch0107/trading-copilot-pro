@@ -3970,6 +3970,33 @@ def check_regrade_on_file() -> None:
           "uses it with the original beside it; a dated amendment says so")
 
 
+def check_hold_preregistered() -> None:
+    """
+    Owner 2026-11-04: the "price holds over 21-45 days" test and the
+    signal-timed put spread, pre-registered in
+    results/hold_spread_preregistration.md before anything records a hold.
+    Its own power check vetoed it as a decision test (BACKLOG 13). Pinned:
+    the module's constants are the document's; the document states the veto
+    and names the power command; nothing records or reads a hold yet.
+    """
+    import hold_test as ht
+    doc = Path("results/hold_spread_preregistration.md").read_text(encoding="utf-8")
+    assert (ht.HOLD_SESSIONS, ht.SECONDARY_SESSIONS, ht.HOLD_Z, ht.LONG_Z, ht.VOL_LOOKBACK,
+            ht.COST_FRAC_SINGLE, ht.GATE_PAIRS) == (21, (15, 31), 1.0, 2.0, 20, 1.0, 349), \
+        "the pre-registered constants"
+    for phrase in ("`HOLD_SESSIONS` = 21", "15 and 31 sessions", "`VOL_LOOKBACK` = 20", "`HOLD_Z` x sigma",
+                   "HOLD_Z = 1", "LONG_Z = 2", "`COST_FRAC_SINGLE` = 1.0", "349 pool pairs",
+                   "`python hold_test.py --power`", "VETOED as underpowered",
+                   "Nothing is built by this document"):
+        assert phrase in doc, f"the pre-registration must state {phrase!r}"
+    users = [q.name for q in sorted(Path(".").glob("*.py"))
+             if q.name not in ("hold_test.py", "consistency_check.py")
+             and "hold_test" in q.read_text(encoding="utf-8", errors="replace")]
+    assert users == [], f"nothing records or reads a hold before the owner says go; found {users}"
+    assert "python hold_test.py --selftest" in Path(".github/workflows/tests.yml").read_text(encoding="utf-8")
+    print("  the hold / put-spread rules are the document's; its power check's veto is stated; nothing records a hold")
+
+
 def check_tiingo_split_adjusted() -> None:
     """
     The Tiingo fallback is SPLIT-adjusted like Yahoo's auto_adjust=False bars
@@ -4101,6 +4128,7 @@ CHECKS = [
     ("Tiingo fallback split-adjusted, its fill checked (review 11-03)", check_tiingo_split_adjusted),
     ("research-engine fixes, all six the default (BACKLOG 47)", check_engine_fixes_default),
     ("rows on file re-graded under H+I (owner 11-04)", check_regrade_on_file),
+    ("price-hold / put-spread test pre-registered, vetoed by its power check", check_hold_preregistered),
 ]
 
 
