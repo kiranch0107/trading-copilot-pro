@@ -1,0 +1,91 @@
+==============================================================================
+TRADING COPILOT ELITE — HISTORICAL BACKTEST (real data)
+==============================================================================
+Tickers      : GOOGL, AVGO, AMD, NFLX, CRM, ADBE, QCOM, MU, ORCL, NOW, PANW, LRCX
+History      : 10 years daily
+ADX min      : 25   ATR stop×: 1.0   ATR tgt×: 3.0   Min R:R: 0.5
+Max hold     : 20 bars   Slippage: 2.0bps/side   Regime filter: OFF
+Prices       : auto_adjust=False (raw; splits still adjusted) — matches every live path
+Config       : research (bt.DEFAULTS, the record's; NOT the live config -- RESEARCH_VS_LIVE)
+Weekly filter: OFF   (matches the live default)
+Engine fixes : price_gaps, lookback, open_beyond_target, dividends, time_order, clustered_ci
+==============================================================================
+
+PER-TICKER RESULTS
+Ticker      Bars    Trades  Win%      Avg R    Total R    PF    MaxDD    Hold
+--------  ------  --------  ------  -------  ---------  ----  -------  ------
+GOOGL       2362       120  31%      -0.169      -20.3  0.78    -35.6       4
+AVGO        2362        95  32%       0.102        9.7  1.14    -27.2       4
+AMD         2362       116  30%      -0.193      -22.4  0.75    -36.2       4
+NFLX        2362       115  30%      -0.082       -9.5  0.89    -34.3       5
+CRM         2362       109  31%      -0.132      -14.4  0.82    -23.3       5
+ADBE        2362       134  32%      -0.214      -28.6  0.71    -36.6       6
+QCOM        2362        98  34%       0.037        3.6  1.05    -28.3       5
+MU          2362       119  35%       0.209       24.9  1.3     -21.9       4
+ORCL        2362       132  30%      -0.054       -7.2  0.93    -38.9       4
+NOW         2362        90  39%       0.135       12.1  1.21     -9.7       5
+PANW        2362       111  29%      -0.202      -22.5  0.75    -38.2       5
+LRCX        2362       126  29%      -0.173      -21.8  0.78    -31.9       4
+
+==============================================================================
+AGGREGATE (all tickers combined)
+==============================================================================
+  Total trades   : 1365
+  Win rate       : 31.6%
+  Expectancy     : -0.071 R per trade
+  Total return   : -96.4 R
+  Profit factor  : 0.91
+  Max drawdown   : -186.1 R
+  Avg hold       : 4.5 bars
+  Best / worst   : +18.12 R / -8.50 R
+  Bars tested    : 28344   <- compare across runs FIRST; if this moves, the data moved
+  LONG           :  875 trades   36.1% win  +0.066 R  PF 1.09  95% CI [-0.083, +0.216]  clustered over 606 episodes (independent [-0.063, +0.196])
+  SHORT          :  490 trades   23.7% win  -0.315 R  PF 0.61  95% CI [-0.480, -0.151]  clustered over 334 episodes (independent [-0.468, -0.163])
+
+  CONCENTRATION — how much of each side rests on one name
+  (a robustness check. It does NOT nominate tickers to trade:
+   picking the names that looked good here is the ADX-35 mistake.)
+    LONG   positive in 7/12 tickers   +0.066 R -> +0.041 R without MU
+    SHORT  positive in 1/12 tickers   -0.315 R -> -0.350 R without NOW
+
+  HOLD PROFILE — how many trades resolve on the bar they opened on
+    same session  :   232 (17.0%)   84% lose   -0.741 R
+    held longer   :  1133 (83.0%)             +0.067 R
+    median hold   : 3 bars
+    The stop sits 1x ATR from entry and the target 3x. A normal day's range reaches the
+    stop but not the target, so the entry bar is asymmetric by construction.
+    DESCRIPTIVE. Widening the stop because this reads badly is a parameter chosen
+    on data already spent — the ADX-35 mistake in a different hat.
+  data: v2-e09e31d6eaf30233  (12 series, 12 cached / 0 fetched, oldest 55d) · engine fixes: price_gaps, lookback, open_beyond_target, dividends, time_order, clustered_ci
+
+==============================================================================
+GATE REJECTIONS (bars that formed a valid setup, then were filtered)
+==============================================================================
+  Bars reaching the filters : 7342
+  Counted independently — a bar can fail several gates, so
+  these OVERLAP and will not sum to the total.
+  failed ADX below minimum              :   5925  ( 80.7%)
+  failed Macro regime conflict          :      0  (  0.0%)   (filter OFF)
+  failed Weekly misaligned/missing      :      0  (  0.0%)   (filter OFF)
+  ...of which WEEKLY ALONE rejected :      0  (  0.0%)
+     (bars no other gate would have stopped — what the weekly
+      filter uniquely costs you)
+  survived every gate       : 1417
+  gapped past its levels    :     44  (32 past the stop, 12 past the target)
+     (the next open was already beyond the level, so the setup
+      did not exist at the fill price — no trade)
+  fill inside the risk floor:      8  (|fill - stop| below max($0.05, 0.3% of the fill) — no trade; the forward grader voids the same fill)
+  gapped through a level    :    219  (139 stops filled at the open, 80 targets)
+     (the bar opened beyond the level, so the fill is the open;
+      a stop here costs MORE than -1 R)
+  look-back incomplete      :    228  (bars before 20 of history; no signal read)
+  open beyond the target    :      1  (the stop was also touched; booked a win at the open, not -1 R)
+  ex-dividend inside trades :     41  (+3.46 R credited net; dividends d-3173d1c873074a2e)
+
+INTERPRETATION
+  🔴 Negative expectancy (-0.071 R/trade) on real data. The synthetic
+     edge did NOT survive. Do not trade this as-is — investigate which
+     tickers/periods dragged it down before risking capital.
+
+  Reminder: past performance is not predictive. Stops are not guaranteed
+  (overnight gaps). Options add theta/slippage this share-based test omits.
