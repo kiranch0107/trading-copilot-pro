@@ -2090,10 +2090,14 @@ def check_unattended_workflows_pinned_and_alarmed() -> None:
     runs that CANNOT scan, which is why its step must be `if: always()` --
     a conditional step is the silence this exists to end.
     """
-    for wf in ("scanner.yml", "exit-monitor.yml"):
+    # universe-snapshot.yml too (review 2026-11-03 hygiene): it picks the names
+    # the scanner trades and installed unpinned inside a multi-line `run: |`,
+    # which the single-line match below did not see.
+    for wf in ("scanner.yml", "exit-monitor.yml", "universe-snapshot.yml"):
         txt = Path(".github/workflows", wf).read_text()
         installs = [l.strip() for l in txt.splitlines()
-                    if l.strip().startswith("run: pip install")]
+                    if l.strip().removeprefix("run:").strip().startswith("pip install")
+                    and "--upgrade pip" not in l]
         assert installs, f"{wf}: no pip install line found"
         for line in installs:
             if "-r requirements.txt" in line:
@@ -2103,7 +2107,7 @@ def check_unattended_workflows_pinned_and_alarmed() -> None:
                 f"1.7.0 against a tested 1.6.0 this way. Use "
                 f"`pip install -c requirements.txt <pkgs>` so the versions CI "
                 f"tests are the versions money runs on.")
-        print(f"  {wf:18} installs pinned to requirements.txt")
+        print(f"  {wf:21} installs pinned to requirements.txt")
 
     txt = Path(".github/workflows/scanner.yml").read_text()
     i = txt.find("name: Check scan coverage")
@@ -3979,6 +3983,35 @@ def check_review_followups_1_to_4() -> None:
           "reads the time exit")
 
 
+
+def check_review_hygiene_cleaned() -> None:
+    """
+    The expert review's last hygiene items (2026-11-03; owner 2026-11-04: "go
+    with the cleanup"). liquidity_check defaults to the measured structure's
+    DTE floor, not 9; churn_tracker reads the universe's one ranking
+    (rank_pool: exact RS, alphabetical ties) instead of its own copy on the
+    rounded value; live_cfg()'s docstring says it is the signal, not the
+    alert. (universe-snapshot.yml's pinned install is in
+    check_unattended_workflows_pinned_and_alarmed.)
+    """
+    import inspect as _i
+    import backtest as bt
+    lc = Path("liquidity_check.py").read_text(encoding="utf-8")
+    assert 'default=int(risk_params.MEASURED_OPTION_STRUCTURE["min_dte"])' in lc and "default=9)" not in lc, \
+        "liquidity_check's DTE floor is the structure's"
+    ct = Path("churn_tracker.py").read_text(encoding="utf-8")
+    assert "u.rank_pool(bars, u.CANDIDATE_POOL, u.TOP_N)" in ct and "u.score_ticker(" not in ct \
+        and '.sort(key=lambda r: r["rs"]' not in ct, "churn_tracker reads the universe's ranking, not a copy"
+    import universe as uv
+    assert "rank_pool(bars, pool, top_n, require_uptrend, max_per_sector)" in _i.getsource(uv.select_universe), \
+        "select_universe ranks through rank_pool"
+    doc = bt.live_cfg.__doc__ or ""
+    assert "IT IS THE SIGNAL, NOT THE ALERT" in doc and "hq_min_rr" in doc and "blackout" in doc, \
+        "live_cfg's docstring states what it does not carry"
+    print("  liquidity_check at the structure's floor; churn_tracker on the universe's ranking; live_cfg says "
+          "what it is")
+
+
 def check_engine_fixes_default() -> None:
     """
     Expert review 2026-11-03, the research-engine items (owner: "fix the
@@ -4277,6 +4310,7 @@ CHECKS = [
     ("the larger D3 pre-registered (77 names outside run 1)", check_option_target_exit_large_preregistered),
     ("the target exit is part of the structure (owner 11-04)", check_target_exit_in_structure),
     ("review follow-ups: IV floor, push retry, theta clock (owner 11-04)", check_review_followups_1_to_4),
+    ("review hygiene cleaned (owner 11-04)", check_review_hygiene_cleaned),
     ("Tiingo fallback split-adjusted, its fill checked (review 11-03)", check_tiingo_split_adjusted),
     ("research-engine fixes, all six the default (BACKLOG 47)", check_engine_fixes_default),
     ("rows on file re-graded under H+I (owner 11-04)", check_regrade_on_file),

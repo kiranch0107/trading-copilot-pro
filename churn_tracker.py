@@ -338,17 +338,10 @@ def main() -> int:
         print("No benchmark data — cannot rank.")
         return 1
 
-    scored = []
-    for t in u.CANDIDATE_POOL:
-        df = bars.get(t)
-        if df is None:
-            continue
-        sc = u.score_ticker(df, bench)
-        if sc is None or not sc["above_200sma"]:
-            continue
-        scored.append({"ticker": t, **sc})
-    scored.sort(key=lambda r: r["rs"], reverse=True)
-    picked = u.apply_sector_cap(scored, u.TOP_N)
+    # THE UNIVERSE'S OWN RANKING (review 2026-11-03 hygiene): this used to be a
+    # copy that sorted on the ROUNDED RS, so ties fell to pool order here and
+    # to the exact value in the scanner's universe.
+    scored, picked = u.rank_pool(bars, u.CANDIDATE_POOL, u.TOP_N)
 
     mix = {}
     for r in picked:
