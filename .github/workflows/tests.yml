@@ -196,6 +196,8 @@ jobs:
         run: python pullback_arrival.py --selftest
       - name: engine_differential.py — the two trade engines agree on data
         run: python engine_differential.py --selftest
+      - name: hold_test.py — the hold / put-spread pre-registration's rules and power check
+        run: python hold_test.py --selftest
 
       - name: consistency_check.py — invariants that span modules
         run: python consistency_check.py

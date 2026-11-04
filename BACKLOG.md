@@ -2432,6 +2432,43 @@ heartbeat is the 10-30 pass; the 10-29 16:10/16:20 pair ran the old code.
 
 ---
 
+## 48. "Does the price hold over the option's life?" — the 21–45-day hold test and a signal-timed put spread — PRE-REGISTERED 2026-11-04; VETOED AS A DECISION TEST BY ITS OWN POWER CHECK; OPTIONS OPEN (OWNER)
+
+**Owner's question 2026-11-04:** "as we are mostly dealing with stock
+options, should we consider if the price holds for the 20–45 day period
+… rather than only looking for long trades?" Then: "write the
+pre-registration for the 'price holds over 21–45 days' test and the
+signal-timed put-spread arm". `results/hold_spread_preregistration.md`,
+rules as functions in `hold_test.py` (nothing recorded or graded).
+
+**The test, fixed:** on the record's pool episodes and their control rows,
+the close 21 sessions after the fill against fill x exp(−1 x sigma x
+sqrt(21)) (about the 16-delta put); primary metric the margin (where the
+close lands in expected moves), secondary the held rate and a model-priced
+bull put spread (short at that level, long at 2 expected moves, IV = RV x
+1.15 with skew, 4 % of gross as entry cost), signal minus control, SE
+clustered by entry week.
+
+**The power check (`python hold_test.py --power`, seeded) vetoes it as a
+decision test.** At the record's 349-pair gate it detects only 6–10
+points on the hold rate (9–15 on the yes/no measure); a +3-point effect
+needs 1,800–6,600 pairs, 2 to 7 years, because holds fail together in
+market drops and the effective sample is the number of market weeks (more
+names do not help). The record's own evidence (`drift_null`: the long
+signal no better than random entry on direction) puts the plausible effect
+at 0–3 points. The bar and prediction are fixed anyway in case the owner
+runs it.
+
+**Open, the owner's:** (1) build the reading DESCRIPTIVELY (cheap: the
+grading pass already holds the rows and bars; catches only a large
+effect); or (2) leave it, and read the answer to "does selling 21–45-day
+premium pay at all" from the records already running: the always-on
+SPY/QQQ spreads (first settlements 2026-11-30) and the single-name IV
+premium (first rows 2026-11-09/10). No historical test: the clean
+tranches are spent. `check_hold_preregistered` (72).
+
+---
+
 ## 47. The research engine's six defects (expert review 2026-11-03) — BUILT 2026-11-04 BEHIND A SWITCH; RE-RUN ON THE FROZEN BARS 2026-11-04 (NO SIGN CHANGES); ALL SIX THE DEFAULT 2026-11-04 (OWNER); GRADING AMENDMENTS H AND I APPLIED TO THE FORWARD GRADER 2026-11-04; THE ROWS ON FILE RE-GRADED UNDER THEM (READING CHANGE) 2026-11-04
 
 **Owner: "fix the research engine items as well".** Item 46 recorded six
@@ -3139,8 +3176,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 71 cross-module
-  invariants (71 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 72 cross-module
+  invariants (72 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on
