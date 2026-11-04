@@ -4013,35 +4013,37 @@ def check_review_hygiene_cleaned() -> None:
 
 
 
-def check_date_clusters_pending() -> None:
+def check_date_clusters_default() -> None:
     """
-    Item 47's "clustering by date as well ... recorded, not built" (owner
-    2026-11-04: "go with the same-date error bars"): built as the PENDING
-    engine fix date_clusters, off and outside 'all' until the owner's re-run
-    on the frozen bars and decision, so every committed `--engine-fixes all`
-    command still reproduces its file. Pinned: the pending list; 'all' and the
-    default exclude it; asked by name it joins; clustered_ci reads it and
-    takes the widest of independent / episode / week / month; run() names the
-    clusters it used; the hand-off names the command.
+    Item 47's "clustering by date as well ... recorded, not built": built as a
+    pending fix (owner 2026-11-04: "go with the same-date error bars"), run on
+    the frozen bars (results/date_clusters_reading_2026-11-04.md: the long and
+    short CIs 10-19 % wider, no conclusion moved) and the DEFAULT from the
+    owner's decision ("go with date clusters as default"). Pinned: it is one of
+    the default seven and nothing is pending; clustered_ci reads it and takes
+    the widest of independent / episode / week / month; run() names the
+    clusters it used; the one committed result whose CI lines it moved carries
+    an ENGINE CHANGED banner; the reading records the decision.
     """
     import inspect as _i
     import os as _os
     import backtest as bt
-    assert bt.PENDING_ENGINE_FIXES == ("date_clusters",) and "date_clusters" not in bt.ALL_ENGINE_FIXES
-    assert "date_clusters" not in bt.parse_engine_fixes("all"), "'all' stays the six"
-    assert bt.parse_engine_fixes("all,date_clusters") == frozenset(bt.ALL_ENGINE_FIXES) | {"date_clusters"}
+    assert "date_clusters" in bt.ALL_ENGINE_FIXES and bt.PENDING_ENGINE_FIXES == ()
+    assert "date_clusters" in bt.parse_engine_fixes("all"), "'all' is the seven"
     if not _os.environ.get("ENGINE_FIXES"):
-        assert "date_clusters" not in bt.ENGINE_FIXES, "off by default until the owner decides"
+        assert "date_clusters" in bt.ENGINE_FIXES, "the default since 2026-11-04"
     src = _i.getsource(bt.clustered_ci)
     assert 'if _fix("date_clusters"):' in src and "se = max(ses.values())" in src \
         and '"no dates"' in src, "the widest of the four, and an undated list said so"
     run_src = _i.getsource(bt.run)
     assert "{_c['weeks']} weeks, {_c['months']} months" in run_src, "run() names the clusters it used"
-    bl = " ".join(Path("BACKLOG.md").read_text(encoding="utf-8").split())     # the note wraps the command
-    assert "--engine-fixes all,date_clusters | tee results/backtest_12t10y_engine_dates_codespace_run1.txt" in bl, \
-        "the owner's command is on file"
-    print("  date_clusters built, pending: off and outside 'all'; asked by name it widens the CI by week and month")
-
+    old = Path("results/backtest_12t10y_engine_all_codespace_run1.txt").read_text(encoding="utf-8")
+    assert old.startswith("!! ENGINE CHANGED 2026-11-04 (date_clusters joined the default)") \
+        and "backtest_12t10y_engine_dates_codespace_run1.txt" in old[:900], \
+        "the 12-ticker file's CI lines are the episode-only ones: banner, pointing to the current run"
+    rd = Path("results/date_clusters_reading_2026-11-04.md").read_text(encoding="utf-8")
+    assert 'DECIDED 2026-11-04 (owner: "go with date clusters as default")' in rd, "the reading records the decision"
+    print("  date_clusters is one of the default seven; the moved file is bannered; the decision is on file")
 
 def check_engine_fixes_default() -> None:
     """
@@ -4062,13 +4064,13 @@ def check_engine_fixes_default() -> None:
     import os as _os
     import backtest as bt
     assert bt.ALL_ENGINE_FIXES == ("price_gaps", "lookback", "open_beyond_target",
-                                   "dividends", "time_order", "clustered_ci"), bt.ALL_ENGINE_FIXES
+                                   "dividends", "time_order", "clustered_ci", "date_clusters"), bt.ALL_ENGINE_FIXES
     src = Path("backtest.py").read_text(encoding="utf-8")
     assert 'ENGINE_FIXES: frozenset = parse_engine_fixes(os.environ.get("ENGINE_FIXES", "all"))' in src, \
         "the default must come from the environment, all six when unset"
     if not _os.environ.get("ENGINE_FIXES"):
         assert bt.ENGINE_FIXES == frozenset(bt.ALL_ENGINE_FIXES), \
-            f"engine fixes {sorted(bt.ENGINE_FIXES)}: all six are the default since 2026-11-04"
+            f"engine fixes {sorted(bt.ENGINE_FIXES)}: all seven are the default since 2026-11-04"
     # a pre-registered engine stays pinned (intraday_rules, and the paper record through it)
     _st = src[src.find("def simulate_trade("):src.find("\ndef ", src.find("def simulate_trade(") + 1)]
     assert '_pinned = cfg.get("engine_fixes")' in _st and '_on("open_beyond_target")' in _st \
@@ -4077,7 +4079,7 @@ def check_engine_fixes_default() -> None:
         "intraday_rules keeps the engine its pre-registration fixed"
     where = {"price_gaps": "def compute(", "lookback": "def evaluate_signal(",
              "open_beyond_target": "def simulate_trade(", "dividends": "def simulate_trade(",
-             "time_order": "def stats(", "clustered_ci": "def run("}
+             "time_order": "def stats(", "clustered_ci": "def run(", "date_clusters": "def clustered_ci("}
     for name, fn in where.items():
         body = src[src.find(fn):src.find("\ndef ", src.find(fn) + 1)]
         assert f'_fix("{name}")' in body or f'_on("{name}")' in body, \
@@ -4342,7 +4344,7 @@ CHECKS = [
     ("the target exit is part of the structure (owner 11-04)", check_target_exit_in_structure),
     ("review follow-ups: IV floor, push retry, theta clock (owner 11-04)", check_review_followups_1_to_4),
     ("review hygiene cleaned (owner 11-04)", check_review_hygiene_cleaned),
-    ("date-clustered research CIs built, pending (owner 11-04)", check_date_clusters_pending),
+    ("date-clustered research CIs the default (owner 11-04)", check_date_clusters_default),
     ("Tiingo fallback split-adjusted, its fill checked (review 11-03)", check_tiingo_split_adjusted),
     ("research-engine fixes, all six the default (BACKLOG 47)", check_engine_fixes_default),
     ("rows on file re-graded under H+I (owner 11-04)", check_regrade_on_file),

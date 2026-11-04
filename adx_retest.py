@@ -174,7 +174,7 @@ def bands(trades: list[dict], levels: list[float]) -> list[dict]:
             mean, sd = (float(rs[0]) if rs else 0.0), 0.0
         se = sd / math.sqrt(n) if n > 1 and sd > 0 else 0.0
         # OVERLAPPING TRADES ARE NOT INDEPENDENT (backtest engine fix
-        # clustered_ci, BACKLOG 47; off by default). With it on, the band's
+        # clustered_ci, BACKLOG 47; the default, with date_clusters). With it on, the band's
         # SE is clustered by same-ticker episode, and p and the MDE read the
         # effective n that SE implies, so a band cannot look powered on
         # trades that are the same move counted twice.
