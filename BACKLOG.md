@@ -94,6 +94,14 @@ landed in the repo and the removal says so in the commit.
   (mean R as graded, on today's bars by the old rules, under H+I). The
   record's reading uses the re-grades from the first one written. Retire
   when the report shows 0 pending.
+- **2026-11-04 (item 47, date-clustered research CIs built, off).** **Owed
+  in the Codespace (frozen bars), one command:** `python backtest.py
+  --tickers GOOGL,AVGO,AMD,NFLX,CRM,ADBE,QCOM,MU,ORCL,NOW,PANW,LRCX --years
+  10 --engine-fixes all,date_clusters | tee
+  results/backtest_12t10y_engine_dates_codespace_run1.txt`. Same bars and
+  trades as `backtest_12t10y_engine_all_codespace_run1.txt`; only the
+  long/short CIs may widen. Then decide whether `date_clusters` joins the
+  default. Retire when the file is committed and decided.
 - **2026-11-04 (item 46, the target exit built).** From your next signal
   trade, each of the app's three trade forms asks **"Sell when the stock
   CLOSES at (the alert's target)"**. It is filled from the setup, or from
@@ -2483,7 +2491,7 @@ bars, and the decision to turn them on ships with those files.
 | `open_beyond_target` | a bar that opens beyond the target and trades through the stop booked −1 R (target 110, open 112, low 94: −1.00 R for ~+2.4 R) | a bar opening AT or beyond the target fills the target at that open, before stop-first; an open between the levels is still stop-first | the forward grader has it too from 2026-11-04 (grading amendment H, below) |
 | `dividends` | raw prices drop by the dividend on the ex-date and nothing paid it back: longs understated, shorts flattered; the ex-date drop could stop a long out | a position bought before the ex-date and held at its open is credited the dividend (a short pays it), in R on the original risk; FINRA Rule 5330's reduction of resting orders is applied on the ex-date: a long's sell stop and a short's buy-limit target drop by the dividend | broker-held orders (a mental stop would not be reduced). Yahoo's dividend history (split-adjusted, the bars' basis) is frozen in `.bar_cache/dividends/<TICKER>.json`, **outside the bar fingerprint** (its own `dividends d-…` line), so `record_recheck` can still say CODE MOVED on the same bars; the first run with the fix fetches it; a ticker whose history cannot be had is named, never silently uncredited |
 | `time_order` | the aggregate MaxDD was an equity curve in ticker-listing order (the selftest's toy: −3.0 R in ticker order, −1.0 R in time) | `stats()` orders trades by exit date, then entry date | exit date (when the R is realised; the review suggested entry date) |
-| `clustered_ci` | a trade lives up to 20 bars and the cooldown counts from the signal, so same-ticker trades overlap (40 % on trending fixtures) while every CI assumed independence | the long/short CIs in `run()` and `adx_retest`'s bands use an SE clustered by same-ticker episode (CR1); `adx_retest`'s p and MDE read the effective n that SE implies | by same-ticker episode of overlapping holding periods; the SE is never taken below the independent one (offsetting trades in an episode would otherwise narrow it) and one episode is unmeasurable (clustering by date as well would also cover market-wide same-day moves: recorded, not built). **`oos_validate` is not changed**: its protocol is spent and locked, and it reads per-ticker printed rows, not trades (its pooled variance is item 27's) |
+| `clustered_ci` | a trade lives up to 20 bars and the cooldown counts from the signal, so same-ticker trades overlap (40 % on trending fixtures) while every CI assumed independence | the long/short CIs in `run()` and `adx_retest`'s bands use an SE clustered by same-ticker episode (CR1); `adx_retest`'s p and MDE read the effective n that SE implies | by same-ticker episode of overlapping holding periods; the SE is never taken below the independent one (offsetting trades in an episode would otherwise narrow it) and one episode is unmeasurable (clustering by date as well would also cover market-wide same-day moves: recorded, not built; *built 2026-11-04 as the pending fix `date_clusters`, off, below*). **`oos_validate` is not changed**: its protocol is spent and locked, and it reads per-ticker printed rows, not trades (its pooled variance is item 27's) |
 
 **Grading amendments H and I, APPLIED 2026-11-04 (owner: "go with
 amendment H and grader dividends as well").** `forward_log.resolve_signal()`
@@ -2616,6 +2624,27 @@ no research re-run, no research default flipped, `oos_validate`
 unchanged, the forward rows on file not re-graded. *(Since done, below: the
 frozen-bar re-runs made, all six the default, the rows on file re-graded
 under H+I. `oos_validate` stays unchanged.)*
+
+**DATE CLUSTERS BUILT, PENDING 2026-11-04 (owner: "go with the same-date
+error bars as well").** The row above recorded that `clustered_ci` groups a
+ticker's overlapping trades but not trades on DIFFERENT tickers entered in
+the same days, which share a market move. Built as `date_clusters`, a
+PENDING engine fix (`backtest.PENDING_ENGINE_FIXES`): off, and outside
+`all`, so every committed `--engine-fixes all` command still reproduces its
+file; asked for by name (`--engine-fixes all,date_clusters`). With it on,
+`clustered_ci` also clusters by entry week and entry month (CR1 each) and
+takes the widest SE of independent / episode / week / month; never narrower,
+one week or month is unmeasurable, an undated list says "no dates"; no trade,
+R or mean changes. `run()`'s CI note names the episodes, weeks, months and
+the widest; `adx_retest`'s bands read it through the same function. On a
+fixture of five tickers entered in the same weeks with the same outcome it
+widens the SE 2.4x over episodes alone. The one committed result it can move
+is `backtest_12t10y_engine_all_codespace_run1.txt`'s two CI lines (LONG
+[−0.083, +0.216], SHORT [−0.480, −0.151]); the owner's re-run (hand-off) says
+by how much, then whether it becomes the default (that file then carries a
+banner or is superseded by the re-run). `check_date_clusters_pending` (77);
+eleven guards broken on purpose, every one caught. The `--engine-fixes` help no
+longer says the default is "none".
 
 ---
 
@@ -3296,8 +3325,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 76 cross-module
-  invariants (76 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 77 cross-module
+  invariants (77 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on
