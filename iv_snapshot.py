@@ -60,6 +60,14 @@ TRADING_DAYS = 252
 HAC_LAG = FORWARD_SESSIONS - 1      # overlapping windows -> Newey-West
 READING_SESSIONS = 126              # six months of sessions before a reading
 MAX_IV_POINTS = 500.0               # above this the quote is garbage, not vol
+# AND BELOW THIS (validity note 2026-11-04, BACKLOG 46 hygiene; owner: "go
+# with 1-4"). Yahoo fills a contract it cannot solve with a placeholder IV
+# of about 1e-5 (0.001 points), and `iv > 0` let it in: averaged with a real
+# quote at the ATM strike it halves the reading. No US single name or index
+# trades at an implied vol under 5 points; the 143 rows on file are all
+# far above it. A contract under it is skipped; a row under it is refused
+# as "iv missing or absurd", the existing rule's lower bound.
+MIN_IV_POINTS = 5.0
 # THE WINDOW MUST BE WHOLE (external review 2026-10-19, N04; BACKLOG 35).
 # Consecutive sessions are at most this many calendar days apart: Thu -> Mon
 # over a Friday holiday, or Fri -> Tue over a Monday one. A larger gap means
@@ -171,7 +179,7 @@ def atm_iv_from_chain(calls: list, puts: list, spot: float) -> dict | None:
                 k = float(r.get("strike")); iv = float(r.get("impliedVolatility"))
             except (TypeError, ValueError):
                 continue
-            if not (math.isfinite(iv) and iv > 0 and math.isfinite(k) and k > 0):
+            if not (math.isfinite(iv) and iv * 100.0 >= MIN_IV_POINTS and math.isfinite(k) and k > 0):
                 continue
             if abs(k - spot) / spot > ATM_TOL:
                 continue
@@ -205,7 +213,7 @@ def record(date: str, ticker: str, expiry: str, dte: int, strike: float,
         # BACKLOG 36 group A: a NaN spot passes `spot <= 0` and lands a row
         # whose strike-to-spot distance is NaN; refuse, never fill with zero.
         return _refuse("malformed")
-    if not (math.isfinite(iv) and 0 < iv < MAX_IV_POINTS):
+    if not (math.isfinite(iv) and MIN_IV_POINTS <= iv < MAX_IV_POINTS):
         return _refuse("iv missing or absurd")
     if spot <= 0 or abs(strike - spot) / spot > ATM_TOL:
         return _refuse("strike not at the money")
@@ -442,7 +450,16 @@ def selftest() -> int:
     assert a["strike"] == 100 and abs(a["iv"] - 42.0) < 1e-9, a
     assert atm_iv_from_chain([{"strike": 130, "impliedVolatility": 0.9}], [], 100.0) is None
     assert atm_iv_from_chain([{"strike": 100, "impliedVolatility": "nan"}], [], 100.0) is None
-    print("atm pick         : nearest strike, call/put mean, far strikes ignored")
+    # Yahoo's placeholder (~1e-5) is not a quote: it neither halves the ATM mean
+    # nor makes its strike the ATM one (validity note 2026-11-04).
+    a2 = atm_iv_from_chain([{"strike": 100, "impliedVolatility": 0.30}],
+                           [{"strike": 100, "impliedVolatility": 0.00001}], 100.0)
+    assert a2["strike"] == 100 and abs(a2["iv"] - 30.0) < 1e-9, a2
+    a3 = atm_iv_from_chain([{"strike": 100, "impliedVolatility": 0.00001}, {"strike": 102, "impliedVolatility": 0.31}],
+                           [{"strike": 100, "impliedVolatility": 0.0499}], 100.0)
+    assert a3["strike"] == 102 and abs(a3["iv"] - 31.0) < 1e-9, a3
+    assert atm_iv_from_chain([{"strike": 100, "impliedVolatility": 0.05}], [], 100.0)["iv"] == 5.0, "the floor is inclusive"
+    print("atm pick         : nearest strike, call/put mean, far strikes and placeholder IVs ignored")
 
     # Guards, each counted.
     ok = record("2026-10-08", "NVDA", "2026-11-13", 36, 250.0, 251.0, 48.5, 41.2, "yahoo", path=tmp, refused=ref)
@@ -452,13 +469,15 @@ def selftest() -> int:
     assert record("2026-10-08", "BBB", "2026-11-27", 50, 100.0, 100.0, 30.0, 25.0, "yahoo", path=tmp, refused=ref) is None
     assert record("2026-10-08", "CCC", "2026-11-13", 36, 100.0, 100.0, 0.0, 25.0, "yahoo", path=tmp, refused=ref) is None
     assert record("2026-10-08", "DDD", "2026-11-13", 36, 100.0, 100.0, 900.0, 25.0, "yahoo", path=tmp, refused=ref) is None
+    assert record("2026-10-08", "DDE", "2026-11-13", 36, 100.0, 100.0, 0.001, 25.0, "yahoo", path=tmp, refused=ref) is None
+    assert record("2026-10-08", "DDF", "2026-11-13", 36, 100.0, 100.0, 4.99, 25.0, "yahoo", path=tmp, refused=ref) is None
     assert record("2026-10-08", "EEE", "2026-11-13", 36, 120.0, 100.0, 30.0, 25.0, "yahoo", path=tmp, refused=ref) is None
     _m0 = ref.get("malformed", 0)
     assert record("2026-10-08", "FFF", "2026-11-13", 36, 100.0, float("nan"), 30.0, 25.0, "yahoo", path=tmp, refused=ref) is None
     assert record("2026-10-08", "GGG", "2026-11-13", 36, float("inf"), 100.0, 30.0, 25.0, "yahoo", path=tmp, refused=ref) is None
     assert ref.get("malformed", 0) == _m0 + 2, "a NaN spot or an infinite strike is malformed, not a row (BACKLOG 36 group A)"
     assert ref == {"malformed": 2, "already recorded today": 1, "dte outside 21-45": 2,
-                   "iv missing or absurd": 2, "strike not at the money": 1}, ref
+                   "iv missing or absurd": 4, "strike not at the money": 1}, ref
     assert len(read_all(tmp)) == 1, "a refusal must write nothing"
     print(f"guards           : {sum(ref.values())} refusals, each counted by reason; one row per name per day")
 

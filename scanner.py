@@ -943,6 +943,7 @@ def suggest_option(ticker: str, price: float, trend: str,
             "budget": round(budget, 2),
             "dte_adequate": bool(pick.get("dte_adequate", True)),
             "days_needed": int(pick.get("days_needed") or 0),
+            "sessions_to_exit": int(pick.get("sessions_to_exit") or 0),
         }
     except Exception as e:
         logger.warning("suggest_option(%s) failed: %s", ticker, e)

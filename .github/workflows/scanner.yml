@@ -341,6 +341,9 @@ jobs:
                 exit 0
               fi
               echo "Push attempt $attempt failed — retrying in 5s."
+              # A failed rebase leaves the repo mid-rebase and every later
+              # `pull --rebase` refuses: abort it so the retry can run.
+              git rebase --abort 2>/dev/null || true
               sleep 5
             done
             echo "::warning::Could not push scanner state. Dedup will not carry \

@@ -113,6 +113,18 @@ requires the IV line on every committed option result.
 > 20 a pass) so their snapshots settle; before this they were never graded,
 > which would have censored most of the sample under weekly rotation.
 
+> **Validity note, 2026-11-04 (BACKLOG 46 hygiene; owner: "go with 1-4").
+> Written before any premium row exists (the first is due 2026-11-09/10).
+> The horizon, the formula and the reading rule are unchanged; this gives
+> "IV missing or absurd" its lower bound.** Yahoo fills a contract it cannot
+> solve with a placeholder implied vol of about 1e-5 (0.001 points), which
+> the writer accepted as "> 0"; averaged with a real quote at the ATM strike
+> it would halve the reading. From this note a contract quoting under
+> `MIN_IV_POINTS` = 5 vol points is skipped when the ATM strike is chosen,
+> and a row under it is refused as "iv missing or absurd". No US single name
+> or index trades under 5 points; none of the 143 snapshot rows on file is
+> below it, so nothing recorded changes.
+
 **Question.** For the names the engine runs on, is implied vol above the
 realised vol that followed, and by how much — the same question
 `vrp_check.py` answered for SPX, on the names that matter.
@@ -166,5 +178,6 @@ CLAUDE.md.
   `IV: <x>x realised` line in every `results/option_*` file.
 - `iv_snapshot` rows carry date, ticker, expiry, DTE, ATM strike, implied vol,
   realised vol, and the chain's source; the writer refuses a row whose DTE is
-  outside 21–45 or whose IV is missing, and counts the refusal.
+  outside 21–45 or whose IV is missing, under `MIN_IV_POINTS` (5) or over
+  `MAX_IV_POINTS` (500), and counts the refusal.
 - Both falsified before merge, per the repo rule.

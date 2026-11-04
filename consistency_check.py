@@ -3932,6 +3932,53 @@ def check_target_exit_in_structure() -> None:
           "(after STOP, before TARGET), asked by every app path, named in the alert")
 
 
+
+def check_review_followups_1_to_4() -> None:
+    """
+    Three review-hygiene fixes (expert review 2026-11-03; owner 2026-11-04:
+    "go with 1-4"). (1) The IV record refuses Yahoo's ~1e-5 placeholder: a
+    contract under MIN_IV_POINTS is skipped at the ATM pick and a row under it
+    refused, and the pre-registration's dated note says so before the first
+    premium row. (2) A push that fails mid-rebase is aborted so the retry can
+    run, in both state-writing workflows; the exit monitor's merges its state
+    onto the remote file by position (`--merge-state`), from the base and its
+    own version captured before its commit. (3) The theta flag reads the
+    sessions to the structure's time exit, not calendar DTE, and the contract
+    checker's is advisory (the structure accepts 21-45 DTE).
+    """
+    import inspect as _i
+    import iv_snapshot as ivs
+    import option_chain as oc
+    assert ivs.MIN_IV_POINTS == 5.0 and ivs.MAX_IV_POINTS == 500.0
+    assert "iv * 100.0 >= MIN_IV_POINTS" in _i.getsource(ivs.atm_iv_from_chain), "placeholders skipped at the pick"
+    assert "MIN_IV_POINTS <= iv < MAX_IV_POINTS" in _i.getsource(ivs.record), "rows under the floor refused"
+    doc = Path("results/option_iv_preregistration.md").read_text(encoding="utf-8")
+    assert "Validity note, 2026-11-04" in doc and "`MIN_IV_POINTS` = 5 vol points" in doc, \
+        "the pre-registration states the floor in a dated note"
+    em = Path(".github/workflows/exit-monitor.yml").read_text(encoding="utf-8")
+    i_base, i_commit = em.find('git show HEAD:open_positions.json > "$RUNNER_TEMP/pos_base.json"'), \
+        em.find('git commit -m "chore: update position state [skip ci]"')
+    assert -1 < i_base < i_commit and 'cp open_positions.json "$RUNNER_TEMP/pos_ours.json"' in em[:i_commit], \
+        "base and ours are captured before the commit"
+    i_abort, i_merge = em.find("git rebase --abort"), em.find("python exit_monitor.py --merge-state")
+    assert -1 < i_abort < i_merge, "a failed rebase is aborted, then the state merged by position"
+    assert "git rebase --abort" in Path(".github/workflows/scanner.yml").read_text(encoding="utf-8"), \
+        "the scanner's retry aborts a failed rebase too"
+    import exit_monitor as _em
+    assert "merge_state_files(*_args.merge_state)" in Path("exit_monitor.py").read_text(encoding="utf-8") \
+        and callable(_em.merge_position_state)
+    sel = _i.getsource(oc.get_option_data)
+    assert '"dte_adequate":to_exit >= days_needed' in sel and "to_exit = sessions_to_time_exit(dte)" in sel, \
+        "the selector's flag reads the time-exit clock"
+    app = Path("app.py").read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+    j = app.find('add("Theta adequate for target"')
+    assert j > 0 and "blocking=False)" in app[j:j + 300] and "_to_exit >= days_needed" in app[j:j + 120], \
+        "the checker's theta line reads the time-exit clock and never blocks"
+    assert "if sessions_to_time_exit(MAX_DTE) < _days_needed_preview:" in app, "the sidebar warns on the right clock"
+    print("  IV placeholders refused; a failed push aborts its rebase and merges by position; the theta flag "
+          "reads the time exit")
+
+
 def check_engine_fixes_default() -> None:
     """
     Expert review 2026-11-03, the research-engine items (owner: "fix the
@@ -4229,6 +4276,7 @@ CHECKS = [
     ("option target-exit arm pre-registered (D3)", check_option_target_exit_preregistered),
     ("the larger D3 pre-registered (77 names outside run 1)", check_option_target_exit_large_preregistered),
     ("the target exit is part of the structure (owner 11-04)", check_target_exit_in_structure),
+    ("review follow-ups: IV floor, push retry, theta clock (owner 11-04)", check_review_followups_1_to_4),
     ("Tiingo fallback split-adjusted, its fill checked (review 11-03)", check_tiingo_split_adjusted),
     ("research-engine fixes, all six the default (BACKLOG 47)", check_engine_fixes_default),
     ("rows on file re-graded under H+I (owner 11-04)", check_regrade_on_file),

@@ -31,7 +31,8 @@ from rate_limit import (
     RATE_LIMITER as _rl, RATE_LIMITER_SLOW as _rl_slow,
     is_rate_limit_error as _is_rate_limit_error,
 )
-from option_chain import get_option_data, _fetch_chain_with_retry, _OPT_MAX_EXPIRIES, et_today
+from option_chain import (get_option_data, _fetch_chain_with_retry, _OPT_MAX_EXPIRIES, et_today,
+                          sessions_to_time_exit, target_sessions_needed)
 
 
 def _bridge_secrets_to_env(*names: str) -> None:
@@ -478,17 +479,19 @@ MAX_HOLD      = int(st.sidebar.number_input("Max hold (sessions)",   value=30,  
          "contracts already being monitored keep the rules they were opened with."))
 st.sidebar.divider()
 
-# MIN_DTE and ATR_TGT_MULT are coupled: the theta check needs roughly
-# ATR_TGT_MULT × 3 sessions for the target to play out. If Min DTE is below
-# that, EVERY contract the search returns gets flagged as theta-inadequate —
-# which looks like a bug but is just the two settings disagreeing.
-_days_needed_preview = max(5, int(ATR_TGT_MULT * 3))
-if MIN_DTE < _days_needed_preview:
+# MAX_DTE and ATR_TGT_MULT are coupled: the theta check needs roughly
+# ATR_TGT_MULT × 3 sessions for the target to play out BEFORE the structure's
+# time exit sells the contract (owner 2026-11-04: "go with 1-4"; it compared
+# calendar DTE and could never fail). If even Max DTE leaves fewer sessions
+# than that, EVERY contract found is flagged: the two settings disagree.
+_days_needed_preview = target_sessions_needed(ATR_TGT_MULT, 1.0)
+if sessions_to_time_exit(MAX_DTE) < _days_needed_preview:
     st.sidebar.warning(
-        f"⚠️ Min DTE ({MIN_DTE}) is below the ~{_days_needed_preview} sessions a "
-        f"{ATR_TGT_MULT}× ATR target usually needs. Every contract found will be "
-        f"flagged as theta-inadequate. Raise Min DTE to {_days_needed_preview}+ "
-        f"or lower the ATR target multiplier."
+        f"⚠️ Even at Max DTE ({MAX_DTE}) a contract is held only "
+        f"~{sessions_to_time_exit(MAX_DTE)} sessions before the "
+        f"{risk_params.MEASURED_OPTION_STRUCTURE['dte_exit']}-DTE exit, under the "
+        f"~{_days_needed_preview} a {ATR_TGT_MULT}× ATR target usually needs. Every "
+        f"contract found will be flagged. Lower the ATR target multiplier."
     )
 
 WEEKLY_CONFIRM = st.sidebar.checkbox("Require weekly TF alignment",  value=bool(_D.weekly_confirm))
@@ -1209,10 +1212,14 @@ def check_manual_contract(ticker: str, right: str, strike: float,
             f"never propose this contract itself", blocking=False)
 
     atr = a.get("atr")
-    days_needed = max(5, int(ATR_TGT_MULT * 3)) if (atr and atr > 0) else 10
-    add("Theta adequate for target", dte >= days_needed,
-        f"a {ATR_TGT_MULT:g}x ATR target needs ~{days_needed} sessions; "
-        f"this has {dte}")
+    days_needed = target_sessions_needed(ATR_TGT_MULT, atr)
+    _to_exit = sessions_to_time_exit(dte)
+    # ADVISORY, on the time-exit clock (owner 2026-11-04: "go with 1-4"): the
+    # structure accepts 21-45 DTE, so this never blocks a trade it allows.
+    add("Theta adequate for target", _to_exit >= days_needed,
+        f"sold by the {risk_params.MEASURED_OPTION_STRUCTURE['dte_exit']}-DTE exit after "
+        f"~{_to_exit} sessions; a {ATR_TGT_MULT:g}x ATR target needs ~{days_needed}",
+        blocking=False)
 
     # Live quote for THIS contract — liquidity is a property of the strike,
     # not of the underlying, so it has to be fetched specifically.
@@ -2061,18 +2068,22 @@ with TAB_STOCK:
                             st.caption(f"Spread: \\${opt['spread']} ({spread_pct:.1f}% of mid) · Last: \\${opt['last_price']}")
 
                             # ── DTE adequacy (theta trap warning) ──
+                            # On the time-exit clock (owner 2026-11-04: "go with 1-4"):
+                            # it compared DTE itself and could never fail.
+                            _dx = risk_params.MEASURED_OPTION_STRUCTURE["dte_exit"]
+                            _te = opt.get("sessions_to_exit", sessions_to_time_exit(opt["dte"]))
                             if not opt.get("dte_adequate", True):
-                                st.error(
-                                    f"⏳ **Theta risk — expiry may be too short.** This contract has "
-                                    f"**{opt['dte']} DTE**, but your target ({ATR_TGT_MULT}× ATR) typically needs "
-                                    f"**~{opt.get('days_needed', 8)} sessions** of favourable movement. "
-                                    f"The trade thesis may be right and the option still expire worthless. "
-                                    f"Raise **Min DTE** in the sidebar to search further out."
+                                st.warning(
+                                    f"⏳ **Short on time.** This {opt['dte']}-DTE contract is sold by the "
+                                    f"{_dx}-DTE exit after **~{_te} sessions**; your target "
+                                    f"({ATR_TGT_MULT}× ATR) typically needs **~{opt.get('days_needed', 8)}**. "
+                                    f"An expiry about {_dx + -(-opt.get('days_needed', 8) * 7 // 5)} DTE or "
+                                    f"later gives it that time. Raise **Min DTE** in the sidebar to search there."
                                 )
                             else:
                                 st.caption(
-                                    f"⏳ {opt['dte']} DTE vs ~{opt.get('days_needed', 8)} sessions needed "
-                                    f"for the target — adequate time cushion. ✅"
+                                    f"⏳ ~{_te} sessions before the {_dx}-DTE exit vs "
+                                    f"~{opt.get('days_needed', 8)} the target typically needs. ✅"
                                 )
 
                             # ── Search-window transparency ──

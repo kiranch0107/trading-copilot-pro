@@ -21,13 +21,6 @@ Dated notes the owner asked to be read on the next pull. Append; never
 rewrite an earlier note. Remove a note only when the thing it waits on has
 landed in the repo and the removal says so in the commit.
 
-- *(none open as of 2026-10-26.)* The 2026-10-13 note (AAPL closed outside
-  the repo; NVDA and PFE to be closed 10-16; the app's dead PAT) was retired
-  on 2026-10-26: the AAPL close, the replacement token and the NVDA and PFE
-  closes have all landed in the repo (`results/progress_review_2026-10-26.md`).
-  The token expiry dates it carried (app PAT 2027-01-05, dispatch token
-  2027-01-06, both rotated in the last week of December 2026) live on in the
-  scheduler item's "FORCING FUNCTION — TWO PATs" paragraph.
 - **2026-10-30 (item 43): close the NOW position** (EXIT_SIGNALLED since
   09:30 ET, STOP −56 % at 14:00; expiry 11-20, the structure's 7-DTE exit
   on 11-11) and log it. ~~J1/J2 (the gap-at-the-fill
@@ -77,16 +70,6 @@ landed in the repo and the removal says so in the commit.
   above: on a fallback day the alert's fill gate and price-at-send line now
   read Tiingo's IEX quote; with no quote the alert is withheld (a `NOT SENT`
   row says why) rather than sent unchecked.
-- **2026-11-03 (D3, D7 decided).** **Owed on the laptop (frozen bars):** the
-  D3 run, two commands in `results/option_target_exit_preregistration.md`
-  (`option_backtest.py --config live --tp 200 --sl 50 --dte-exit 7
-  --target-exit-ab`, at IV 1.15 and 1.00), teed to
-  `results/option_target_exit_run1_iv1.15.txt` / `_iv1.00.txt`. Retire this
-  line when both files are committed with their reading. *(Run 2026-11-04 in
-  the Codespace on the frozen bars; committed with
-  `results/option_target_exit_run1.md`: 149 pairs, UNDERPOWERED under the
-  pre-registered 150 floor, so no reading is made and the structure stays
-  as measured. Retired.)*
 - **2026-11-03 (revision counter fixed; item 39).** The post-close slot
   question is open again, by the rule decided this morning ("the slot
   moves if that is ever > 0"): the corrected counter reads **3**, three
@@ -97,25 +80,6 @@ landed in the repo and the removal says so in the commit.
   workflow's post-close window; no code change), or keep 16:20 and accept
   that the morning scan records what the pass misses. Every post-close log's
   `clocks:` line now prints the corrected number. Retire when decided.
-- **2026-11-04 (item 47, the research engine's six).** Built and merged
-  **switched off**; nothing committed moved. **Owed on the laptop:** the
-  seven commands in item 47 (`record_recheck.py` with no fixes, with
-  `--engine-fixes all`, with each of four fixes alone, and one
-  `backtest.py` cut), teed into `results/`. Then decide which fixes become
-  the default (recommended: all six). Do the D3 run as pre-registered
-  either way: it runs on the default engine. Retire when the files are
-  committed and the default is decided. *(Files committed 2026-11-04 from the
-  owner's Codespace, which holds the frozen bars; reading in
-  `results/engine_fixes_reading_2026-11-04.md`: no sign changes. The default
-  is still to decide.)* *(Decided 2026-11-04: all six are the default; 12
-  results that were current carry an ENGINE CHANGED banner. Retired.)*
-- **2026-11-04 (grading amendments H and I applied).** From the merge the
-  forward grader fills an open past the target there and credits
-  dividends (stop reduced on the ex-date); the 405 outcome rows on file
-  stand as graded. Your call, whenever: re-grade those rows under H+I as a
-  second basis (a reading change; about a third are on dividend payers and
-  are understated). The post-close logs say when a settled row is waiting
-  for a dividend history.
 - **2026-11-04 (item 48: the premium question, decided).** The 21–45-day
   hold test is not built; whether selling premium pays is read from the
   records already running. When due: the SPY/QQQ spread arms' first
@@ -130,24 +94,6 @@ landed in the repo and the removal says so in the commit.
   (mean R as graded, on today's bars by the old rules, under H+I). The
   record's reading uses the re-grades from the first one written. Retire
   when the report shows 0 pending.
-- **2026-11-04 (item 46, the larger D3 pre-registered).** **Owed in the
-  Codespace:** one command, `python option_backtest.py --d3-large | tee
-  results/option_target_exit_large_run1.txt`
-  (`results/option_target_exit_large_preregistration.md`). The first run
-  fetches 77 names × 10 years from Yahoo; if it prints `NOT RUN` (a name
-  failed to load; no number is computed) run it again, and once a file
-  prints a `VERDICT` line commit it as it stands. Retire this line when
-  the file is committed with its reading. *(Run 2026-11-04 in the
-  Codespace; committed with `results/option_target_exit_large_run1.md`:
-  NOT ESTABLISHED, EQUIVALENT within ±5 points. Retired.)*
-- **2026-11-04 (item 46, the larger D3 read): one decision open, yours.**
-  Selling the option when the stock CLOSES at the alert's target was about
-  1 point of premium better than holding for +200 %, and at most 0.9
-  worse (95 %), on 2,817 pairs. Tie the option's exit to the alert's
-  target (one change to `MEASURED_OPTION_STRUCTURE`, the exit monitor and
-  the journal), or keep the structure as measured. Retire when decided.
-  *(Decided 2026-11-04, owner: "go with the target exit"; built the same
-  day. Retired.)*
 - **2026-11-04 (item 46, the target exit built).** From your next signal
   trade, each of the app's three trade forms asks **"Sell when the stock
   CLOSES at (the alert's target)"**. It is filled from the setup, or from
@@ -1776,7 +1722,7 @@ record shows within weeks.
 
 ---
 
-## 31. "Most trades fail, others make money": the logic review — ASSESSED 2026-10-13, DECISIONS OPEN
+## 31. "Most trades fail, others make money": the logic review — ASSESSED 2026-10-13; DECIDED THE SAME DAY (THE PULLBACK BUCKET, BUILT; READING ABOUT 20.6 MONTHS OUT)
 
 **Owner's question 2026-10-13.** Answered in
 `results/logic_review_2026-10-13.md` from the committed record first and
@@ -1971,7 +1917,7 @@ it. Item 23's table reads live ADX 30 from here.
 
 ---
 
-## 34. Progress review 2026-10-19: the report counts rows where the pre-registration counts episodes; the 4-ATR target has never been reached — ASSESSED 2026-10-19, DECISIONS OPEN
+## 34. Progress review 2026-10-19: the report counts rows where the pre-registration counts episodes; the 4-ATR target has never been reached — ASSESSED 2026-10-19; A–E DECIDED AND BUILT BY 2026-10-28
 
 **Owner's request 2026-10-19** ("re-perform deeper analysis, see what
 improved, what can be improved, what idea can be developed"), answered in
@@ -2192,7 +2138,7 @@ verified here and are not addressed.
 
 ---
 
-## 36. Second and third external reviews (2026-10-20): persistence completed in two passes, a regression of mine fixed, numeric validation and rule-level gate precision open — VERIFIED AND PARTLY FIXED 2026-10-20
+## 36. Second and third external reviews (2026-10-20): persistence completed in two passes, a regression of mine fixed, numeric validation and rule-level gate precision open — VERIFIED AND PARTLY FIXED 2026-10-20; GROUPS A–C AND GATE PRECISION DONE 2026-10-28 (THREE POLICY ITEMS LEFT AS POLICY)
 
 The owner had the 2026-10-19 fixes re-audited (reviewed SHA 340a221).
 Verification and response in `results/external_review_2026-10-20_response.md`;
@@ -2337,7 +2283,7 @@ precedence) stay policy.
 
 ---
 
-## 37. Progress review 2026-10-26: the live bucket cannot reach its gate (~2.3 years) and the pool can (~4.5 months); the 4-ATR target is now reached 8 of 57 times; a dead name is never settled — ASSESSED 2026-10-26, DECISIONS OPEN
+## 37. Progress review 2026-10-26: the live bucket cannot reach its gate (~2.3 years) and the pool can (~4.5 months); the 4-ATR target is now reached 8 of 57 times; a dead name is never settled — ASSESSED 2026-10-26; DECIDED AND BUILT 2026-10-28 (ITEM 38)
 
 **Owner's request 2026-10-26** ("review again thoroughly, improvements and
 pending items"), answered in `results/progress_review_2026-10-26.md`.
@@ -2667,7 +2613,9 @@ all six; a pinned caller keeps its engine). Turning them on is ONE
 change with these files: the default flips, and every committed result
 the flip moves gets an "ENGINE CHANGED" banner, as item 21's did. Not done:
 no research re-run, no research default flipped, `oos_validate`
-unchanged, the forward rows on file not re-graded.
+unchanged, the forward rows on file not re-graded. *(Since done, below: the
+frozen-bar re-runs made, all six the default, the rows on file re-graded
+under H+I. `oos_validate` stays unchanged.)*
 
 ---
 
@@ -2933,9 +2881,42 @@ research engine's NaN-row ADX blanking, truncated look-back on the first 19
 bars, open-beyond-target-then-stop booked −1 R, MaxDD in ticker order,
 overlapping trades under independent CIs (each needs a re-run on the
 frozen bars, fix and re-run as one change)~~ (built, off; item 47); option engine close-only
-marking vs ~13 live polls; inert DTE adequacy check; the exit workflow's
-retry after a rebase conflict; `--diagnose` vs `run()`; hygiene items in
-the review file.
+marking vs ~13 live polls; ~~inert DTE adequacy check; the exit workflow's
+retry after a rebase conflict~~ (both fixed 2026-11-04, below); ~~`--diagnose`
+vs `run()`~~ (fixed 2026-11-03, above); hygiene items in the review file
+(~~the IV placeholder~~ fixed 2026-11-04; the rest open: `liquidity_check`'s
+9-DTE default, `churn_tracker`'s copy of the ranking, the `live_cfg`
+docstring, unpinned packages in `universe-snapshot.yml`).
+
+**FOUR FOLLOW-UPS BUILT 2026-11-04 (owner: "go with 1-4").** (1) **The IV
+record refuses Yahoo's placeholder.** A contract quoting under
+`iv_snapshot.MIN_IV_POINTS` (5 vol points; Yahoo fills an unsolved contract
+with ~0.001) is skipped at the ATM pick, where it would have halved the mean,
+and a row under it is refused as "iv missing or absurd". It was added in a
+dated validity note in `option_iv_preregistration.md` before the first
+premium row; none of the 143 snapshot rows is affected. (2) **A failed state
+push recovers.** The exit monitor's retry never aborted a rebase that
+conflicted, so attempts 2 and 3 refused and the run's alert flags were lost
+(one duplicate alert next run). Reproduced on a throwaway repo: an app commit
+and a monitor run on the same file failed all three attempts. Now the
+workflow captures the checked-out and the monitor's versions before its
+commit; on a failure it aborts the rebase, resets to the remote file and
+lays the monitor's changed fields on it position by position
+(`exit_monitor.py --merge-state`, `merge_position_state`: the app's edits,
+closes and new positions stand). The same reproduction pushes on attempt 2
+with both sides' changes. The scanner's retry aborts a failed rebase too.
+(3) **The theta flag reads the time exit.** It compared calendar DTE with
+the ~12 sessions a 4-ATR target needs and, with the window at 21+, could
+never fail. It now compares the sessions until the structure's 7-DTE exit
+(`option_chain.sessions_to_time_exit`: a 21-DTE contract has about 10), so
+21–23 DTE contracts are flagged and 24+ pass. The selector's flag, the
+quick-buy card, the sidebar and the contract checker all read it; the
+checker's line is advisory, since the structure accepts 21–45. The contract
+chosen is unchanged. (4) **Backlog housekeeping:** eight titles that still
+read "decisions open" or "recommended" now say what was decided; six
+hand-off notes whose subject has landed are removed. 
+`check_review_followups_1_to_4` (75); thirteen guards broken on purpose,
+every one caught.
 
 ---
 
@@ -2996,7 +2977,7 @@ bind; ~11-06 slot decision; 11-09/10 IV; 11-30 spread; 12-16 PATs.
 
 ---
 
-## 43. Progress review 2026-10-30 (14:00 ET): the first day's reads; the NOW alert fired on a bar whose next open had gapped past the stop — ASSESSED 2026-10-30, TWO FIXES RECOMMENDED
+## 43. Progress review 2026-10-30 (14:00 ET): the first day's reads; the NOW alert fired on a bar whose next open had gapped past the stop — ASSESSED 2026-10-30; J1 AND J2 DONE 2026-10-30
 
 `results/progress_review_2026-10-30.md`. The 11:07 scan: CME alerted
 (live), five of eight pool HQ names alerted by RS, 13 rows graded; no
@@ -3040,7 +3021,7 @@ scan is where J1 first binds — Monday 11-02.
 
 ---
 
-## 42. Progress review 2026-10-29 (late): the live position's exit rules against the measured structure — ASSESSED 2026-10-29, ONE DECISION OPEN
+## 42. Progress review 2026-10-29 (late): the live position's exit rules against the measured structure — ASSESSED 2026-10-29; H1 (a) AND H2 DONE 2026-10-29
 
 `results/progress_review_2026-10-29_late.md`. Where the night review did
 not look. **H1 (owner decision):** the measured structure's own run
@@ -3067,7 +3048,7 @@ hold of 30 cannot bind and is left as recorded. Pinned in
 
 ---
 
-## 41. Progress review 2026-10-29 (night): nine merges, the record's first alerts, floors and clocks all live; the H1 reading loses the post-F rows to episodes that straddle amendment F — ASSESSED 2026-10-29, ONE FIX RECOMMENDED
+## 41. Progress review 2026-10-29 (night): nine merges, the record's first alerts, floors and clocks all live; the H1 reading loses the post-F rows to episodes that straddle amendment F — ASSESSED 2026-10-29; G1–G4 DONE 2026-10-29
 
 `results/progress_review_2026-10-29.md`. Harness 47 / 63 / clean; ~60
 mutants falsified today. Every run green; DST (11-01) and the half days
@@ -3108,7 +3089,7 @@ usage line and the OOS run-number line say what they count.
 
 ---
 
-## 40. Logic review 2026-10-29 (evening): the rule boundaries hold; a cooldown race, a grading floor to decide, and the first spread cycles price the model far below the market — ASSESSED 2026-10-29, ONE FIX RECOMMENDED, ONE DECISION OPEN
+## 40. Logic review 2026-10-29 (evening): the rule boundaries hold; a cooldown race, a grading floor to decide, and the first spread cycles price the model far below the market — ASSESSED 2026-10-29; L1, L2 AND THE RESEARCH FLOOR DONE 2026-10-29
 
 `results/logic_review_2026-10-29.md`. Owner: "perform thorough testing
 on our conditions, criteria, logic". About 140 boundary assertions over
@@ -3297,8 +3278,8 @@ $0.125, the exit monitor's levels.
 
 ## Working conventions
 
-- `signal_core.py` is canonical. `consistency_check.py` enforces 74 cross-module
-  invariants (74 `check_` functions); run it before pushing.
+- `signal_core.py` is canonical. `consistency_check.py` enforces 75 cross-module
+  invariants (75 `check_` functions); run it before pushing.
 - **Two configs, declared (BACKLOG 23, decided 2026-10-28).** `bt.DEFAULTS`
   is the RECORD's research config (ADX 25, 1.0 / 3.0, volume 1.0, regime
   off) and is never changed, because every committed number was built on
