@@ -216,11 +216,14 @@ MIN_BARS_AFTER    = 40        # matches app.py MIN_BARS_AFTER_WARMUP
 # ══════════════════════════════════════════════════════════════════════
 # ENGINE FIXES — ON BY DEFAULT SINCE 2026-11-04 (expert review 2026-11-03, BACKLOG 47)
 # ══════════════════════════════════════════════════════════════════════
-# Six defects of this engine, each fixed below behind its own name. They
-# shipped OFF (2026-11-04) until the re-runs on the frozen bars measured
-# them (results/engine_fixes_reading_2026-11-04.md: no sign changes, no
-# conclusion moved), and are the DEFAULT from the owner's decision the same
-# day ("go with all six as default"). `--engine-fixes none` (backtest.py,
+# Seven defects of this engine, each fixed below behind its own name. The
+# first six shipped OFF (2026-11-04) until the re-runs on the frozen bars
+# measured them (results/engine_fixes_reading_2026-11-04.md: no sign changes,
+# no conclusion moved), and are the DEFAULT from the owner's decision the same
+# day ("go with all six as default"); date_clusters followed the same path
+# that evening (results/date_clusters_reading_2026-11-04.md: the long and
+# short CIs 10-19 % wider, no conclusion moved; owner: "go with date clusters
+# as default"). `--engine-fixes none` (backtest.py,
 # record_recheck.py) or ENGINE_FIXES=none gives the engine every result
 # before 2026-11-04 was produced on, to reproduce one; any comma list gives
 # that subset. run() prints which engine it ran. A caller whose
@@ -253,14 +256,6 @@ MIN_BARS_AFTER    = 40        # matches app.py MIN_BARS_AFTER_WARMUP
 #                       lives up to max_hold bars and the cooldown is counted
 #                       from the signal, so trades overlap and are not
 #                       independent.
-ALL_ENGINE_FIXES = ("price_gaps", "lookback", "open_beyond_target",
-                    "dividends", "time_order", "clustered_ci")
-# BUILT, NOT YET MEASURED: OFF, and outside 'all', until the owner's re-run on
-# the frozen bars and decision (the six's own path; owner 2026-11-04: "go with
-# the same-date error bars"). 'all' keeps meaning the six, so every committed
-# command that says `--engine-fixes all` still reproduces its file; this one
-# is asked for by name (`--engine-fixes all,date_clusters`).
-#
 #   date_clusters       clustered_ci also clusters by the trade's entry WEEK
 #                       and entry MONTH (CR1 each) and takes the widest SE of
 #                       independent / episode / week / month: trades on
@@ -268,8 +263,16 @@ ALL_ENGINE_FIXES = ("price_gaps", "lookback", "open_beyond_target",
 #                       move, which same-ticker episodes cannot see (item
 #                       47's "clustering by date as well ... recorded, not
 #                       built"). It widens a CI, never narrows one, and
-#                       changes no trade, R or mean.
-PENDING_ENGINE_FIXES = ("date_clusters",)
+#                       changes no trade, R or mean. The default since
+#                       2026-11-04 (owner), after its frozen-bar run.
+ALL_ENGINE_FIXES = ("price_gaps", "lookback", "open_beyond_target",
+                    "dividends", "time_order", "clustered_ci", "date_clusters")
+# BUILT, NOT YET MEASURED: a fix waits here, OFF and outside 'all', until the
+# owner's re-run on the frozen bars and decision, so every committed command
+# that says `--engine-fixes all` still reproduces its file; it is asked for by
+# name (`--engine-fixes all,<name>`). date_clusters waited here until it
+# joined the default on 2026-11-04. Empty now.
+PENDING_ENGINE_FIXES: tuple = ()
 # The fixes the FORWARD GRADER carries (grading amendments H and I, owner
 # 2026-11-04): forward_log.resolve_signal() fills a bar that opens past the
 # target at its open and credits dividends with the 5330 reduction.
@@ -1188,7 +1191,7 @@ def clustered_ci(trades: list[dict], z: float = 1.96) -> dict:
     se = max(se_cl, se_ind)
     out = {"n": n, "episodes": G, "mean": m, "unmeasurable": False}
     if _fix("date_clusters"):
-        # TRADES ENTERED TOGETHER SHARE A MARKET MOVE (pending fix date_clusters):
+        # TRADES ENTERED TOGETHER SHARE A MARKET MOVE (engine fix date_clusters):
         # the widest of independent / episode / entry week / entry month. Bar
         # indices are not dates; a list with any undated trade is not clustered
         # by date, and says so ("date_clusters": "no dates"), never silently.
@@ -3002,7 +3005,7 @@ def selftest() -> int:
     # engine, each ON does what it says. The default must be OFF in CI.
     if not os.environ.get("ENGINE_FIXES"):
         assert ENGINE_FIXES == frozenset(ALL_ENGINE_FIXES) and describe_engine().endswith("(the default)"), \
-            "all six engine fixes are the default since 2026-11-04 (owner's decision, BACKLOG 47)"
+            "all seven engine fixes are the default since 2026-11-04 (owner's decisions, BACKLOG 47)"
     assert parse_engine_fixes("all") == frozenset(ALL_ENGINE_FIXES) and parse_engine_fixes("none") == frozenset() \
         and parse_engine_fixes("dividends, lookback") == {"dividends", "lookback"}
     for _bad in ("dividend", "all,bogus"):
@@ -3187,15 +3190,14 @@ def selftest() -> int:
         print(f"fix clustered_ci        : overlapping trades share an episode; duplicated trades widen the SE "
               f"x{_c2['se'] / _c2['se_indep']:.2f} (n_eff {_c2['n_eff']:.1f} of {_c2['n']})")
 
-        # date_clusters (pending, owner 2026-11-04): trades entered together share a market move
-        assert "date_clusters" not in parse_engine_fixes("all") and \
-            parse_engine_fixes("all,date_clusters") == frozenset(ALL_ENGINE_FIXES) | {"date_clusters"}, \
-            "'all' is the six; the pending fix is asked for by name"
-        assert "date_clusters" not in ENGINE_FIXES, "off by default: committed CIs reproduce"
+        # date_clusters (the default since 2026-11-04, owner): trades entered together share a market move
+        assert "date_clusters" in parse_engine_fixes("all") and PENDING_ENGINE_FIXES == () and \
+            parse_engine_fixes("all,date_clusters") == frozenset(ALL_ENGINE_FIXES), "'all' is the seven"
+        _six = ",".join(f for f in ALL_ENGINE_FIXES if f != "date_clusters")   # the engine before it
         _saved_dc = ENGINE_FIXES
         try:
-            set_engine_fixes("all,date_clusters")
-            assert describe_engine().endswith("clustered_ci, date_clusters") and "(the default)" not in describe_engine()
+            set_engine_fixes("all")
+            assert describe_engine().endswith("clustered_ci, date_clusters (the default)"), describe_engine()
             # every trade its own episode, week and month: the ordinary SE, unchanged
             _sep = [_ep(f"T{k}", pd.Timestamp("2020-01-06") + pd.Timedelta(days=40 * k),
                         pd.Timestamp("2020-01-08") + pd.Timedelta(days=40 * k), v)
@@ -3211,9 +3213,9 @@ def selftest() -> int:
                     _mkt.append(_ep(f"N{j}", _w + pd.Timedelta(days=j % 3), _w + pd.Timedelta(days=4),
                                     (1.0 if k % 2 else -1.0) + 0.01 * j))
             _d2 = clustered_ci(_mkt)
-            set_engine_fixes("all")
+            set_engine_fixes(_six)
             _e2 = clustered_ci(_mkt)
-            set_engine_fixes("all,date_clusters")
+            set_engine_fixes("all")
             assert _d2["se"] > 1.8 * _e2["se"] and _d2["widest"] in ("week", "month") \
                 and _d2["mean"] == _e2["mean"] and _d2["n_eff"] < _e2["n_eff"], (_d2, _e2)
             # never narrower than independent or episode; one week -> unmeasurable; bar indices -> no dates
@@ -3234,14 +3236,14 @@ def selftest() -> int:
                     _ser += [_ep(_tka, _d0, _d0 + pd.Timedelta(days=30), 1.0 + 0.001 * w),
                              _ep(_tkb, _d0, _d0 + pd.Timedelta(days=30), -1.0 - 0.001 * w)]
             _d6 = clustered_ci(_ser)
-            set_engine_fixes("all")
+            set_engine_fixes(_six)
             _e6 = clustered_ci(_ser)
-            set_engine_fixes("all,date_clusters")
+            set_engine_fixes("all")
             assert _d6["widest"] == "episode" and abs(_d6["se"] - _e6["se"]) < 1e-12 \
                 and _e6["se"] > 2 * _e6["se_indep"], (_d6, _e6)
         finally:
             set_engine_fixes(_saved_dc)
-        print(f"fix date_clusters       : pending (off; 'all' is the six). Trades entered together widen the SE "
+        print(f"fix date_clusters       : the default (owner 2026-11-04). Trades entered together widen the SE "
               f"x{_d2['se'] / _e2['se']:.2f} over episodes alone; never narrower; one week is unmeasurable")
 
         # lookback: no signal read before LEVEL_LOOKBACK bars of history
@@ -3294,8 +3296,8 @@ def selftest() -> int:
             assert f"95% CI [{_cl_long['lo']:+.3f}, {_cl_long['hi']:+.3f}]" in _txt, _txt[-2500:]
             assert sum(t["ex_dividends"] for t in _rt) > 0 and \
                 "ex-dividend inside trades :      0" not in _txt, "the dividend path must run inside run()"
-            assert "Engine fixes : price_gaps, lookback, open_beyond_target, dividends, time_order, clustered_ci" \
-                " (the default)" in _txt and "open beyond the target    :" in _txt and "ex-dividend inside trades :" in _txt \
+            assert "Engine fixes : price_gaps, lookback, open_beyond_target, dividends, time_order, clustered_ci," \
+                " date_clusters (the default)" in _txt and "open beyond the target    :" in _txt and "ex-dividend inside trades :" in _txt \
                 and "look-back incomplete      :" in _txt and "clustered over" in _txt, _txt[-3000:]
             set_engine_fixes("")
             _bf0 = io.StringIO()
@@ -3358,11 +3360,11 @@ def parse_args() -> tuple[dict, bool]:
                         "in the middle of an A/B, or the arms stop being "
                         "comparable.")
     p.add_argument("--engine-fixes", type=str, default=None,
-                   help="the engine fixes (BACKLOG 47): 'all' (the six, the default since "
+                   help="the engine fixes (BACKLOG 47): 'all' (all seven, the default since "
                         "2026-11-04), 'none' (the engine before), or a comma list of "
                         + ", ".join(ALL_ENGINE_FIXES + PENDING_ENGINE_FIXES)
-                        + ". date_clusters is built but not yet the default: ask for it by name "
-                        "(all,date_clusters). Or the ENGINE_FIXES environment variable.")
+                        + " (the list without date_clusters is the engine before the evening of "
+                        "2026-11-04). Or the ENGINE_FIXES environment variable.")
     p.add_argument("--use-weekly", action="store_true", default=DEFAULTS["use_weekly"],
                    help="apply the weekly-alignment filter (fetches weekly bars). "
                         "The live config runs this ON but it has never been measured.")

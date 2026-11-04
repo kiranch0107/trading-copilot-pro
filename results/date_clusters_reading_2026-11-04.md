@@ -6,6 +6,12 @@
 `backtest_12t10y_engine_all_codespace_run1.txt` with the pending fix asked
 for by name (`--engine-fixes all,date_clusters`).
 
+> **DECIDED 2026-11-04 (owner: "go with date clusters as default").**
+> `date_clusters` is one of the default seven engine fixes: `all` and the
+> default include it, and nothing is pending. The 12-ticker 10-year file it
+> ran beside carries an ENGINE CHANGED banner (its two CI lines are the
+> episode-only ranges); this run is the current one for those bars.
+
 ## Like for like
 
 - **Same bars:** both print `data: v2-e09e31d6eaf30233 (12 series, 12 cached /
@@ -31,7 +37,7 @@ The standard error, from those ranges:
 
 **What it says.** Trades on different stocks entered in the same month move
 together more than a ticker's own overlapping trades do: the month grouping
-is the widest for both sides. The current default (episode only) understates
+is the widest for both sides. The previous default (episode only) understates
 the long range by about 10 % and the short range by about 19 %.
 
 **No conclusion moves:**
@@ -39,7 +45,7 @@ the long range by about 10 % and the short range by about 19 %.
 - The short side's range still sits wholly below zero: shorts lose reliably,
   which is why the live system is longs-only.
 
-## The decision this leaves (the owner's)
+## The decision this left (the owner's; decided, see the top)
 
 Whether `date_clusters` joins the default engine. Recommended: yes. It is the
 more honest range here, it never narrows one, and it moved no conclusion.

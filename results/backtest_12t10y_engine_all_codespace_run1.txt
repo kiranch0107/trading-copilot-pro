@@ -1,3 +1,11 @@
+!! ENGINE CHANGED 2026-11-04 (date_clusters joined the default) -- read with this caveat. This
+!! file was produced before the research engine's CIs also clustered by entry week and month
+!! (owner: "go with date clusters as default"; results/date_clusters_reading_2026-11-04.md).
+!! Every trade, R and count below stands; only the two CI lines are the episode-only ranges.
+!! The default engine's ranges on the same bars are in backtest_12t10y_engine_dates_codespace_run1.txt:
+!! LONG [-0.098, +0.231], SHORT [-0.511, -0.120]. This file's engine is
+!! --engine-fixes price_gaps,lookback,open_beyond_target,dividends,time_order,clustered_ci.
+
 ==============================================================================
 TRADING COPILOT ELITE — HISTORICAL BACKTEST (real data)
 ==============================================================================

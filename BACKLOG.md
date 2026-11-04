@@ -112,7 +112,8 @@ landed in the repo and the removal says so in the commit.
   [−0.098, +0.231] and the SHORT from [−0.480, −0.151] to [−0.511, −0.120];
   neither crosses zero differently. Recommended: make it the default (one
   change, plus an ENGINE CHANGED banner on the 12-ticker file). Retire when
-  decided.
+  decided. *(Decided 2026-11-04, owner: "go with date clusters as default";
+  built the same evening. Retired.)*
 - **2026-11-04 (item 46, the target exit built).** From your next signal
   trade, each of the app's three trade forms asks **"Sell when the stock
   CLOSES at (the alert's target)"**. It is filled from the setup, or from
@@ -2478,7 +2479,7 @@ snapshot sessions, 2027-04-08). The pre-registration stays on file.
 
 ---
 
-## 47. The research engine's six defects (expert review 2026-11-03) — BUILT 2026-11-04 BEHIND A SWITCH; RE-RUN ON THE FROZEN BARS 2026-11-04 (NO SIGN CHANGES); ALL SIX THE DEFAULT 2026-11-04 (OWNER); GRADING AMENDMENTS H AND I APPLIED TO THE FORWARD GRADER 2026-11-04; THE ROWS ON FILE RE-GRADED UNDER THEM (READING CHANGE) 2026-11-04
+## 47. The research engine's six defects (expert review 2026-11-03) — BUILT 2026-11-04 BEHIND A SWITCH; RE-RUN ON THE FROZEN BARS 2026-11-04 (NO SIGN CHANGES); ALL SIX THE DEFAULT 2026-11-04 (OWNER); GRADING AMENDMENTS H AND I APPLIED TO THE FORWARD GRADER 2026-11-04; THE ROWS ON FILE RE-GRADED UNDER THEM (READING CHANGE) 2026-11-04; DATE CLUSTERS THE DEFAULT 2026-11-04 (OWNER)
 
 **Owner: "fix the research engine items as well".** Item 46 recorded six
 defects of the share engine (`backtest.py`) that each move committed
@@ -2664,7 +2665,18 @@ differs only in the engine line and the two CI lines. LONG +0.066 R: [−0.083,
 sides; the SE grows ×1.10 (long) and ×1.19 (short) over episodes, ×1.27–1.28
 over independence (design effect ~1.6). No conclusion moves: longs still
 straddle zero, shorts still sit wholly below it. Whether it joins the
-default is the owner's call (hand-off; recommended: yes).
+default is the owner's call (hand-off; recommended: yes). **THE DEFAULT
+2026-11-04 (owner: "go with date clusters as default").** `date_clusters`
+moved into `ALL_ENGINE_FIXES` (seven; `all` and the default include it;
+`PENDING_ENGINE_FIXES` is empty and stays the waiting room for the next
+fix). The one committed result whose numbers it moves,
+`backtest_12t10y_engine_all_codespace_run1.txt` (its two CI lines), carries
+an ENGINE CHANGED banner pointing to the dates run, which is the current one
+for those bars and is what `--engine-fixes all` now prints. The three D3
+option files name the six as "the default" on their data line; the option
+engine computes its own CIs (`d3_clustered`), so their numbers stand.
+`adx_retest`'s bands read it from now on. `check_date_clusters_default`
+replaces the pending check (77).
 
 ---
 
