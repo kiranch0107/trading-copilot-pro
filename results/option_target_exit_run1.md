@@ -51,6 +51,10 @@ at 80 % power, from this sd, is 8–9 points (the power check said about 10).
   plausibly cost the pair. Re-running on the earlier engine, or adding
   years or tickers, after seeing these numbers would be choosing the
   analysis by its result. A larger D3 would be a new pre-registration.
+  *(Written the same day, owner: "write the pre-registration for a larger
+  D3": `results/option_target_exit_large_preregistration.md`, 77 pool
+  names outside run 1 over 10 years. None of this run's 149 pairs is in
+  it, and they are never pooled with it.)*
 - **Nothing in the live system changes.** The pre-registration commits to
   a change only on ADOPT.
 

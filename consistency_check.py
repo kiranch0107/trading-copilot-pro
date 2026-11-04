@@ -3830,6 +3830,50 @@ def check_option_target_exit_preregistered() -> None:
     print("  the D3 arm is off by default; its pre-registration fixes the arms, power, bar and commands")
 
 
+
+def check_option_target_exit_large_preregistered() -> None:
+    """
+    The larger D3 (owner 2026-11-04: "write the pre-registration for a
+    larger D3"), after run 1 settled 149 pairs under its 150 floor. Pinned:
+    the population is the document's 77 names and holds no name of run 1 (so
+    none of run 1's 149 pairs); arm A is the measured structure; the window,
+    the two multipliers, the EQUIVALENT margin, the power check's aim and the
+    cluster floor are the document's; `--d3-large` takes no other option; and
+    the document states every verdict, the prediction, both commands and the
+    power check's output (no placeholder left).
+    """
+    import re
+    import option_backtest as ob
+    import risk_params as rp
+    doc = Path("results/option_target_exit_large_preregistration.md").read_text(encoding="utf-8")
+    run1 = Path("results/option_target_exit_run1_iv1.15.txt").read_text(encoding="utf-8")
+    m = re.search(r"^Tickers\s*: (.+)$", run1, re.M)
+    assert m and tuple(t.strip() for t in m.group(1).split(",")) == ob.D3_RUN1_TICKERS, \
+        "D3_RUN1_TICKERS must be run 1's tickers as its file prints them"
+    assert len(ob.D3_LARGE_TICKERS) == 77 and len(set(ob.D3_LARGE_TICKERS)) == 77, "77 distinct names"
+    assert not set(ob.D3_LARGE_TICKERS) & set(ob.D3_RUN1_TICKERS), "no name of run 1 in the larger D3"
+    blk = re.search(r"<!-- population -->\s*```\s*(.+?)```", doc, re.S)
+    assert blk, "the document must list the population in its marked block"
+    listed = tuple(t.strip() for t in blk.group(1).replace("\n", " ").split(",") if t.strip())
+    assert listed == ob.D3_LARGE_TICKERS, "the population in the code is the document's, in order"
+    ms = rp.MEASURED_OPTION_STRUCTURE
+    st = ob.D3_LARGE_STRUCTURE
+    assert (st["tp"], st["sl"], st["dte_exit"], st["use_thesis"]) == (ms["tp_pct"], ms["sl_pct"], ms["dte_exit"], True) \
+        and ms["min_dte"] <= st["dte"] <= ms["max_dte"], "arm A is the measured structure"
+    assert (ob.D3_LARGE_YEARS, ob.D3_LARGE_IV_MULTS, ob.D3_EQUIV_MARGIN, ob.D3_TARGET_HALF_WIDTH,
+            ob.D3_MIN_CLUSTERS, st["spread_pct"]) == (10, (1.15, 1.00), 5.0, 3.5, 30, 5.0), \
+        "the pre-registered window, multipliers, margin, the design's aim and the cluster floor"
+    import inspect as _i
+    assert "return run_d3_large()" in _i.getsource(ob.main), "--d3-large runs the fixed design, no options"
+    for phrase in ("\npython option_backtest.py --d3-large | tee results/option_target_exit_large_run1.txt\n",
+                   "`python option_backtest.py --d3-large-power`", "**ADOPT the target exit**", "**REJECT it**",
+                   "**NOT ESTABLISHED**", "**EQUIVALENT**", "**UNDERPOWERED**", "## 6. Prediction, stated now",
+                   "The first complete run is the run", "10 years", "half-width", "3.5", "±5"):
+        assert phrase in doc, f"the pre-registration must state {phrase!r}"
+    assert "POWER_TABLE" not in doc and "TBD" not in doc, "the power output must be filled in before the commit"
+    print("  the larger D3: 77 names outside run 1, arm A the measured structure, the bar and both commands fixed")
+
+
 def check_engine_fixes_default() -> None:
     """
     Expert review 2026-11-03, the research-engine items (owner: "fix the
@@ -4125,6 +4169,7 @@ CHECKS = [
     ("signal-trade fixtures never read the clock (M1)", check_fixtures_never_read_the_clock),
     ("forward record's power stated at its own sd (D7)", check_forward_power_stated),
     ("option target-exit arm pre-registered (D3)", check_option_target_exit_preregistered),
+    ("the larger D3 pre-registered (77 names outside run 1)", check_option_target_exit_large_preregistered),
     ("Tiingo fallback split-adjusted, its fill checked (review 11-03)", check_tiingo_split_adjusted),
     ("research-engine fixes, all six the default (BACKLOG 47)", check_engine_fixes_default),
     ("rows on file re-graded under H+I (owner 11-04)", check_regrade_on_file),
