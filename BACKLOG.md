@@ -3113,7 +3113,12 @@ the thesis exit joins `MEASURED_OPTION_STRUCTURE`, the check requires it
 on a signal trade, the alert text and the app default say ON. **H2** the
 HOLD rule (30 sessions) cannot bind inside the structure; drop it from
 signal trades with H1. **H3** three hold lengths coexist, each declared.
-**H4** secrets scan clean; 54 remote branches, pruning cosmetic. **H5**
+**H4** secrets scan clean; ~~54 remote branches, pruning cosmetic~~
+(**DONE 2026-11-04**, owner: "delete the stale GH branches": 57 deleted
+from the owner's Codespace after a check that each carried nothing main
+lacks but an old `open_positions.json`; left: `main` and the session's
+working branch; tip SHAs kept in the owner's `~/branches_before_prune.txt`
+to restore any). **H5**
 dated hand-off entries added. No engine, rule or threshold changed.
 **H1 (a) and H2 DONE 2026-10-29 (owner: "go with H1 as well, option
 (a)"):** `MEASURED_OPTION_STRUCTURE["thesis"]` is True and
