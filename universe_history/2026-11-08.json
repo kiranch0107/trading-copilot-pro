@@ -1,0 +1,76 @@
+{
+  "as_of": "2026-11-08",
+  "taken_at": "2026-11-08T18:02:19",
+  "tickers": [
+    "ACN",
+    "ABBV",
+    "V",
+    "MPC",
+    "MO",
+    "CME",
+    "TMO",
+    "PSX"
+  ],
+  "passed_gates": 48,
+  "pool_size": 83,
+  "sector_mix": {
+    "Tech": 1,
+    "Health": 2,
+    "Financials": 2,
+    "Energy": 2,
+    "Staples": 1
+  },
+  "rs_lookback": 63,
+  "top_n": 8,
+  "max_per_sector": 2,
+  "detail": [
+    {
+      "ticker": "ACN",
+      "rs": 51.03,
+      "price": 260.5,
+      "dollar_vol_m": 1595.0
+    },
+    {
+      "ticker": "ABBV",
+      "rs": 22.36,
+      "price": 291.31,
+      "dollar_vol_m": 1624.8
+    },
+    {
+      "ticker": "V",
+      "rs": 21.86,
+      "price": 422.65,
+      "dollar_vol_m": 3033.8
+    },
+    {
+      "ticker": "MPC",
+      "rs": 21.25,
+      "price": 372.74,
+      "dollar_vol_m": 1002.1
+    },
+    {
+      "ticker": "MO",
+      "rs": 21.02,
+      "price": 76.12,
+      "dollar_vol_m": 658.3
+    },
+    {
+      "ticker": "CME",
+      "rs": 20.9,
+      "price": 305.89,
+      "dollar_vol_m": 612.0
+    },
+    {
+      "ticker": "TMO",
+      "rs": 20.74,
+      "price": 694.76,
+      "dollar_vol_m": 1640.0
+    },
+    {
+      "ticker": "PSX",
+      "rs": 18.89,
+      "price": 245.72,
+      "dollar_vol_m": 807.2
+    }
+  ]
+}
