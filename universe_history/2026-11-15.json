@@ -1,0 +1,75 @@
+{
+  "as_of": "2026-11-15",
+  "taken_at": "2026-11-15T19:03:01",
+  "tickers": [
+    "ACN",
+    "MO",
+    "LLY",
+    "TMO",
+    "CME",
+    "V",
+    "PG",
+    "AAPL"
+  ],
+  "passed_gates": 57,
+  "pool_size": 83,
+  "sector_mix": {
+    "Tech": 2,
+    "Staples": 2,
+    "Health": 2,
+    "Financials": 2
+  },
+  "rs_lookback": 63,
+  "top_n": 8,
+  "max_per_sector": 2,
+  "detail": [
+    {
+      "ticker": "ACN",
+      "rs": 49.73,
+      "price": 250.49,
+      "dollar_vol_m": 1439.1
+    },
+    {
+      "ticker": "MO",
+      "rs": 25.32,
+      "price": 78.64,
+      "dollar_vol_m": 640.6
+    },
+    {
+      "ticker": "LLY",
+      "rs": 24.37,
+      "price": 1443.5,
+      "dollar_vol_m": 4076.0
+    },
+    {
+      "ticker": "TMO",
+      "rs": 21.96,
+      "price": 700.22,
+      "dollar_vol_m": 1558.5
+    },
+    {
+      "ticker": "CME",
+      "rs": 21.07,
+      "price": 317.97,
+      "dollar_vol_m": 616.7
+    },
+    {
+      "ticker": "V",
+      "rs": 21.02,
+      "price": 425.76,
+      "dollar_vol_m": 2905.0
+    },
+    {
+      "ticker": "PG",
+      "rs": 21.01,
+      "price": 169.8,
+      "dollar_vol_m": 1647.9
+    },
+    {
+      "ticker": "AAPL",
+      "rs": 18.95,
+      "price": 356.27,
+      "dollar_vol_m": 16314.3
+    }
+  ]
+}
