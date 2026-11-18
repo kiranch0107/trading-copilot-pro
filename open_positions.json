@@ -36,7 +36,7 @@
     "source": "signal",
     "signal_key": "NOW|Bullish|2026-10-28",
     "traded_at": "2026-10-29 11:20 ET",
-    "last_check_epoch": 1794947431.7954473,
+    "last_check_epoch": 1795012231.9117734,
     "status": "EXIT_SIGNALLED",
     "exit_alerted": true,
     "exit_reason": "STOP",
@@ -52,7 +52,8 @@
         "pnl_pct": -36.0,
         "detected": "2026-10-30 09:30 ET"
       }
-    ]
+    ],
+    "expiry_reminded": "near"
   },
   {
     "id": "OPT_PFE_1793896350_9f0826e9e0c6f972",
@@ -93,7 +94,7 @@
     "signal_key": "PFE|Bullish|2026-11-04",
     "underlying_at_entry": 30.695,
     "traded_at": "2026-11-05 11:31 ET",
-    "last_check_epoch": 1794947431.7954473,
+    "last_check_epoch": 1795012231.9117734,
     "status": "EXIT_SIGNALLED",
     "exit_alerted": true,
     "exit_reason": "STOP",
