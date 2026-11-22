@@ -1,0 +1,75 @@
+{
+  "as_of": "2026-11-22",
+  "taken_at": "2026-11-22T19:55:43",
+  "tickers": [
+    "CRWD",
+    "WMT",
+    "ACN",
+    "PG",
+    "CME",
+    "ABBV",
+    "LLY",
+    "V"
+  ],
+  "passed_gates": 36,
+  "pool_size": 83,
+  "sector_mix": {
+    "Tech": 2,
+    "Staples": 2,
+    "Financials": 2,
+    "Health": 2
+  },
+  "rs_lookback": 63,
+  "top_n": 8,
+  "max_per_sector": 2,
+  "detail": [
+    {
+      "ticker": "CRWD",
+      "rs": 29.98,
+      "price": 229.44,
+      "dollar_vol_m": 2185.4
+    },
+    {
+      "ticker": "WMT",
+      "rs": 29.8,
+      "price": 127.95,
+      "dollar_vol_m": 2982.1
+    },
+    {
+      "ticker": "ACN",
+      "rs": 28.22,
+      "price": 221.17,
+      "dollar_vol_m": 1299.1
+    },
+    {
+      "ticker": "PG",
+      "rs": 25.18,
+      "price": 169.37,
+      "dollar_vol_m": 1609.3
+    },
+    {
+      "ticker": "CME",
+      "rs": 19.82,
+      "price": 307.56,
+      "dollar_vol_m": 598.2
+    },
+    {
+      "ticker": "ABBV",
+      "rs": 17.84,
+      "price": 286.2,
+      "dollar_vol_m": 1547.4
+    },
+    {
+      "ticker": "LLY",
+      "rs": 17.68,
+      "price": 1347.11,
+      "dollar_vol_m": 4396.7
+    },
+    {
+      "ticker": "V",
+      "rs": 14.74,
+      "price": 401.87,
+      "dollar_vol_m": 3050.1
+    }
+  ]
+}
